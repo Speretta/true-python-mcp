@@ -1,0 +1,5 @@
+/target
+/.ruff_cache
+
+# local progress notes (not committed)
+PROGRESS.local.md

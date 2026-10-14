@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  TPMCP_GROUND_TRUTH_PYTHON: /tmp/nbenv/bin/python
+  TPMCP_REQUIRE_GROUND_TRUTH: "1"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v5
+      - name: Install the ground-truth venv (nbformat + marimo)
+        run: |
+          uv venv /tmp/nbenv
+          uv pip install --python /tmp/nbenv/bin/python nbformat marimo
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release

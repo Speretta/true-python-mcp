@@ -1,0 +1,192 @@
+//! Notebook document model shared by all supported formats.
+//!
+//! Each format lives in a sibling module and implements [`Notebook`];
+//! [`open`] detects the format from file content and [`create`] builds new
+//! documents, both returning [`AnyNotebook`] — a statically dispatched enum
+//! of the supported formats. Tools and rendering only ever see this API, so
+//! adding a format means adding a module, one arm in each of those two
+//! functions, and one `AnyNotebook` variant (whose missing match arms the
+//! compiler then reports everywhere).
+
+mod any;
+mod jupyter;
+mod marimo;
+
+pub use any::AnyNotebook;
+pub use jupyter::JupyterNotebook;
+pub use marimo::MarimoNotebook;
+
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
+use serde_json::Value;
+
+/// One notebook cell. `extra` carries the format-specific fields verbatim
+/// (Jupyter: `id`/`metadata`/`outputs`/`execution_count`; marimo: its own
+/// kind/name/config), and source edits never touch it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cell {
+    pub cell_type: String,
+    pub source: SourceText,
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Cell {
+    pub fn is_code(&self) -> bool {
+        self.cell_type == "code"
+    }
+
+    pub fn is_markdown(&self) -> bool {
+        self.cell_type == "markdown"
+    }
+
+    pub fn source_text(&self) -> String {
+        self.source.text()
+    }
+
+    /// Replace the source, normalizing it to canonical lines.
+    pub fn set_source_text(&mut self, text: &str) {
+        self.source = SourceText::Lines(SourceText::split_canonical(text));
+    }
+}
+
+/// Cell source in the representation the file used. Jupyter files store
+/// either a single string or an array of lines; other formats use `Lines`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SourceText {
+    Str(String),
+    Lines(Vec<String>),
+}
+
+impl SourceText {
+    pub fn text(&self) -> String {
+        match self {
+            Self::Str(text) => text.clone(),
+            Self::Lines(lines) => lines.concat(),
+        }
+    }
+
+    /// Split after every `\n` (CRLF stays attached to its line), dropping a
+    /// trailing empty chunk — nbformat's canonical line form.
+    pub fn split_canonical(text: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for (index, byte) in text.bytes().enumerate() {
+            if byte == b'\n' {
+                lines.push(text[start..=index].to_string());
+                start = index + 1;
+            }
+        }
+        if start < text.len() {
+            lines.push(text[start..].to_string());
+        }
+        lines
+    }
+}
+
+/// Notebook formats tpmcp can create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    /// Jupyter `.ipynb` (nbformat v4).
+    Jupyter,
+    /// marimo `.py` reactive notebook.
+    Marimo,
+}
+
+/// Severity of a [`Finding`] reported by notebook validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// Blocks correct execution/loading of the notebook.
+    Error,
+    /// Likely a mistake, but the notebook still works.
+    Warning,
+    /// Cosmetic drift that the editor regenerates on its next save.
+    Info,
+}
+
+/// One validation finding for a notebook.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
+pub struct Finding {
+    pub severity: Severity,
+    /// 0-based cell index for cell-scoped findings; `None` notebook-wide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<usize>,
+    /// Stable machine-readable code, e.g. `cycle` or `multiple-definitions`.
+    pub code: String,
+    /// Human/LLM-readable description.
+    pub message: String,
+}
+
+/// A parsed notebook document. All mutations go through these operations so
+/// each format keeps its byte-exactness guarantees; errors are user-facing
+/// messages that tools surface as invalid-input.
+pub trait Notebook {
+    /// Short display label, e.g. `nbformat 4.5`.
+    fn format_label(&self) -> String;
+
+    fn cells(&self) -> &[Cell];
+
+    fn set_source(&mut self, index: usize, text: &str) -> Result<(), String>;
+
+    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), String>;
+
+    fn delete(&mut self, index: usize) -> Result<Cell, String>;
+
+    /// Move a cell; `to` is interpreted after removal.
+    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), String>;
+
+    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), String>;
+
+    /// Clear outputs of one cell or (with `None`) every code cell;
+    /// returns the indexes of the cleared cells.
+    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, String>;
+
+    /// Byte-exact serialization: regions no operation touched reproduce the
+    /// original bytes.
+    fn serialize(&self) -> String;
+
+    /// Validate the document: schema shape (Jupyter) or reactive-graph
+    /// semantics (marimo). Findings are ordered by kind, then cell.
+    fn check(&self) -> Vec<Finding> {
+        Vec::new()
+    }
+}
+
+/// Detect the format and parse.
+pub fn open(content: &str) -> Result<AnyNotebook, String> {
+    if content.trim_start().starts_with('{') {
+        return Ok(AnyNotebook::Jupyter(JupyterNotebook::parse(content)?));
+    }
+    if marimo::parse::is_marimo(content) {
+        return Ok(AnyNotebook::Marimo(marimo::MarimoNotebook::parse(content)?));
+    }
+    Err("not a recognized notebook: expected .ipynb JSON or a marimo .py file".to_string())
+}
+
+pub fn create(format: Format) -> AnyNotebook {
+    match format {
+        Format::Jupyter => AnyNotebook::Jupyter(JupyterNotebook::new()),
+        Format::Marimo => AnyNotebook::Marimo(marimo::MarimoNotebook::create()),
+    }
+}
+
+/// Infer the notebook format from a file extension: `.ipynb` is Jupyter,
+/// `.py` is marimo.
+pub fn format_from_extension(path: &std::path::Path) -> Option<Format> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("ipynb") => Some(Format::Jupyter),
+        Some("py") => Some(Format::Marimo),
+        _ => None,
+    }
+}
+
+pub fn check_index(len: usize, index: usize) -> Result<(), String> {
+    if index >= len {
+        return Err(format!(
+            "cell index {index} out of bounds: notebook has {len} cells (0-based)"
+        ));
+    }
+    Ok(())
+}

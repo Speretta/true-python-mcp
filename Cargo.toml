@@ -1,0 +1,46 @@
+[package]
+name = "tpmcp"
+version = "0.1.0"
+edition = "2024"
+description = "Python and Jupyter notebook MCP server: byte-exact notebook editing and in-process ruff analysis"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Speretta/true-python-mcp"
+readme = "README.md"
+rust-version = "1.97"
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+rmcp = { version = "3.5", features = ["transport-io"] }
+ruff_db = "=0.0.17"
+ruff_diagnostics = "=0.0.17"
+ruff_linter = "=0.17.0"
+ruff_notebook = "=0.0.17"
+ruff_python_ast = "=0.0.17"
+ruff_python_formatter = "=0.0.17"
+ruff_python_parser = "=0.0.17"
+ruff_python_stdlib = "=0.0.17"
+ruff_source_file = "=0.0.17"
+ruff_text_size = "=0.0.17"
+ruff_workspace = "=0.0.17"
+rustc-hash = "2"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = "3.2.0"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# Production code must be panic-free: no unwrap/expect/panic outside tests.
+# Test modules and integration tests re-allow them (assertion idiom).
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
