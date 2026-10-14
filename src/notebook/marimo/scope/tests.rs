@@ -6,15 +6,16 @@ use super::{analyze, is_local};
 
 /// See tests/common/mod.rs — duplicated here because src unit tests cannot
 /// import from tests/.
-fn ground_truth_python() -> Option<&'static str> {
-    const NBENV_PY: &str = "/tmp/opencode/nbenv/bin/python";
-    if std::path::Path::new(NBENV_PY).exists() {
-        return Some(NBENV_PY);
+fn ground_truth_python() -> Option<String> {
+    let python = std::env::var("TPMCP_GROUND_TRUTH_PYTHON")
+        .unwrap_or_else(|_| "/tmp/opencode/nbenv/bin/python".to_string());
+    if std::path::Path::new(&python).exists() {
+        return Some(python);
     }
     if std::env::var("TPMCP_REQUIRE_GROUND_TRUTH").as_deref() == Ok("1") {
-        panic!("TPMCP_REQUIRE_GROUND_TRUTH=1 but {NBENV_PY} is missing");
+        panic!("TPMCP_REQUIRE_GROUND_TRUTH=1 but {python} is missing");
     }
-    eprintln!("note: skipping live ground-truth checks ({NBENV_PY} absent)");
+    eprintln!("note: skipping live ground-truth checks ({python} absent)");
     None
 }
 
@@ -282,7 +283,7 @@ print(json.dumps({
         "print(f'{a}{b}')\n_ = '%s' % (c,)",
     ];
     for sample in samples {
-        let output = std::process::Command::new(py)
+        let output = std::process::Command::new(&py)
             .args(["-c", SCRIPT, sample])
             .output()
             .expect("spawn venv python");
