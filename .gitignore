@@ -3,3 +3,12 @@
 
 # local progress notes (not committed)
 PROGRESS.local.md
+
+# benchmark workspace (regenerate with bench/measure.sh; the tpmcp binary
+# is the musl release asset, downloaded - see COMPARISON.md methodology)
+bench/tpmcp/tpmcp
+bench/work/
+bench/results/
+
+# python bytecode (bench harness runs locally)
+__pycache__/
