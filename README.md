@@ -1,10 +1,24 @@
 # tpmcp
 
 [![CI](https://github.com/Speretta/true-python-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Speretta/true-python-mcp/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Release](https://img.shields.io/github/v/tag/Speretta/true-python-mcp)](https://github.com/Speretta/true-python-mcp/tags)
 
-tpmcp is a small server that lets your AI coding assistant work with Python
-notebooks. It is one Rust binary. It needs nothing else — no Python, no ruff,
-no plugins.
+*An MCP server that lets your AI assistant edit Python notebooks safely.
+One Rust binary. Nothing else to install.*
+
+Your AI coding assistant is good at editing `.py` files. Notebooks are harder,
+for two reasons:
+
+- A `.ipynb` file is one big JSON document. One small change can rewrite the
+  whole file and fill your git diff with noise.
+- Many notebook MCP servers run a Jupyter kernel in the background to work
+  with notebooks. A hidden kernel can fight with the editor you already have
+  open, like VS Code.
+
+tpmcp avoids both. It treats a notebook as a plain file: it never starts a
+kernel, never runs your code, and changes only the bytes you asked it to
+change.
 
 It does two jobs:
 
@@ -14,11 +28,30 @@ It does two jobs:
 2. **Check Python code.** Lint and format with ruff. ruff is built into the
    binary, so there is nothing to install.
 
-tpmcp never runs your code. It only reads, edits, and checks.
+## At a glance
 
-## Install
+- One binary, no runtime dependencies — ruff is compiled in
+- Byte-exact edits: your diff shows only what you changed
+- Jupyter `.ipynb` and marimo `.py`, detected automatically
+- Revision guard: two writers never overwrite each other
+- No kernel, no background process, nothing to fight with your editor
+- 12 tools, plus 3 file tools with `--file-tools`
 
-Build from source with Rust 1.97 or newer; the finished binary itself needs
+## See it work
+
+Your AI fixes a typo in one cell. The git diff shows one line:
+
+```diff
+-    print("hello wrold")
++    print("hello world")
+```
+
+Nothing else changes. Outputs, cell order, and metadata stay exactly as they
+are. Without tpmcp, the same edit often rewrites the whole file.
+
+## Quickstart
+
+**1. Build it.** You need Rust 1.97 or newer; the finished binary needs
 nothing:
 
 ```sh
@@ -27,26 +60,25 @@ cd true-python-mcp
 cargo build --release
 ```
 
-The binary is `target/release/tpmcp`. You can also run `cargo install --path .`
-to copy it into `~/.cargo/bin`.
+(`cargo install --path .` also works — it copies the binary into
+`~/.cargo/bin`.)
 
-## Connect it to your AI tool
-
-tpmcp talks MCP over stdio. Add this to the MCP config of your tool
-(opencode, Claude Desktop, Claude Code, Cursor, VS Code):
+**2. Connect your AI tool.** Add this to its MCP config (for example
+`opencode.json`, `claude_desktop_config.json`, or `.cursor/mcp.json`):
 
 ```json
 {
   "mcpServers": {
-    "tpmcp": { "command": "/path/to/tpmcp" }
+    "tpmcp": { "command": "/path/to/target/release/tpmcp" }
   }
 }
 ```
 
-By default tpmcp only offers notebook and ruff tools, because most AI tools
-already have their own file tools. If your tool has no file tools (for example
-plain Claude Desktop), add `"args": ["--file-tools"]` to also get `py_read`,
-`py_write`, and `py_edit`.
+If your tool has no file tools of its own (like plain Claude Desktop), add
+`"args": ["--file-tools"]` to also get `py_read`, `py_write`, and `py_edit`.
+
+**3. Try it.** Ask your AI: *"Read the cells of demo.ipynb, then fix the typo
+in cell 2."*
 
 ## Tools
 
@@ -85,8 +117,8 @@ So nobody's work is overwritten by accident.
 
 ## What tpmcp does not do
 
-- It does not run Python code. A kernel module may come later, as a separate
-  part.
+- It does not run Python code. It never starts a kernel or a background
+  server, so there is nothing to fight with your editor.
 - marimo `setup`, `function`, and `class_definition` blocks are read-only.
   You can see them, but not edit them.
 - SQL cells in marimo are not checked for graph errors yet.
@@ -106,22 +138,8 @@ Turn the message check on once per clone:
 git config core.hooksPath .githooks
 ```
 
-Make a release with `scripts/release.sh` (`--dry-run` shows what would
-happen). The script picks the new version from the commits since the last
-tag: small changes bump the patch number (0.1.0 → 0.1.1), a commit with a
-`Bump: minor` footer bumps the minor number (0.1.1 → 0.2.0), and breaking
-changes ask before becoming a major version.
-
-Some tests compare against the real marimo and nbformat Python packages.
-They need a small virtualenv:
-
-```sh
-uv venv /tmp/opencode/nbenv
-uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo
-```
-
-If it is missing, those tests say so and skip. CI runs them all. Use another
-path with `TPMCP_GROUND_TRUTH_PYTHON`.
+Release process and ground-truth test setup: [CONTRIBUTING.md](CONTRIBUTING.md).
+What is inside each release: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
