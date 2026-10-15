@@ -45,6 +45,9 @@ Your AI fixes a typo in one cell. The git diff shows one line:
 Nothing else changes. Outputs, cell order, and metadata stay exactly as they
 are. Without tpmcp, the same edit often rewrites the whole file.
 
+Full walkthroughs — every tool call and every answer, captured from the real
+server — live in [examples/](examples/).
+
 ## Quickstart
 
 **1. Build it.** You need Rust 1.97 or newer; the finished binary needs
