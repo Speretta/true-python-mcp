@@ -3,6 +3,12 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.1.2] - 2026-10-15
+
+### Changed
+
+- add automatic binary release workflow
+
 ## [0.1.1] - 2026-10-15
 
 ### Added
