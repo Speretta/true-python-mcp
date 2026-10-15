@@ -3,6 +3,24 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.1.1] - 2026-10-15
+
+### Added
+
+- report revisions from read-only ruff calls
+
+### Fixed
+
+- honor the ground-truth python override in scope tests
+
+### Changed
+
+- replace regex parsing in git hook and release script with bash builtins
+- add captured example walkthroughs
+- present plain-Python support in README and package description
+- restructure README with quickstart and demo, add CONTRIBUTING
+- replace node-based setup actions with shell steps
+
 ## [0.1.0] - 2026-10-15
 
 First public release.
