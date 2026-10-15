@@ -67,7 +67,8 @@ impl Tpmcp {
         description = "Lint a Python file or Jupyter notebook with ruff (uses the project's \
                        ruff/pyproject config). Notebook diagnostics carry a 0-based `cell` \
                        index and a cell-relative line, so they map directly onto the cell \
-                       tools. Set fix=true (with revision) to apply safe fixes in place."
+                       tools. Responses report the current revision; set fix=true with that \
+                       revision to apply safe fixes in place."
     )]
     fn ruff_check(
         &self,
@@ -82,7 +83,11 @@ impl Tpmcp {
                 ruff::check(&args.path, true)
             })?
         } else {
-            ruff::check(&args.path, false)?
+            let mut outcome = ruff::check(&args.path, false)?;
+            // Read-only result: report the current revision so a follow-up
+            // fix=true call can chain onto it.
+            outcome.new_revision = Some(fs::read(&args.path)?.revision);
+            outcome
         };
         Ok(respond(
             args.format,
@@ -94,8 +99,10 @@ impl Tpmcp {
     #[tool(
         description = "Format a Python file or Jupyter notebook with ruff format. Formats in \
                        place by default (requires `revision`, returns the new revision); pass \
-                       check=true for a dry run that returns a diff without writing. Notebook \
-                       formatting is byte-exact: only reformatted cells change."
+                       check=true for a dry run that returns a diff without writing. Every \
+                       response reports the revision to use next, so a dry run can chain into \
+                       the in-place call. Notebook formatting is byte-exact: only reformatted \
+                       cells change."
     )]
     fn ruff_format(
         &self,
@@ -114,10 +121,16 @@ impl Tpmcp {
                 ruff::format_file(&args.path, true)
             })?
         };
+        // Read-only outcomes report the current revision so the in-place
+        // call can chain onto it.
+        let current_revision = match &outcome {
+            ruff::FormatOutcome::Written { .. } => None,
+            _ => fs::read(&args.path).ok().map(|snapshot| snapshot.revision),
+        };
         Ok(respond(
             args.format,
-            || format_markdown(&args.path, &outcome),
-            || format_json(&args.path, &outcome),
+            || format_markdown(&args.path, &outcome, current_revision.as_deref()),
+            || format_json(&args.path, &outcome, current_revision.as_deref()),
         ))
     }
 
@@ -166,6 +179,8 @@ fn check_markdown(path: &Path, outcome: &CheckOutcome) -> String {
             "applied automatic fixes · revision: {}\n",
             outcome.new_revision.as_deref().unwrap_or("?")
         ));
+    } else if let Some(revision) = &outcome.new_revision {
+        out.push_str(&format!("revision: {revision}\n"));
     }
     if outcome.diagnostics.is_empty() {
         out.push_str("no issues found\n");
@@ -213,10 +228,18 @@ fn check_json(path: &Path, outcome: &CheckOutcome) -> serde_json::Value {
     })
 }
 
-fn format_markdown(path: &Path, outcome: &ruff::FormatOutcome) -> String {
+fn format_markdown(
+    path: &Path,
+    outcome: &ruff::FormatOutcome,
+    current_revision: Option<&str>,
+) -> String {
     match outcome {
         ruff::FormatOutcome::Unchanged => {
-            format!("ruff format: {}\nalready formatted\n", path.display())
+            let mut out = format!("ruff format: {}\nalready formatted\n", path.display());
+            if let Some(revision) = current_revision {
+                out.push_str(&format!("revision: {revision}\n"));
+            }
+            out
         }
         ruff::FormatOutcome::Written { new_revision } => format!(
             "ruff format: {}\nformatted · revision: {new_revision}\n",
@@ -227,6 +250,9 @@ fn format_markdown(path: &Path, outcome: &ruff::FormatOutcome) -> String {
                 "ruff format (dry run): {}\nwould reformat\n",
                 path.display()
             );
+            if let Some(revision) = current_revision {
+                out.push_str(&format!("revision: {revision}\n"));
+            }
             if let Some(diff) = diff {
                 out.push_str(&format!("\n```diff\n{diff}```\n"));
             }
@@ -235,13 +261,19 @@ fn format_markdown(path: &Path, outcome: &ruff::FormatOutcome) -> String {
     }
 }
 
-fn format_json(path: &Path, outcome: &ruff::FormatOutcome) -> serde_json::Value {
+fn format_json(
+    path: &Path,
+    outcome: &ruff::FormatOutcome,
+    current_revision: Option<&str>,
+) -> serde_json::Value {
     let (status, revision, diff) = match outcome {
-        ruff::FormatOutcome::Unchanged => ("unchanged", None, None),
+        ruff::FormatOutcome::Unchanged => ("unchanged", current_revision, None),
         ruff::FormatOutcome::Written { new_revision } => {
             ("formatted", Some(new_revision.as_str()), None)
         }
-        ruff::FormatOutcome::WouldReformat { diff } => ("would_reformat", None, diff.as_deref()),
+        ruff::FormatOutcome::WouldReformat { diff } => {
+            ("would_reformat", current_revision, diff.as_deref())
+        }
     };
     json!({
         "path": path.display().to_string(),

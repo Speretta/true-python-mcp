@@ -286,6 +286,47 @@ fn ruff_tools_over_the_wire() {
 }
 
 #[test]
+fn ruff_revision_chains_into_fix_and_format() {
+    let dir = temp_dir("ruffchain");
+    let path = dir.join("sample.py");
+    std::fs::copy("tests/data/lint_sample.py", &path).unwrap();
+
+    let mut server = Server::start(&[]);
+    // A plain check reports the current revision in both formats...
+    let (err, text, _) = server.call("ruff_check", json!({"path": path}));
+    assert!(!err, "{text}");
+    let revision = revision_of(&text);
+    assert_eq!(revision.len(), 16, "{text}");
+    let (_, _, sc) = server.call("ruff_check", json!({"path": path, "format": "json"}));
+    assert_eq!(sc["revision"].as_str().unwrap(), revision);
+
+    // ...so a fix can chain straight onto it without another read.
+    let (err, text, _) = server.call(
+        "ruff_check",
+        json!({"path": path, "fix": true, "revision": revision}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("applied automatic fixes"), "{text}");
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(!fixed.contains("import os"), "{fixed}");
+    assert!(
+        fixed.contains("return undefined_var"),
+        "F821 stays: {fixed}"
+    );
+
+    // A format dry run reports the revision for the in-place call.
+    let (_, text, _) = server.call("ruff_format", json!({"path": path, "check": true}));
+    assert!(text.contains("revision: "), "{text}");
+    let revision = revision_of(&text);
+    let (err, text, _) = server.call("ruff_format", json!({"path": path, "revision": revision}));
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("formatted") || text.contains("already formatted"),
+        "{text}"
+    );
+}
+
+#[test]
 fn py_file_tools_over_the_wire() {
     let dir = temp_dir("pytools");
     let path = dir.join("a.py");
