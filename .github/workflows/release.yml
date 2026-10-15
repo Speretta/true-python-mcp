@@ -1,0 +1,160 @@
+name: Release
+
+# Pushing a version tag (scripts/release.sh creates it) builds the binaries
+# and publishes them on the GitHub release for that tag. Only checkout is an
+# action; toolchains and uploads use shell, rustup, apt and the preinstalled
+# GitHub CLI.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create the GitHub release with notes from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Notes = this version's CHANGELOG section, leading blank lines trimmed.
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md | awk 'NF { started = 1 } started { print }' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "See CHANGELOG.md for details." > notes.md
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "tpmcp $GITHUB_REF_NAME" \
+              --notes-file notes.md
+          fi
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the cross toolchain (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu)
+              : # native
+              ;;
+            x86_64-unknown-linux-musl)
+              sudo apt-get update -y
+              sudo apt-get install -y musl-tools
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              ;;
+            aarch64-unknown-linux-gnu)
+              sudo apt-get update -y
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              ;;
+            aarch64-unknown-linux-musl)
+              curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | tar -xz -C /tmp
+              echo "/tmp/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
+              echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
+              ;;
+            riscv64gc-unknown-linux-gnu)
+              sudo apt-get update -y
+              sudo apt-get install -y gcc-riscv64-linux-gnu
+              echo "CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER=riscv64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              echo "CC_riscv64gc_unknown_linux_gnu=riscv64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "unknown target: $TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Install the Rust target
+        shell: bash
+        run: |
+          rustup target add "$TARGET"
+          rustc --version
+
+      - name: Build
+        shell: bash
+        run: cargo build --release --target "$TARGET"
+
+      - name: Package the binary with licenses and a checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="tpmcp-$version-$TARGET"
+          binary="target/$TARGET/release/tpmcp"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            binary="target/$TARGET/release/tpmcp.exe"
+          fi
+          mkdir -p "dist/$name"
+          cp "$binary" "dist/$name/"
+          cp LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            tar -a -cf "$name.zip" "$name"
+            sha256sum "$name.zip" > "$name.zip.sha256"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --clobber
+          else
+            gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --clobber
+          fi
