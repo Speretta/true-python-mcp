@@ -1,0 +1,91 @@
+name: Bench
+
+# On-demand memory benchmark. Builds every stack in Docker, measures them
+# with bench/measure.sh, regenerates COMPARISON.md from the results and
+# commits it when the numbers changed. Raw results are attached as a run
+# artifact for audit. Dispatch from the Actions tab; the workflow file
+# itself lives on the dispatched ref.
+#
+# Toolchains come from apt/rustup and the runner's Docker; the only action
+# besides checkout is the official artifact uploader.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Repetitions per stack (the median is reported)"
+        default: "3"
+      fast:
+        description: "Fast mode (short quiesce windows; smoke test only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the static tpmcp binary for the bench image
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+            cargo build --release --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/tpmcp bench/tpmcp/tpmcp
+
+      - name: Measure every stack
+        run: |
+          set -euo pipefail
+          flags="--runs ${{ inputs.runs }}"
+          if [ "${{ inputs.fast }}" = "true" ]; then
+            flags="$flags --fast"
+          fi
+          bash bench/measure.sh $flags
+
+      - name: Regenerate COMPARISON.md
+        run: python3 bench/render.py --render bench/results COMPARISON.md
+
+      - name: Refresh the README memory table
+        run: python3 bench/render.py --update-readme bench/results README.md
+
+      - name: Upload the raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            bench/results/
+            COMPARISON.md
+          retention-days: 90
+
+      - name: Commit refreshed numbers (main only)
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "not on main - artifact only, no commit"
+            exit 0
+          fi
+          # git diff misses untracked files - status covers both the first
+          # run (COMPARISON.md not in the repo yet) and later refreshes.
+          if [ -z "$(git status --porcelain COMPARISON.md README.md)" ]; then
+            echo "COMPARISON.md and README.md unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add COMPARISON.md README.md
+          git commit -m "chore(bench): refresh comparison measurements [skip ci]"
+          git push
