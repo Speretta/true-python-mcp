@@ -98,7 +98,14 @@ jobs:
               echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
               ;;
             aarch64-unknown-linux-musl)
-              curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | tar -xz -C /tmp
+              # musl.cc is volunteer-hosted and was unreachable from the
+              # runner (curl 28, connect timeout). Use the pinned GitHub
+              # release mirror from the same maintainers instead; the tarball
+              # has no wrapper directory, so extract into its own folder.
+              curl -fsSL --retry 3 -o /tmp/xc-musl.tar.xz \
+                "https://github.com/just-containers/musl-cross-make/releases/download/v15/gcc-9.2.0-aarch64-linux-musl.tar.xz"
+              mkdir -p /tmp/aarch64-linux-musl-cross
+              tar -xJf /tmp/xc-musl.tar.xz -C /tmp/aarch64-linux-musl-cross
               echo "/tmp/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
               echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
               echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
