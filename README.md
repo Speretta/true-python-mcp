@@ -4,38 +4,34 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Release](https://img.shields.io/github/v/tag/Speretta/true-python-mcp)](https://github.com/Speretta/true-python-mcp/tags)
 
-*An MCP server that lets your AI assistant edit Python notebooks safely.
-One Rust binary. Nothing else to install.*
-
-Your AI coding assistant is good at editing `.py` files. Notebooks are harder,
-for two reasons:
-
-- A `.ipynb` file is one big JSON document. One small change can rewrite the
-  whole file and fill your git diff with noise.
-- Many notebook MCP servers run a Jupyter kernel in the background to work
-  with notebooks. A hidden kernel can fight with the editor you already have
-  open, like VS Code.
-
-tpmcp avoids both. It treats a notebook as a plain file: it never starts a
-kernel, never runs your code, and changes only the bytes you asked it to
-change.
+*An MCP server for Python: safe notebook editing and built-in ruff
+lint/format — for notebooks and plain `.py` files alike. One Rust binary.
+Nothing else to install.*
 
 It does two jobs:
 
 1. **Edit notebooks without breaking them.** Jupyter (`.ipynb`) and marimo
    (`.py`) files keep their exact layout. If you change one line, the git diff
-   shows one line.
-2. **Check Python code.** Lint and format with ruff. ruff is built into the
-   binary, so there is nothing to install.
+   shows one line. Notebooks are hard for AI tools: a `.ipynb` file is one big
+   JSON document, and many notebook MCP servers run a hidden Jupyter kernel
+   that can fight with the editor you have open, like VS Code. tpmcp starts no
+   kernel and runs no code — it treats the notebook as a plain file and
+   changes only the bytes you asked it to change.
+2. **Lint and format any Python file.** ruff is compiled into the binary, so
+   `ruff_check` and `ruff_format` work on every `.py`, `.pyi`, and `.ipynb`
+   in your project — not just notebooks. Nothing to install, nothing to
+   configure.
 
 ## At a glance
 
-- One binary, no runtime dependencies — ruff is compiled in
-- Byte-exact edits: your diff shows only what you changed
+- One binary, no runtime dependencies
+- Works on plain Python too: ruff lint and format for any `.py`, not just
+  notebooks
+- Byte-exact notebook edits: your diff shows only what you changed
 - Jupyter `.ipynb` and marimo `.py`, detected automatically
 - Revision guard: two writers never overwrite each other
 - No kernel, no background process, nothing to fight with your editor
-- 12 tools, plus 3 file tools with `--file-tools`
+- 12 tools, plus 3 tools for plain Python files with `--file-tools`
 
 ## See it work
 
@@ -78,7 +74,8 @@ If your tool has no file tools of its own (like plain Claude Desktop), add
 `"args": ["--file-tools"]` to also get `py_read`, `py_write`, and `py_edit`.
 
 **3. Try it.** Ask your AI: *"Read the cells of demo.ipynb, then fix the typo
-in cell 2."*
+in cell 2."* In a plain Python project: *"Lint main.py with ruff and apply the
+safe fixes."*
 
 ## Tools
 
@@ -96,8 +93,8 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `cell_set_type` | Switches a cell between code and markdown. |
 | `cell_clear_outputs` | Empties the outputs of Jupyter cells. |
 | `notebook_check` | Finds problems without changing anything: a broken notebook structure, merge conflict marks, or marimo graph errors (two cells defining the same name, a cycle). |
-| `ruff_check` | Finds problems in Python code. With `fix: true` it repairs the safe ones. |
-| `ruff_format` | Formats Python code. With `check: true` it only shows what would change. |
+| `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file. With `fix: true` it repairs the safe ones. |
+| `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). |
 
 Notebook outputs, execution counts, and metadata stay exactly as they are.
