@@ -12,3 +12,7 @@ bench/results/
 
 # python bytecode (bench harness runs locally)
 __pycache__/
+
+# local analysis reports (agent audits + work program; internal working
+# docs, referenced by absolute path from worktrees)
+reports/
