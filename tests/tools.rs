@@ -59,7 +59,7 @@ impl Server {
         let mut line = String::new();
         self.stdout.read_line(&mut line).unwrap();
         let resp: Value =
-            serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad JSON {line}: {e}"));
+            serde_json::from_str(&line).unwrap_or_else(|error| panic!("bad JSON {line}: {error}"));
         assert_eq!(resp["id"], json!(id), "response id mismatch: {resp}");
         resp
     }
@@ -76,7 +76,7 @@ impl Server {
             .as_array()
             .unwrap()
             .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect();
         names.sort();
         names
@@ -97,8 +97,8 @@ impl Server {
             .map(|blocks| {
                 blocks
                     .iter()
-                    .filter(|b| b["type"] == "text")
-                    .map(|b| b["text"].as_str().unwrap_or(""))
+                    .filter(|block| block["type"] == "text")
+                    .map(|block| block["text"].as_str().unwrap_or(""))
                     .collect::<Vec<_>>()
                     .join("")
             })
@@ -246,9 +246,9 @@ fn notebook_lifecycle() {
     let parsed: Value = serde_json::from_str(&raw).unwrap();
     assert!(raw.ends_with('\n') && !raw.ends_with("\n\n"));
     assert_eq!(parsed["nbformat"], 4);
-    let nb = tpmcp::notebook::JupyterNotebook::parse(&raw).unwrap();
+    let notebook = tpmcp::notebook::JupyterNotebook::parse(&raw).unwrap();
     assert_eq!(
-        nb.to_string_canonical(),
+        notebook.to_string_canonical(),
         raw,
         "file stays byte-exact canonical"
     );
@@ -267,7 +267,7 @@ fn ruff_tools_over_the_wire() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|d| d["code"].as_str().unwrap())
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap())
         .collect();
     assert_eq!(codes, vec!["F401", "F401", "F821"]);
 
@@ -280,7 +280,7 @@ fn ruff_tools_over_the_wire() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|d| d["cell"].as_u64().unwrap())
+        .map(|diagnostic| diagnostic["cell"].as_u64().unwrap())
         .collect();
     assert_eq!(cells, vec![1, 2], "0-based cell indexes");
 }
