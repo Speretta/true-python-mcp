@@ -6,6 +6,7 @@
 //! `py_edit` require the current revision and refuse to clobber a file that
 //! changed underneath the caller.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -209,13 +210,17 @@ fn read_markdown(
     let shown = lines.len().min(MAX_RENDER_LINES);
     out.push_str("```\n");
     for (offset, line) in lines.iter().take(shown).enumerate() {
-        out.push_str(&format!("{:>5} | {}\n", range.0 + offset, line));
+        // Format straight into the output buffer: a per-line format! would
+        // allocate a temp String only to copy it again. Writing into a
+        // String is infallible.
+        let _ = writeln!(out, "{:>5} | {line}", range.0 + offset);
     }
     if shown < lines.len() {
-        out.push_str(&format!(
-            "... {} more lines (use line_start/line_end)\n",
+        let _ = writeln!(
+            out,
+            "... {} more lines (use line_start/line_end)",
             lines.len() - shown
-        ));
+        );
     }
     out.push_str("```\n");
     out
