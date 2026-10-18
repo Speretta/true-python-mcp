@@ -108,9 +108,6 @@ impl Tpmcp {
         &self,
         Parameters(args): Parameters<NotebookCreateArgs>,
     ) -> Result<CallToolResult, Error> {
-        if fs::read(&args.path).is_ok() {
-            return Err(Error::AlreadyExists { path: args.path });
-        }
         let format = match args.notebook_format {
             Some(format) => format,
             None => notebook::format_from_extension(&args.path).ok_or_else(|| {
