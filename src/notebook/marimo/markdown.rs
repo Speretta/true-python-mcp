@@ -110,6 +110,21 @@ pub(super) fn extract(value: &str) -> String {
     format!("{first}\n{rest}").trim().to_string()
 }
 
+/// The leading whitespace of one line.
+fn indent_of(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// textwrap's common-prefix step: keep whichever margin prefixes the other.
+fn common_margin<'a>(margin: Option<&'a str>, indent: &'a str) -> Option<&'a str> {
+    match margin {
+        None => Some(indent),
+        Some(margin) if indent.starts_with(margin) => Some(margin),
+        Some(margin) if margin.starts_with(indent) => Some(indent),
+        Some(_) => Some(""),
+    }
+}
+
 /// `textwrap.dedent`: whitespace-only lines become empty and are ignored for
 /// the margin; the margin is the longest common leading-whitespace prefix of
 /// the remaining lines (compared literally, so mixed tabs/spaces cancel).
@@ -121,13 +136,9 @@ fn dedent_common_margin(text: &str) -> String {
     let margin = lines
         .iter()
         .filter(|line| !line.is_empty())
-        .map(|line| &line[..line.len() - line.trim_start().len()])
-        .fold(None::<&str>, |margin, indent| match margin {
-            None => Some(indent),
-            Some(margin) if indent.starts_with(margin) => Some(margin),
-            Some(margin) if margin.starts_with(indent) => Some(indent),
-            Some(_) => Some(""),
-        })
+        .copied()
+        .map(indent_of)
+        .fold(None, common_margin)
         .unwrap_or("");
     if margin.is_empty() {
         return lines.join("\n");
