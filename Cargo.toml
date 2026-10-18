@@ -22,7 +22,6 @@ ruff_python_ast = "=0.0.17"
 ruff_python_formatter = "=0.0.17"
 ruff_python_parser = "=0.0.17"
 ruff_python_stdlib = "=0.0.17"
-ruff_source_file = "=0.0.17"
 ruff_text_size = "=0.0.17"
 ruff_workspace = "=0.0.17"
 rustc-hash = "2"
@@ -32,7 +31,7 @@ serde_json = "1"
 similar = "3.2.0"
 stacker = "0.1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "fs"] }
+tokio = { version = "1", features = ["rt", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
