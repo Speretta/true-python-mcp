@@ -227,9 +227,9 @@ fn version_field(map: &Map<String, Value>, key: &str) -> Result<u64, String> {
     let Some(value) = map.get(key) else {
         return Err(format!("missing integer field \"{key}\""));
     };
-    value.as_u64().ok_or_else(|| {
-        format!("field \"{key}\" must be a non-negative integer, got {value}")
-    })
+    value
+        .as_u64()
+        .ok_or_else(|| format!("field \"{key}\" must be a non-negative integer, got {value}"))
 }
 
 /// Consume one raw cell object: `cell_type`/`source` become typed fields and

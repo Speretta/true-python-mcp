@@ -95,7 +95,10 @@ fn exotic_numbers_normalize_once_then_are_stable() {
     );
     assert!(normalized.contains("\"bigger_int\": 1e+20"), "{normalized}");
     assert!(normalized.contains("\"float_form\": 1e+30"), "{normalized}");
-    assert!(normalized.contains("\"planck_scale\": 1e+30"), "{normalized}");
+    assert!(
+        normalized.contains("\"planck_scale\": 1e+30"),
+        "{normalized}"
+    );
 
     let again = JupyterNotebook::parse(&normalized)
         .unwrap()
@@ -105,7 +108,9 @@ fn exotic_numbers_normalize_once_then_are_stable() {
     // A float spelled WITHOUT the '+' is the same number in a non-canonical
     // form: it normalizes once to serde_json's spelling, then stabilizes.
     let inline = r#"{"nbformat": 4, "nbformat_minor": 5, "metadata": {"n": 1e30}, "cells": []}"#;
-    let once = JupyterNotebook::parse(inline).unwrap().to_string_canonical();
+    let once = JupyterNotebook::parse(inline)
+        .unwrap()
+        .to_string_canonical();
     assert!(once.contains("\"n\": 1e+30"), "{once}");
     let twice = JupyterNotebook::parse(&once).unwrap().to_string_canonical();
     assert_eq!(twice, once);
@@ -184,8 +189,7 @@ fn notebook_with_output(output: &str) -> String {
 /// F17 ground truth (nbformat 5.11.1, v4.5 schema): `execute_result`
 /// accepts `"execution_count": null` (`{"type": ["integer", "null"],
 /// "minimum": 0}`), so our old is_u64-only predicate was a false positive.
-const EXECUTE_RESULT_NULL_COUNT: &str =
-    r#"{"execution_count": null, "data": {"text/plain": ["1"]}, "metadata": {}, "output_type": "execute_result"}"#;
+const EXECUTE_RESULT_NULL_COUNT: &str = r#"{"execution_count": null, "data": {"text/plain": ["1"]}, "metadata": {}, "output_type": "execute_result"}"#;
 /// The official schema types stream `name` as a plain string — "stdout,
 /// stderr" is only its description — so any string is valid.
 const STREAM_ODD_NAME: &str = r#"{"name": "stdoutput", "output_type": "stream", "text": ["hi\n"]}"#;
@@ -291,7 +295,10 @@ fn clear_outputs_all_clears_in_index_order() {
     // schema_issues.ipynb: cells 1 and 2 are the code cells.
     assert_eq!(cleared, vec![1, 2]);
     for index in cleared {
-        assert_eq!(notebook.cells[index].extra["outputs"], serde_json::json!([]));
+        assert_eq!(
+            notebook.cells[index].extra["outputs"],
+            serde_json::json!([])
+        );
         assert_eq!(
             notebook.cells[index].extra["execution_count"],
             serde_json::Value::Null
