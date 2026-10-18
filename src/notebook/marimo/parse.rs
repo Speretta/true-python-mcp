@@ -56,7 +56,9 @@ pub(super) fn guarded_drop<T>(parsed: Parsed<T>, source_len: usize) {
     let worst_case = DROP_FRAME_BOUND
         .saturating_mul(source_len)
         .min(DROP_STACK_CAP);
-    stacker::maybe_grow(worst_case, worst_case.max(1024 * 1024), move || drop(parsed));
+    stacker::maybe_grow(worst_case, worst_case.max(1024 * 1024), move || {
+        drop(parsed)
+    });
 }
 
 fn parse_structured(src: &str, parsed: &Parsed<ModModule>) -> Result<MarimoNotebook, String> {
@@ -124,7 +126,11 @@ impl Builder {
     pub(super) fn inspect_literal(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Import(import) => {
-                if import.names.iter().any(|a| a.name.as_str() == "marimo") {
+                if import
+                    .names
+                    .iter()
+                    .any(|alias| alias.name.as_str() == "marimo")
+                {
                     self.seen_import = true;
                 }
             }
@@ -256,7 +262,9 @@ pub(super) fn app_cell(
     end: usize,
 ) -> (Cell, CellMeta) {
     let body = &func.body;
-    let first_start = body.first().map_or(end, |s| s.range().start().to_usize());
+    let first_start = body
+        .first()
+        .map_or(end, |stmt| stmt.range().start().to_usize());
     let first_line = line_start(src, first_start);
     let indent = src[first_line..first_start].to_string();
     // The AST skips comments, so walk back over any comment lines directly
@@ -272,22 +280,22 @@ pub(super) fn app_cell(
 
     let header = src[start..body_line_start].to_string();
     let raw_body = &src[body_line_start..body_end];
-    let (cell_type, source, indent_memory, md) = match super::markdown::detect(src, body, body_line_start)
-    {
-        Some(detected) => (
-            "markdown".to_string(),
-            detected.text,
-            None,
-            Some(super::MdInfo {
-                tag: detected.tag,
-                comments: detected.comments,
-            }),
-        ),
-        None => {
-            let (source, indent_memory) = super::indent::strip_fixed_indent(raw_body, &indent);
-            ("code".to_string(), source, indent_memory, None)
-        }
-    };
+    let (cell_type, source, indent_memory, md) =
+        match super::markdown::detect(src, body, body_line_start) {
+            Some(detected) => (
+                "markdown".to_string(),
+                detected.text,
+                None,
+                Some(super::MdInfo {
+                    tag: detected.tag,
+                    comments: detected.comments,
+                }),
+            ),
+            None => {
+                let (source, indent_memory) = super::indent::strip_fixed_indent(raw_body, &indent);
+                ("code".to_string(), source, indent_memory, None)
+            }
+        };
     (
         Cell {
             cell_type,
@@ -333,12 +341,14 @@ pub(super) fn setup_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -> (C
             let first = with
                 .body
                 .first()
-                .map_or(end, |s| s.range().start().to_usize());
+                .map_or(end, |stmt| stmt.range().start().to_usize());
             (&with.body[..], line_start(src, first))
         }
         _ => (&[][..], end),
     };
-    let first_start = body.first().map_or(end, |s| s.range().start().to_usize());
+    let first_start = body
+        .first()
+        .map_or(end, |stmt| stmt.range().start().to_usize());
     let indent = src[header_end..first_start].to_string();
     let header = src[start..header_end].to_string();
     let (source, indent_memory) = super::indent::strip_fixed_indent(&src[header_end..end], &indent);

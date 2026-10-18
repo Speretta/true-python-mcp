@@ -105,7 +105,7 @@ pub(super) fn analyze(code: &str) -> Option<CellInfo> {
         },
         scopes: Vec::new(),
         next_id: 1,
-        refs: HashMap::new(),
+        ref_sites: HashMap::new(),
         obscured: Vec::new(),
         is_sql: false,
         recursion_depth: 0,
@@ -121,11 +121,11 @@ pub(super) fn analyze(code: &str) -> Option<CellInfo> {
             .filter(|name| !is_local(name))
             .cloned()
             .collect(),
-        refs: visitor.refs.keys().cloned().collect(),
+        refs: visitor.ref_sites.keys().cloned().collect(),
         deleted_refs: visitor
-            .refs
+            .ref_sites
             .iter()
-            .filter(|(_, data)| data.iter().any(|entry| entry.deleted))
+            .filter(|(_, sites)| sites.iter().any(|site| site.deleted))
             .map(|(name, _)| name.clone())
             .collect(),
         is_sql: visitor.is_sql,
@@ -142,7 +142,9 @@ struct Analyzer<'a> {
     /// innermost last.
     scopes: Vec<Block>,
     next_id: usize,
-    refs: HashMap<String, Vec<RefData>>,
+    /// Reference sites by name: where the name was seen, from which block
+    /// chain (distinct from [`CellInfo::refs`], the resulting name set).
+    ref_sites: HashMap<String, Vec<RefData>>,
     /// Exception handler names currently in scope (`except ... as name:`).
     obscured: Vec<&'a str>,
     is_sql: bool,
@@ -188,11 +190,11 @@ impl<'a> Analyzer<'a> {
                 .chain(ancestors.iter().map(|block| block.id))
                 .collect(),
         };
-        let entries = self.refs.entry(name.to_string()).or_default();
-        if let Some(entry) = entries.iter_mut().find(|entry| entry.parents == parents) {
-            entry.deleted |= deleted;
+        let sites = self.ref_sites.entry(name.to_string()).or_default();
+        if let Some(site) = sites.iter_mut().find(|site| site.parents == parents) {
+            site.deleted |= deleted;
         } else {
-            entries.push(RefData { deleted, parents });
+            sites.push(RefData { deleted, parents });
         }
     }
 
@@ -215,11 +217,11 @@ impl<'a> Analyzer<'a> {
             }
         };
         if !matches!(kind, DefKind::Method)
-            && let Some(entries) = self.refs.get_mut(name)
+            && let Some(sites) = self.ref_sites.get_mut(name)
         {
-            entries.retain(|entry| !entry.parents.contains(&block_id));
-            if entries.is_empty() {
-                self.refs.remove(name);
+            sites.retain(|site| !site.parents.contains(&block_id));
+            if sites.is_empty() {
+                self.ref_sites.remove(name);
             }
         }
     }
