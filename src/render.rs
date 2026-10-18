@@ -68,6 +68,16 @@ impl Window {
         };
         Self { start, end }
     }
+
+    /// True when the window is empty and starts at or beyond the last cell.
+    pub fn is_past_the_end(&self, cell_count: usize) -> bool {
+        self.start >= self.end && self.start >= cell_count
+    }
+
+    /// The windowed cells paired with their absolute notebook indexes.
+    pub fn cells<'a>(&self, cells: &'a [Cell]) -> impl Iterator<Item = (usize, &'a Cell)> {
+        cells.iter().enumerate().take(self.end).skip(self.start)
+    }
 }
 
 /// Render the notebook header plus the selected cell window as markdown.
@@ -87,11 +97,11 @@ pub fn notebook_markdown(
         cell_type_census(cells),
         notebook.format_label()
     ));
-    if window.start >= window.end && window.start >= cells.len() {
+    if window.is_past_the_end(cells.len()) {
         out.push_str("\n(no cells in range)");
         return out;
     }
-    for (index, cell) in cells.iter().enumerate().take(window.end).skip(window.start) {
+    for (index, cell) in window.cells(cells) {
         out.push('\n');
         out.push_str(&cell_markdown(index, cell, detail, with_outputs));
     }
@@ -203,24 +213,28 @@ fn render_outputs(cell: &Cell, detail: Detail, with_outputs: WithOutputs) -> Opt
 fn summarize(outputs: &[Value]) -> String {
     outputs
         .iter()
-        .map(|output| {
-            let kind = output
-                .get("output_type")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            match output.get("data") {
-                Some(Value::Object(data)) => {
-                    let mimes: Vec<&str> = data.keys().map(String::as_str).collect();
-                    format!("{kind}[{}]", mimes.join(","))
-                }
-                _ => match output.get("name").and_then(Value::as_str) {
-                    Some(name) => format!("{kind}({name})"),
-                    None => kind.to_string(),
-                },
-            }
-        })
+        .map(output_summary)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// One-line summary of an output: `stream(stderr)`,
+/// `execute_result[text/plain,image/png]`, `error`.
+fn output_summary(output: &Value) -> String {
+    let kind = output
+        .get("output_type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match output.get("data") {
+        Some(Value::Object(data)) => {
+            let mimes: Vec<&str> = data.keys().map(String::as_str).collect();
+            format!("{kind}[{}]", mimes.join(","))
+        }
+        _ => match output.get("name").and_then(Value::as_str) {
+            Some(name) => format!("{kind}({name})"),
+            None => kind.to_string(),
+        },
+    }
 }
 
 fn render_output_full(output: &Value, detail: Detail) -> String {
@@ -366,12 +380,8 @@ pub fn notebook_json(
     with_outputs: WithOutputs,
     window: Window,
 ) -> Value {
-    let cells: Vec<Value> = notebook
-        .cells()
-        .iter()
-        .enumerate()
-        .take(window.end)
-        .skip(window.start)
+    let cells: Vec<Value> = window
+        .cells(notebook.cells())
         .map(|(index, cell)| cell_json(index, cell, with_outputs))
         .collect();
     json!({
