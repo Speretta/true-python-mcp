@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Successive pushes to the same ref cancel the older run. Tag pushes never
+# reach this workflow; the release pipeline has its own test gate and its
+# own never-cancelling concurrency group (release.yml).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   TPMCP_GROUND_TRUTH_PYTHON: /tmp/nbenv/bin/python
   TPMCP_REQUIRE_GROUND_TRUTH: "1"
@@ -14,23 +21,95 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      # The only action we use; it runs on the runner's Node 24 runtime.
+      # The only actions we use are first-party; they run on the runner's
+      # Node 24 runtime.
       - uses: actions/checkout@v5
+      - name: Cache the cargo dirs and the build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       # No Node-based setup actions: the runner image already ships a stable
       # Rust toolchain with clippy and rustfmt, and uv installs via shell.
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # Pinned to the versions the ground-truth claims were verified against
+      # (nbformat 5.11.1, marimo 0.25.1); bump deliberately, together with
+      # the docs that cite them.
       - name: Install the ground-truth venv (nbformat + marimo)
         run: |
           uv venv /tmp/nbenv
-          uv pip install --python /tmp/nbenv/bin/python nbformat marimo
+          uv pip install --python /tmp/nbenv/bin/python nbformat==5.11.1 marimo==0.25.1
       # Pinned official nextest binary via curl; no third-party GitHub
-      # Actions beyond checkout (house rule).
+      # Actions beyond checkout and cache (house rule).
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo nextest run
       - run: cargo build --release
+
+  # Cargo.toml declares rust-version; this job is the only place that
+  # compiles with it. Check only: clippy and the suite ride the stable job.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache the cargo dirs and the MSRV build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-
+      - name: Install the MSRV toolchain
+        run: rustup toolchain install 1.97.0 --profile minimal
+      - name: Check the crate with the declared MSRV
+        run: cargo +1.97.0 check --locked
+
+  # The release workflow ships two Windows targets; this job is the only
+  # place the suite runs on Windows. nextest only: fmt and clippy are
+  # platform-independent and stay in the Linux job. .gitattributes keeps the
+  # byte-exact fixtures untouched by the runner's core.autocrlf=true.
+  # Paths go through GITHUB_ENV (runner temp dir) because the workflow-level
+  # env above spells Linux paths.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      TPMCP_REQUIRE_GROUND_TRUTH: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache the cargo dirs and the build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Install uv and the pinned ground-truth venv
+        shell: bash
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv venv "$RUNNER_TEMP/nbenv"
+          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat==5.11.1 marimo==0.25.1
+      - name: Point the ground-truth env at the venv and a job-local lock dir
+        shell: bash
+        run: |
+          echo "TPMCP_GROUND_TRUTH_PYTHON=$RUNNER_TEMP/nbenv/Scripts/python.exe" >> "$GITHUB_ENV"
+          echo "TPMCP_LOCK_DIR=$RUNNER_TEMP/tpmcp-locks" >> "$GITHUB_ENV"
+      - name: Install cargo-nextest
+        shell: bash
+        run: curl -LsSf https://get.nexte.st/0.9.148/windows-tar.gz | tar zxf - -C "$HOME/.cargo/bin"
+      - run: cargo nextest run
