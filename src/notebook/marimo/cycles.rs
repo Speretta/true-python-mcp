@@ -2,7 +2,7 @@
 //! with all per-node state kept in the DFS work-stack frames, so no map
 //! lookup can miss and no panic path exists.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// One DFS frame; `index`/`lowlink` live here while the node is on the work
 /// stack, mirroring the recursive formulation.
@@ -24,7 +24,10 @@ pub(super) fn cycles(parents: &HashMap<usize, Vec<usize>>) -> Vec<Vec<usize>> {
     let mut counter = 0usize;
     let mut sccs: Vec<Vec<usize>> = Vec::new();
 
-    for root in parents.keys().copied().collect::<BTreeSet<_>>() {
+    // Map keys are unique, so a sorted Vec states the visit order directly.
+    let mut roots: Vec<usize> = parents.keys().copied().collect();
+    roots.sort_unstable();
+    for root in roots {
         if index_of.contains_key(&root) {
             continue;
         }

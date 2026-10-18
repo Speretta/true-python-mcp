@@ -122,284 +122,354 @@ fn cells_list(cells: &[usize]) -> String {
 /// Validate the notebook. Deterministic order: syntax, multiple definitions,
 /// cycles, setup root, then informational drift by cell.
 pub(super) fn check(notebook: &MarimoNotebook) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    let mut nodes: BTreeMap<usize, Node> = BTreeMap::new();
-    let mut toplevel_names: BTreeSet<String> = BTreeSet::new();
-    let mut setup_index: Option<usize> = None;
+    let mut graph = Graph::build(notebook);
+    let mut findings = std::mem::take(&mut graph.syntax_findings);
+    findings.extend(graph.multiple_definition_findings());
+    findings.extend(graph.cycle_findings());
+    findings.extend(graph.setup_root_findings());
+    findings.extend(graph.drift_findings(notebook));
+    findings
+}
 
-    for (index, (cell, meta)) in notebook.cells.iter().zip(&notebook.metas).enumerate() {
-        match meta.kind {
-            Kind::Broken => {
-                findings.push(Finding {
-                    severity: Severity::Error,
-                    cell: Some(index),
-                    code: "syntax-error".to_string(),
-                    message: format!(
-                        "cell {index} contains a Python syntax error; marimo cannot run this \
-                         notebook until it is repaired"
-                    ),
-                });
-                continue;
-            }
-            // The runtime registers unparsable cells without compiling them.
-            Kind::Unparsable => continue,
-            Kind::Function | Kind::Class => {
-                if let Some(name) = block_definition_name(meta) {
-                    toplevel_names.insert(name);
-                }
-            }
-            Kind::Setup => setup_index = Some(index),
-            Kind::AppCell => {}
-        }
-        let label = match meta.kind {
-            Kind::Setup => "the setup cell".to_string(),
-            _ => format!("cell {index}"),
+/// The reactive graph: analyzed cells, name indexes, and dependency edges —
+/// everything the finding passes read. Built once per check.
+struct Graph {
+    /// Analyzed Python cells by index (SQL cells excluded, like marimo).
+    nodes: BTreeMap<usize, Node>,
+    /// Names bound by read-only `@app.function` / `@app.class_definition`
+    /// blocks; they join the allowed refs.
+    toplevel_names: BTreeSet<String>,
+    setup_index: Option<usize>,
+    /// Broken cells and unparsable bodies, in cell order.
+    syntax_findings: Vec<Finding>,
+    /// Name -> defining / referring / deleting cells.
+    definers: BTreeMap<String, Vec<usize>>,
+    referrers: BTreeMap<String, Vec<usize>>,
+    deleters: BTreeMap<String, Vec<usize>>,
+    /// marimo's `compute_edges_for_cell`: cell -> the cells it depends on.
+    parents: HashMap<usize, Vec<usize>>,
+}
+
+impl Graph {
+    fn build(notebook: &MarimoNotebook) -> Self {
+        let mut graph = Self {
+            nodes: BTreeMap::new(),
+            toplevel_names: BTreeSet::new(),
+            setup_index: None,
+            syntax_findings: Vec::new(),
+            definers: BTreeMap::new(),
+            referrers: BTreeMap::new(),
+            deleters: BTreeMap::new(),
+            parents: HashMap::new(),
         };
-        let info = if meta.md.is_some() {
-            // A markdown cell is exactly `mo.md(constant)`: its only ref is mo.
-            CellInfo {
-                defs: HashSet::new(),
-                refs: HashSet::from(["mo".to_string()]),
-                deleted_refs: HashSet::new(),
-                is_sql: false,
-            }
-        } else {
-            let Some(info) = scope::analyze(&cell.source.text()) else {
-                findings.push(Finding {
-                    severity: Severity::Error,
-                    cell: Some(index),
-                    code: "syntax-error".to_string(),
-                    message: format!("cell {index} does not parse as Python"),
-                });
-                continue;
-            };
-            info
-        };
-        if info.is_sql {
-            continue;
-        }
-        nodes.insert(index, Node { info, label });
+        graph.build_nodes(notebook);
+        graph.index_names();
+        graph.compute_edges();
+        graph
     }
 
-    // Name -> defining / referring / deleting cells.
-    let mut definers: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    let mut referrers: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    let mut deleters: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, node) in &nodes {
-        for name in &node.info.defs {
-            definers.entry(name).or_default().push(*index);
-        }
-        for name in &node.info.refs {
-            referrers.entry(name).or_default().push(*index);
-        }
-        for name in &node.info.deleted_refs {
-            deleters.entry(name).or_default().push(*index);
-        }
-    }
-
-    // Edges (marimo's compute_edges_for_cell, Python cells only).
-    let empty: Vec<usize> = Vec::new();
-    let mut parents: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (index, node) in &nodes {
-        let mut set: BTreeSet<usize> = BTreeSet::new();
-        for name in &node.info.refs {
-            for definer in definers.get(name.as_str()).unwrap_or(&empty) {
-                if definer != index {
-                    set.insert(*definer);
-                }
-            }
-            for deleter in deleters.get(name.as_str()).unwrap_or(&empty) {
-                if deleter != index {
-                    set.insert(*deleter);
-                }
-            }
-        }
-        for name in &node.info.deleted_refs {
-            for referrer in referrers.get(name.as_str()).unwrap_or(&empty) {
-                if referrer != index {
-                    set.insert(*referrer);
-                }
-            }
-        }
-        parents.insert(*index, set.into_iter().collect());
-    }
-
-    // Multiple definitions.
-    for (name, cells) in &definers {
-        if cells.len() > 1 {
-            findings.push(Finding {
-                severity: Severity::Error,
-                cell: Some(cells[0]),
-                code: "multiple-definitions".to_string(),
-                message: format!(
-                    "`{name}` is defined by multiple cells ({}); marimo only keeps one",
-                    cells_list(cells)
-                ),
-            });
-        }
-    }
-
-    // Cycles.
-    for component in cycles(&parents) {
-        let mut vars: BTreeSet<&str> = BTreeSet::new();
-        for to in &component {
-            for from in parents.get(to).into_iter().flatten() {
-                if !component.contains(from) {
+    /// Analyze every cell into a node, collecting syntax findings and the
+    /// setup / toplevel-name indexes along the way, in cell order.
+    fn build_nodes(&mut self, notebook: &MarimoNotebook) {
+        for (index, (cell, meta)) in notebook.cells.iter().zip(&notebook.metas).enumerate() {
+            match meta.kind {
+                Kind::Broken => {
+                    self.syntax_findings.push(Finding {
+                        severity: Severity::Error,
+                        cell: Some(index),
+                        code: "syntax-error".to_string(),
+                        message: format!(
+                            "cell {index} contains a Python syntax error; marimo cannot run this \
+                             notebook until it is repaired"
+                        ),
+                    });
                     continue;
                 }
-                // from -> to edge: to's refs meet from's defs (or deletes).
-                for name in &nodes[to].info.refs {
-                    if nodes[from].info.defs.contains(name) {
-                        vars.insert(name);
+                // The runtime registers unparsable cells without compiling them.
+                Kind::Unparsable => continue,
+                Kind::Function | Kind::Class => {
+                    if let Some(name) = block_definition_name(meta) {
+                        self.toplevel_names.insert(name);
                     }
                 }
-                for name in &nodes[to].info.deleted_refs {
-                    if nodes[from].info.refs.contains(name) {
-                        vars.insert(name);
-                    }
-                }
+                Kind::Setup => self.setup_index = Some(index),
+                Kind::AppCell => {}
             }
+            let label = match meta.kind {
+                Kind::Setup => "the setup cell".to_string(),
+                _ => format!("cell {index}"),
+            };
+            let info = if meta.md.is_some() {
+                // A markdown cell is exactly `mo.md(constant)`: its only ref is mo.
+                CellInfo {
+                    defs: HashSet::new(),
+                    refs: HashSet::from(["mo".to_string()]),
+                    deleted_refs: HashSet::new(),
+                    is_sql: false,
+                }
+            } else {
+                let Some(info) = scope::analyze(&cell.source.text()) else {
+                    self.syntax_findings.push(Finding {
+                        severity: Severity::Error,
+                        cell: Some(index),
+                        code: "syntax-error".to_string(),
+                        message: format!("cell {index} does not parse as Python"),
+                    });
+                    continue;
+                };
+                info
+            };
+            if info.is_sql {
+                continue;
+            }
+            self.nodes.insert(index, Node { info, label });
         }
-        let via = if vars.is_empty() {
-            String::new()
-        } else {
-            format!(" via {}", vars.into_iter().collect::<Vec<_>>().join(", "))
-        };
-        findings.push(Finding {
-            severity: Severity::Error,
-            cell: Some(component[0]),
-            code: "cycle".to_string(),
-            message: format!(
-                "cells [{}] form a dependency cycle{via}",
-                cells_list(&component)
-            ),
-        });
     }
 
-    // The setup cell must not depend on other cells.
-    if let Some(setup) = setup_index
-        && nodes.contains_key(&setup)
-    {
-        let mut ancestors: BTreeSet<usize> = BTreeSet::new();
-        let mut queue: Vec<usize> = parents.get(&setup).cloned().unwrap_or_default();
-        while let Some(cell) = queue.pop() {
-            if ancestors.insert(cell) {
-                queue.extend(parents.get(&cell).cloned().unwrap_or_default());
+    /// Build the name -> defining / referring / deleting cells indexes.
+    fn index_names(&mut self) {
+        for (index, node) in &self.nodes {
+            for name in &node.info.defs {
+                self.definers.entry(name.clone()).or_default().push(*index);
+            }
+            for name in &node.info.refs {
+                self.referrers.entry(name.clone()).or_default().push(*index);
+            }
+            for name in &node.info.deleted_refs {
+                self.deleters.entry(name.clone()).or_default().push(*index);
             }
         }
-        if !ancestors.is_empty() {
-            let names: BTreeSet<&str> = ancestors
-                .iter()
-                .flat_map(|ancestor| nodes[ancestor].info.defs.iter())
-                .filter(|name| nodes[&setup].info.refs.contains(*name))
-                .map(String::as_str)
-                .collect();
+    }
+
+    /// Dependency edges (marimo's compute_edges_for_cell, Python cells only).
+    fn compute_edges(&mut self) {
+        let empty: Vec<usize> = Vec::new();
+        for (index, node) in &self.nodes {
+            let mut set: BTreeSet<usize> = BTreeSet::new();
+            for name in &node.info.refs {
+                for definer in self.definers.get(name.as_str()).unwrap_or(&empty) {
+                    if definer != index {
+                        set.insert(*definer);
+                    }
+                }
+                for deleter in self.deleters.get(name.as_str()).unwrap_or(&empty) {
+                    if deleter != index {
+                        set.insert(*deleter);
+                    }
+                }
+            }
+            for name in &node.info.deleted_refs {
+                for referrer in self.referrers.get(name.as_str()).unwrap_or(&empty) {
+                    if referrer != index {
+                        set.insert(*referrer);
+                    }
+                }
+            }
+            self.parents.insert(*index, set.into_iter().collect());
+        }
+    }
+
+    /// A name defined by more than one cell, in name order.
+    fn multiple_definition_findings(&self) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        for (name, cells) in &self.definers {
+            if cells.len() > 1 {
+                findings.push(Finding {
+                    severity: Severity::Error,
+                    cell: Some(cells[0]),
+                    code: "multiple-definitions".to_string(),
+                    message: format!(
+                        "`{name}` is defined by multiple cells ({}); marimo only keeps one",
+                        cells_list(cells)
+                    ),
+                });
+            }
+        }
+        findings
+    }
+
+    /// Dependency cycles (strongly connected components), in component order.
+    fn cycle_findings(&self) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        for component in cycles(&self.parents) {
+            let mut vars: BTreeSet<&str> = BTreeSet::new();
+            for to in &component {
+                for from in self.parents.get(to).into_iter().flatten() {
+                    if !component.contains(from) {
+                        continue;
+                    }
+                    // from -> to edge: to's refs meet from's defs (or deletes).
+                    for name in &self.nodes[to].info.refs {
+                        if self.nodes[from].info.defs.contains(name) {
+                            vars.insert(name);
+                        }
+                    }
+                    for name in &self.nodes[to].info.deleted_refs {
+                        if self.nodes[from].info.refs.contains(name) {
+                            vars.insert(name);
+                        }
+                    }
+                }
+            }
+            let via = if vars.is_empty() {
+                String::new()
+            } else {
+                format!(" via {}", vars.into_iter().collect::<Vec<_>>().join(", "))
+            };
             findings.push(Finding {
                 severity: Severity::Error,
-                cell: Some(setup),
-                code: "setup-root".to_string(),
+                cell: Some(component[0]),
+                code: "cycle".to_string(),
                 message: format!(
-                    "the setup cell must not depend on other cells, but it uses {} \
-                     defined by cells [{}]",
-                    names.into_iter().collect::<Vec<_>>().join(", "),
-                    cells_list(&ancestors.into_iter().collect::<Vec<_>>())
+                    "cells [{}] form a dependency cycle{via}",
+                    cells_list(&component)
                 ),
             });
         }
+        findings
     }
 
-    // Informational drift: stale returns and signatures that marimo's own
-    // save would regenerate.
-    let all_defs: BTreeSet<&str> = nodes
-        .values()
-        .flat_map(|node| node.info.defs.iter())
-        .map(String::as_str)
-        .collect();
-    let used_refs: BTreeSet<&str> = nodes
-        .values()
-        .flat_map(|node| node.info.refs.iter())
-        .map(String::as_str)
-        .collect();
-    let setup_defs: BTreeSet<&str> = setup_index
-        .and_then(|setup| nodes.get(&setup))
-        .map(|node| node.info.defs.iter().map(String::as_str).collect())
-        .unwrap_or_default();
-
-    for (index, node) in &nodes {
-        let meta: &CellMeta = &notebook.metas[*index];
-        if !matches!(meta.kind, Kind::AppCell) {
-            continue;
+    /// The setup cell must not depend on other cells.
+    fn setup_root_findings(&self) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        if let Some(setup) = self.setup_index
+            && self.nodes.contains_key(&setup)
+        {
+            let mut ancestors: BTreeSet<usize> = BTreeSet::new();
+            let mut queue: Vec<usize> = self.parents.get(&setup).cloned().unwrap_or_default();
+            while let Some(cell) = queue.pop() {
+                if ancestors.insert(cell) {
+                    queue.extend(self.parents.get(&cell).cloned().unwrap_or_default());
+                }
+            }
+            if !ancestors.is_empty() {
+                let names: BTreeSet<&str> = ancestors
+                    .iter()
+                    .flat_map(|ancestor| self.nodes[ancestor].info.defs.iter())
+                    .filter(|name| self.nodes[&setup].info.refs.contains(*name))
+                    .map(String::as_str)
+                    .collect();
+                findings.push(Finding {
+                    severity: Severity::Error,
+                    cell: Some(setup),
+                    code: "setup-root".to_string(),
+                    message: format!(
+                        "the setup cell must not depend on other cells, but it uses {} \
+                         defined by cells [{}]",
+                        names.into_iter().collect::<Vec<_>>().join(", "),
+                        cells_list(&ancestors.into_iter().collect::<Vec<_>>())
+                    ),
+                });
+            }
         }
-        // Stale return: marimo writes `return` with exactly the defs that are
-        // referenced somewhere, sorted.
-        let expected_return: Vec<&str> = {
-            let mut names: Vec<&str> = node
-                .info
-                .defs
-                .iter()
-                .map(String::as_str)
-                .filter(|name| used_refs.contains(name))
-                .collect();
-            names.sort_unstable();
-            names
-        };
-        let stored_return = meta
-            .return_suffix
-            .as_deref()
-            .map(parse_return)
+        findings
+    }
+
+    /// Informational drift: stale returns and signatures that marimo's own
+    /// save would regenerate, by cell.
+    fn drift_findings(&self, notebook: &MarimoNotebook) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        let all_defs: BTreeSet<&str> = self
+            .nodes
+            .values()
+            .flat_map(|node| node.info.defs.iter())
+            .map(String::as_str)
+            .collect();
+        let used_refs: BTreeSet<&str> = self
+            .nodes
+            .values()
+            .flat_map(|node| node.info.refs.iter())
+            .map(String::as_str)
+            .collect();
+        let setup_defs: BTreeSet<&str> = self
+            .setup_index
+            .and_then(|setup| self.nodes.get(&setup))
+            .map(|node| node.info.defs.iter().map(String::as_str).collect())
             .unwrap_or_default();
-        if stored_return.iter().map(String::as_str).collect::<Vec<_>>() != expected_return {
-            findings.push(Finding {
-                severity: Severity::Info,
-                cell: Some(*index),
-                code: "stale-return".to_string(),
-                message: format!(
-                    "{} returns [{}] but marimo would regenerate [{}]; the return is refreshed \
-                     on marimo's next save",
-                    node.label,
-                    stored_return.join(", "),
-                    expected_return.join(", ")
-                ),
-            });
-        }
-        // Stale signature: marimo writes parameters for exactly the refs that
-        // are not allowed (setup defs, unshadowed builtins, toplevel names)
-        // and not defined by the cell itself, sorted.
-        let expected_params: Vec<&str> = {
-            let mut names: Vec<&str> = node
-                .info
-                .refs
+
+        for (index, node) in &self.nodes {
+            let meta: &CellMeta = &notebook.metas[*index];
+            if !matches!(meta.kind, Kind::AppCell) {
+                continue;
+            }
+            // Stale return: marimo writes `return` with exactly the defs that are
+            // referenced somewhere, sorted.
+            let expected_return: Vec<&str> = {
+                let mut names: Vec<&str> = node
+                    .info
+                    .defs
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| used_refs.contains(name))
+                    .collect();
+                names.sort_unstable();
+                names
+            };
+            let stored_return = meta
+                .return_suffix
+                .as_deref()
+                .map(parse_return)
+                .unwrap_or_default();
+            if !stored_return
                 .iter()
                 .map(String::as_str)
-                .filter(|name| {
-                    !node.info.defs.contains(*name)
-                        && !setup_defs.contains(name)
-                        && !toplevel_names.contains(*name)
-                        && !(is_marimo_builtin(name) && !all_defs.contains(name))
-                })
-                .filter(|name| ruff_python_stdlib::identifiers::is_identifier(name))
-                .collect();
-            names.sort_unstable();
-            names
-        };
-        let stored_params = parse_params(&meta.header);
-        if stored_params.iter().map(String::as_str).collect::<Vec<_>>() != expected_params {
-            findings.push(Finding {
-                severity: Severity::Info,
-                cell: Some(*index),
-                code: "stale-signature".to_string(),
-                message: format!(
-                    "{} takes ({}) but marimo would regenerate ({}); the signature is refreshed \
-                     on marimo's next save",
-                    node.label,
-                    stored_params.join(", "),
-                    expected_params.join(", ")
-                ),
-            });
+                .eq(expected_return.iter().copied())
+            {
+                findings.push(Finding {
+                    severity: Severity::Info,
+                    cell: Some(*index),
+                    code: "stale-return".to_string(),
+                    message: format!(
+                        "{} returns [{}] but marimo would regenerate [{}]; the return is refreshed \
+                         on marimo's next save",
+                        node.label,
+                        stored_return.join(", "),
+                        expected_return.join(", ")
+                    ),
+                });
+            }
+            // Stale signature: marimo writes parameters for exactly the refs that
+            // are not allowed (setup defs, unshadowed builtins, toplevel names)
+            // and not defined by the cell itself, sorted.
+            let expected_params: Vec<&str> = {
+                let mut names: Vec<&str> = node
+                    .info
+                    .refs
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| {
+                        !node.info.defs.contains(*name)
+                            && !setup_defs.contains(name)
+                            && !self.toplevel_names.contains(*name)
+                            && !(is_marimo_builtin(name) && !all_defs.contains(name))
+                    })
+                    .filter(|name| ruff_python_stdlib::identifiers::is_identifier(name))
+                    .collect();
+                names.sort_unstable();
+                names
+            };
+            let stored_params = parse_params(&meta.header);
+            if !stored_params
+                .iter()
+                .map(String::as_str)
+                .eq(expected_params.iter().copied())
+            {
+                findings.push(Finding {
+                    severity: Severity::Info,
+                    cell: Some(*index),
+                    code: "stale-signature".to_string(),
+                    message: format!(
+                        "{} takes ({}) but marimo would regenerate ({}); the signature is refreshed \
+                         on marimo's next save",
+                        node.label,
+                        stored_params.join(", "),
+                        expected_params.join(", ")
+                    ),
+                });
+            }
         }
+        findings
     }
-
-    findings
 }
 
 /// The name defined by a read-only `@app.function` / `@app.class_definition`
