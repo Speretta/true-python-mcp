@@ -116,13 +116,11 @@ impl SourceText {
     }
 }
 
-/// Notebook formats tpmcp can create.
+/// Notebook formats tpmcp can create (values documented on the params).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
-    /// Jupyter `.ipynb` (nbformat v4).
     Jupyter,
-    /// marimo `.py` reactive notebook.
     Marimo,
 }
 
