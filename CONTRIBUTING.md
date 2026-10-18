@@ -3,13 +3,20 @@
 ## Prerequisites
 
 - Rust 1.97 or newer (`rustup` recommended)
+- The [cargo-nextest](https://nexte.st) test runner (pinned; plain
+  `cargo test` also works):
+
+  ```sh
+  curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
+  ```
+
 - Optional: a Python venv with `nbformat` and `marimo` for the live
   ground-truth tests (see below)
 
 ## Everyday commands
 
 ```sh
-cargo test                    # all tests
+cargo nextest run             # all tests (or: cargo test)
 cargo clippy --all-targets    # must stay warning-free
 cargo fmt                     # code style
 ```
