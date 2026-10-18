@@ -130,7 +130,19 @@ impl Tpmcp {
         }
         let cell_count = notebook.cells().len();
         let content = notebook.serialize();
-        let new_revision = fs::with_file_lock(&args.path, || fs::write(&args.path, &content))?;
+        let new_revision = fs::with_file_lock(&args.path, || {
+            // Existence check INSIDE the lock, so concurrent creators are
+            // serialized and exactly one wins; stat-based, so entries
+            // fs::read cannot see (non-UTF-8, oversized, permission-denied,
+            // directories, dangling symlinks) are refused instead of
+            // silently clobbered.
+            if fs::exists(&args.path) {
+                return Err(Error::AlreadyExists {
+                    path: args.path.clone(),
+                });
+            }
+            fs::create(&args.path, &content)
+        })?;
         Ok(mutation_result(
             args.format,
             format!("created notebook with {cell_count} cells"),

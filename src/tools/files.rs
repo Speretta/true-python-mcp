@@ -104,26 +104,28 @@ impl Tpmcp {
                        revision. Prefer the host's native write tool when available."
     )]
     fn py_write(&self, Parameters(args): Parameters<PyWriteArgs>) -> Result<CallToolResult, Error> {
+        let creating = args.revision.is_none();
         let new_revision = fs::with_file_lock(&args.path, || {
             match &args.revision {
                 None => {
-                    if fs::read(&args.path).is_ok() {
+                    // Stat-based existence check: a read-based one treats
+                    // "exists but unreadable" (non-UTF-8, oversized,
+                    // permission-denied, directories) as "does not exist"
+                    // and the rename below would silently destroy it.
+                    if fs::exists(&args.path) {
                         return Err(Error::AlreadyExists {
                             path: args.path.clone(),
                         });
                     }
+                    fs::create(&args.path, &args.content)
                 }
                 Some(expected) => {
                     fs::read_verified(&args.path, expected)?;
+                    fs::write(&args.path, &args.content)
                 }
             }
-            fs::write(&args.path, &args.content)
         })?;
-        let verb = if args.revision.is_none() {
-            "created"
-        } else {
-            "wrote"
-        };
+        let verb = if creating { "created" } else { "wrote" };
         Ok(mutation_result(
             args.format,
             format!("{verb} {}", args.path.display()),

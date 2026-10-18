@@ -65,8 +65,9 @@ pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
     Ok(snapshot)
 }
 
-/// Atomically write `content` to `path`, creating parent directories as
-/// needed, and return the revision of the written content.
+/// Atomically write `content` to `path` and return the revision of the
+/// written content. The parent directory must exist; create paths use
+/// [`create`] instead, so a typo'd path never fabricates directories.
 ///
 /// The bytes are written to a sibling temp file, fsynced, then renamed over
 /// the target, so observers never see a partially written file.
@@ -86,11 +87,6 @@ pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
 /// changes. Inherent to atomic-rename writes without privileges.
 pub fn write(path: &Path, content: &str) -> Result<String, Error> {
     let target = resolve_target(path);
-    if let Some(parent) = target.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|source| Error::io(parent.to_path_buf(), source))?;
-    }
     let tmp = temp_path(&target);
     let result = (|| -> std::io::Result<()> {
         let mut file = fs::File::create(&tmp)?;
@@ -106,6 +102,29 @@ pub fn write(path: &Path, content: &str) -> Result<String, Error> {
             Err(Error::io(path.to_path_buf(), source))
         }
     }
+}
+
+/// Like [`write`], but creates missing parent directories first. Only the
+/// create-mode tools (`notebook_create`, `py_write` without a revision) may
+/// call this; generic writes must not fabricate directories from a typo'd
+/// path.
+pub fn create(path: &Path, content: &str) -> Result<String, Error> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|source| Error::io(parent.to_path_buf(), source))?;
+    }
+    write(path, content)
+}
+
+/// Whether ANY filesystem entry exists at `path` — including directories,
+/// unreadable files and symlinks (even dangling ones). One stat, no read:
+/// create-mode tools must refuse to clobber entries that [`read`] cannot
+/// see (non-UTF-8, oversized, permission-denied), and a read-based
+/// existence test would both destroy them and pay O(bytes) for a yes/no
+/// question.
+pub fn exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 /// The real file behind `path`: canonicalize resolves every symlink, so an
@@ -242,13 +261,20 @@ mod tests {
     fn write_then_read_roundtrips() {
         let dir = temp_dir("roundtrip");
         let path = dir.join("sub/dir/a.py");
-        let revision = write(&path, "print('hi')\n").unwrap();
+        // create() fabricates the missing parents; plain write() must not.
+        assert_eq!(write(&path, "print('hi')\n").unwrap_err().kind(), "io_error");
+        let revision = create(&path, "print('hi')\n").unwrap();
         assert_eq!(revision, revision_of(b"print('hi')\n"));
         assert_eq!(revision.len(), 16);
 
         let snapshot = read(&path).unwrap();
         assert_eq!(snapshot.content, "print('hi')\n");
         assert_eq!(snapshot.revision, revision);
+
+        // exists() sees entries read() cannot: files, dirs, dangling links.
+        assert!(exists(&path));
+        assert!(exists(&dir));
+        assert!(!exists(&dir.join("nope.py")));
         fs::remove_dir_all(&dir).unwrap();
     }
 
