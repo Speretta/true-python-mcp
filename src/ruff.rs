@@ -80,7 +80,10 @@ pub struct CheckOutcome {
 impl CheckOutcome {
     /// Diagnostics that carry an automatic fix.
     pub fn fixable_count(&self) -> usize {
-        self.diagnostics.iter().filter(|d| d.fix.is_some()).count()
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.fix.is_some())
+            .count()
     }
 }
 
@@ -414,10 +417,13 @@ fn map_diagnostics(
         .map_err(|error| Error::analysis(format!("ruff produced unexpected JSON: {error}")))?;
     let mut diagnostics: Vec<Diagnostic> = raw.into_iter().map(Diagnostic::from).collect();
     // Match ruff's CLI ordering: by cell, then position within the file/cell.
-    diagnostics.sort_by_key(|d| {
+    diagnostics.sort_by_key(|diagnostic| {
         (
-            d.cell.unwrap_or(0),
-            d.location.as_ref().map_or((0, 0), |l| (l.row, l.column)),
+            diagnostic.cell.unwrap_or(0),
+            diagnostic
+                .location
+                .as_ref()
+                .map_or((0, 0), |location| (location.row, location.column)),
         )
     });
     Ok(diagnostics)

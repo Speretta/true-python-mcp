@@ -211,27 +211,27 @@ fn check_markdown(path: &Path, outcome: &CheckOutcome) -> String {
         "{} diagnostic(s), {fixable} fixable\n",
         outcome.diagnostics.len()
     ));
-    for d in &outcome.diagnostics {
-        out.push_str(&format!("\n{}", diagnostic_line(d)));
+    for diagnostic in &outcome.diagnostics {
+        out.push_str(&format!("\n{}", diagnostic_line(diagnostic)));
     }
     out.push('\n');
     out
 }
 
-fn diagnostic_line(d: &Diagnostic) -> String {
+fn diagnostic_line(diagnostic: &Diagnostic) -> String {
     let mut line = String::new();
-    if let Some(cell) = d.cell {
+    if let Some(cell) = diagnostic.cell {
         line.push_str(&format!("cell {cell} "));
     }
-    if let Some(loc) = &d.location {
-        line.push_str(&format!("{}:{} ", loc.row, loc.column));
+    if let Some(location) = &diagnostic.location {
+        line.push_str(&format!("{}:{} ", location.row, location.column));
     }
     line.push_str(&format!(
         "{} {}",
-        d.code.as_deref().unwrap_or("-"),
-        d.message
+        diagnostic.code.as_deref().unwrap_or("-"),
+        diagnostic.message
     ));
-    if let Some(fix) = &d.fix {
+    if let Some(fix) = &diagnostic.fix {
         line.push_str(&format!(" [fixable: {}]", fix.applicability));
     }
     line

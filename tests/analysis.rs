@@ -209,9 +209,9 @@ fn format_unchanged_is_noop() {
 /// offending code cell, leaving structure/outputs intact.
 #[test]
 fn format_notebook_stays_byte_exact() {
-    let dir = temp_dir("format-nb");
-    let path = dir.join("nb.ipynb");
-    let nb = JupyterNotebook::parse(
+    let dir = temp_dir("format-notebook");
+    let path = dir.join("notebook.ipynb");
+    let notebook = JupyterNotebook::parse(
         r#"{
  "cells": [
   {
@@ -230,7 +230,7 @@ fn format_notebook_stays_byte_exact() {
 "#,
     )
     .unwrap();
-    fs::write(&path, nb.to_string_canonical()).unwrap();
+    fs::write(&path, notebook.to_string_canonical()).unwrap();
 
     let outcome = ruff::format_file(&path, FormatWrite::InPlace, snap(&path)).unwrap();
     assert!(matches!(outcome, FormatOutcome::Written { .. }));
