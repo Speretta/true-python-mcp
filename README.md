@@ -37,16 +37,16 @@ It does two jobs:
 
 | Server | Idle RAM | After the full profile | Processes idle/after | Ready in | Image size |
 |---|---|---|---|---|---|
-| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | 1.7 MiB | 2.2 MiB | 1/1 | 0.1 s | 23 MB |
-| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | 274.4 MiB | 338.4 MiB | 3/4 | 5.3 s | 548 MB |
-| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | 143.1 MiB | 198.1 MiB | 2/3 | 3.3 s | 491 MB |
-| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | 62.0 MiB | 73.0 MiB | 1/1 | 0.7 s | 237 MB |
-| [marimo built-in MCP](https://github.com/marimo-team/marimo) | 90.1 MiB | 90.2 MiB | 2/2 | 4.2 s | 378 MB |
-| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | 70.7 MiB | 70.7 MiB | 1/1 | 2.1 s | 246 MB |
-| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | 78.8 MiB | 224.6 MiB | 2/2 | 2.9 s | 302 MB |
-| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | 44.9 MiB | 45.0 MiB | 1/1 | 0.5 s | 205 MB |
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | 1.7 MiB | 2.4 MiB | 1/1 | 0.1 s | 22 MB |
+| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | 272.9 MiB | 335.9 MiB | 3/4 | 7.5 s | 548 MB |
+| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | 141.5 MiB | 196.2 MiB | 2/3 | 5.1 s | 491 MB |
+| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | 62.0 MiB | 73.0 MiB | 1/1 | 1.1 s | 237 MB |
+| [marimo built-in MCP](https://github.com/marimo-team/marimo) | 90.1 MiB | 89.9 MiB | 2/2 | 2.2 s | 378 MB |
+| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | 70.6 MiB | 70.9 MiB | 1/1 | 3.1 s | 246 MB |
+| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | 78.5 MiB | 227.8 MiB | 2/2 | 4.4 s | 303 MB |
+| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | 44.7 MiB | 45.2 MiB | 1/1 | 0.8 s | 205 MB |
 
-Measured 2026-10-15 by the [Bench workflow](.github/workflows/bench.yml) (Linux 6.17.0-1022-azure, docker 28.0.4): median of 3-3 runs per stack (normal mode), each stack in its own minimal Docker container on the same machine. Full method, per-component memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).
+Measured 2026-10-18 by the [Bench workflow](.github/workflows/bench.yml) (Linux 6.17.0-1022-azure, docker 28.0.4): median of 3-3 runs per stack (normal mode), each stack in its own minimal Docker container on the same machine. Full method, per-component memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).
 
 ## See it work
 
