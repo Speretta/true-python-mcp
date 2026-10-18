@@ -125,7 +125,10 @@ fn open_lock_file(key: &Path) -> Option<File> {
     {
         Ok(file) => Some(file),
         Err(source) => {
-            tracing::warn!("cannot open cross-process lock file {}: {source}", path.display());
+            tracing::warn!(
+                "cannot open cross-process lock file {}: {source}",
+                path.display()
+            );
             None
         }
     }
@@ -162,9 +165,8 @@ fn cache_dir() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn cache_dir() -> Option<PathBuf> {
-    env_dir("LOCALAPPDATA").or_else(|| {
-        env_dir("USERPROFILE").map(|home| home.join("AppData").join("Local"))
-    })
+    env_dir("LOCALAPPDATA")
+        .or_else(|| env_dir("USERPROFILE").map(|home| home.join("AppData").join("Local")))
 }
 
 fn env_dir(var: &str) -> Option<PathBuf> {
@@ -203,8 +205,10 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let unique = blake3::hash(tag.as_bytes()).to_hex()[..8].to_string();
-        let dir = std::env::temp_dir()
-            .join(format!("tpmcp-test-{}-lock-{tag}-{unique}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "tpmcp-test-{}-lock-{tag}-{unique}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

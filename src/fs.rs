@@ -144,9 +144,27 @@ fn preserve_mode(target: &Path, tmp: &Path) {
     }
 }
 
-/// Dominant line ending of `text`: CRLF if it occurs anywhere, else LF.
+/// Majority line ending of `text`: CRLF when CRLF-terminated lines
+/// outnumber LF-only-terminated ones, else LF (ties go to LF, the more
+/// common default). The previous rule — "CRLF if it occurs anywhere" — let
+/// a single stray CRLF flip a 1000-line LF cell to CRLF on the next
+/// line-range edit.
 pub fn detect_eol(text: &str) -> &'static str {
-    if text.contains("\r\n") { "\r\n" } else { "\n" }
+    let lf = text.split('\n').count() - 1; // every '\n', CRLF-terminated or not
+    let crlf = text.matches("\r\n").count();
+    if crlf > lf.saturating_sub(crlf) {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// A line without its terminator: one trailing `\n` and, before it, one
+/// optional `\r` are stripped.
+fn strip_terminator(line: &str) -> &str {
+    line.strip_suffix('\n')
+        .map(|stripped| stripped.strip_suffix('\r').unwrap_or(stripped))
+        .unwrap_or(line)
 }
 
 /// Logical (1-based editor) lines of `text`, without line terminators.
@@ -156,27 +174,14 @@ pub fn logical_lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         return Vec::new();
     }
-    text.split_inclusive('\n')
-        .map(|line| {
-            line.strip_suffix('\n')
-                .map(|stripped| stripped.strip_suffix('\r').unwrap_or(stripped))
-                .unwrap_or(line)
-        })
-        .collect()
+    text.split_inclusive('\n').map(strip_terminator).collect()
 }
 
 /// Join logical lines with `eol`, appending a trailing terminator when
 /// `trailing_eol` is set. Trailing terminators on the input lines are
 /// stripped first so callers can pass lines verbatim from an LLM.
 pub fn join_logical(lines: &[&str], eol: &str, trailing_eol: bool) -> String {
-    let stripped: Vec<&str> = lines
-        .iter()
-        .map(|line| {
-            line.strip_suffix('\n')
-                .map(|s| s.strip_suffix('\r').unwrap_or(s))
-                .unwrap_or(line)
-        })
-        .collect();
+    let stripped: Vec<&str> = lines.iter().map(|line| strip_terminator(line)).collect();
     let mut joined = stripped.join(eol);
     if trailing_eol && !stripped.is_empty() {
         joined.push_str(eol);
@@ -185,28 +190,48 @@ pub fn join_logical(lines: &[&str], eol: &str, trailing_eol: bool) -> String {
 }
 
 /// Replace the 1-based inclusive logical line range `start..=end` of
-/// `text` with `new_lines` (empty = deletion), preserving the dominant
-/// EOL and the trailing-newline property of the original text.
+/// `text` with `new_lines` (empty = deletion).
+///
+/// Lines outside the range keep their original terminators byte-for-byte —
+/// a stray CRLF among LF lines no longer flips the untouched lines.
+/// Replacement lines are joined with the majority EOL of `text`
+/// ([`detect_eol`]); terminators the caller's lines carry are stripped
+/// first (LLMs often include them). When the range reaches the end of the
+/// text, the original trailing-newline property applies to the last
+/// replacement line; deleting the last line of a text without a trailing
+/// newline leaves the previous line's terminator in place (byte
+/// preservation wins over the trailing property).
 pub fn replace_line_range(
     text: &str,
     start: usize,
     end: usize,
     new_lines: &[&str],
 ) -> Result<String, String> {
-    let lines = logical_lines(text);
-    if start < 1 || start > end || end > lines.len() {
+    let segments: Vec<&str> = if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split_inclusive('\n').collect()
+    };
+    if start < 1 || start > end || end > segments.len() {
         return Err(format!(
             "line range {start}..{end} out of bounds: text has {} lines",
-            lines.len()
+            segments.len()
         ));
     }
     let eol = detect_eol(text);
     let trailing_eol = text.ends_with('\n');
-    let mut rebuilt: Vec<&str> = Vec::with_capacity(lines.len());
-    rebuilt.extend_from_slice(&lines[..start - 1]);
-    rebuilt.extend_from_slice(new_lines);
-    rebuilt.extend_from_slice(&lines[end..]);
-    Ok(join_logical(&rebuilt, eol, trailing_eol))
+    let suffix = &segments[end..];
+    let mut out = String::with_capacity(text.len() + new_lines.len() * 16);
+    out.push_str(&segments[..start - 1].concat());
+    for (index, line) in new_lines.iter().enumerate() {
+        out.push_str(strip_terminator(line));
+        let is_last = index + 1 == new_lines.len();
+        if !is_last || !suffix.is_empty() || trailing_eol {
+            out.push_str(eol);
+        }
+    }
+    out.push_str(&suffix.concat());
+    Ok(out)
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, Error> {
@@ -245,171 +270,4 @@ fn temp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
-mod tests {
-    use super::*;
-
-    fn temp_dir(tag: &str) -> PathBuf {
-        let unique = blake3::hash(tag.as_bytes()).to_hex()[..8].to_string();
-        let dir =
-            std::env::temp_dir().join(format!("tpmcp-test-{}-{tag}-{unique}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn write_then_read_roundtrips() {
-        let dir = temp_dir("roundtrip");
-        let path = dir.join("sub/dir/a.py");
-        // create() fabricates the missing parents; plain write() must not.
-        assert_eq!(write(&path, "print('hi')\n").unwrap_err().kind(), "io_error");
-        let revision = create(&path, "print('hi')\n").unwrap();
-        assert_eq!(revision, revision_of(b"print('hi')\n"));
-        assert_eq!(revision.len(), 16);
-
-        let snapshot = read(&path).unwrap();
-        assert_eq!(snapshot.content, "print('hi')\n");
-        assert_eq!(snapshot.revision, revision);
-
-        // exists() sees entries read() cannot: files, dirs, dangling links.
-        assert!(exists(&path));
-        assert!(exists(&dir));
-        assert!(!exists(&dir.join("nope.py")));
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_follows_symlink_and_keeps_the_link() {
-        let dir = temp_dir("symlink");
-        let target = dir.join("real.txt");
-        write(&target, "first").unwrap();
-        let link = dir.join("link.txt");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-
-        write(&link, "second").unwrap();
-
-        // The link survives and the resolved target received the bytes.
-        assert!(
-            std::fs::symlink_metadata(&link)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "second");
-        assert_eq!(read(&link).unwrap().content, "second");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_preserves_file_mode() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = temp_dir("mode");
-        let path = dir.join("secret.py");
-        write(&path, "x = 1\n").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-
-        write(&path, "x = 2\n").unwrap();
-
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "edit must not widen permissions");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn read_verified_detects_conflict() {
-        let dir = temp_dir("conflict");
-        let path = dir.join("a.txt");
-        write(&path, "one").unwrap();
-        let current = read(&path).unwrap().revision;
-
-        assert!(read_verified(&path, &current).is_ok());
-        let error = read_verified(&path, "stale0000000000").unwrap_err();
-        match error {
-            Error::Conflict { current, .. } => assert_eq!(current.len(), 16),
-            other => panic!("expected conflict, got {other:?}"),
-        }
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn read_missing_file_is_not_found() {
-        let dir = temp_dir("missing");
-        let error = read(&dir.join("nope.py")).unwrap_err();
-        assert_eq!(error.kind(), "not_found");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn read_rejects_non_utf8_and_directories() {
-        let dir = temp_dir("binary");
-        let path = dir.join("blob.bin");
-        fs::write(&path, [0xff_u8, 0xfe, 0x00]).unwrap();
-        assert_eq!(read(&path).unwrap_err().kind(), "not_utf8");
-        assert_eq!(read(&dir).unwrap_err().kind(), "invalid_input");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn read_rejects_oversized_files() {
-        let dir = temp_dir("large");
-        let path = dir.join("big.py");
-        // Sparse file: costs no disk blocks but reports a huge length.
-        let file = fs::File::create(&path).unwrap();
-        file.set_len(MAX_FILE_SIZE + 1).unwrap();
-        drop(file);
-        assert_eq!(read(&path).unwrap_err().kind(), "too_large");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn logical_lines_handles_edges() {
-        assert_eq!(logical_lines(""), Vec::<&str>::new());
-        assert_eq!(logical_lines("a\nb\n"), ["a", "b"]);
-        assert_eq!(logical_lines("a\nb"), ["a", "b"]);
-        assert_eq!(logical_lines("a\n\nb\n"), ["a", "", "b"]);
-        assert_eq!(logical_lines("a\r\nb\r\n"), ["a", "b"]);
-        assert_eq!(detect_eol("a\r\nb"), "\r\n");
-        assert_eq!(detect_eol("a\nb"), "\n");
-    }
-
-    #[test]
-    fn replace_line_range_preserves_eol_and_trailing() {
-        // Replace a middle line, trailing newline preserved.
-        assert_eq!(
-            replace_line_range("a\nb\nc\n", 2, 2, &["x"]).unwrap(),
-            "a\nx\nc\n"
-        );
-        // Replace multiple lines with more lines.
-        assert_eq!(
-            replace_line_range("a\nb\nc\n", 1, 2, &["x", "y", "z"]).unwrap(),
-            "x\ny\nz\nc\n"
-        );
-        // Deletion.
-        assert_eq!(
-            replace_line_range("a\nb\nc\n", 2, 2, &[]).unwrap(),
-            "a\nc\n"
-        );
-        // No trailing newline in the original stays that way.
-        assert_eq!(replace_line_range("a\nb", 2, 2, &["x"]).unwrap(), "a\nx");
-        // CRLF is preserved.
-        assert_eq!(
-            replace_line_range("a\r\nb\r\n", 1, 1, &["x"]).unwrap(),
-            "x\r\nb\r\n"
-        );
-        // Provided lines may carry their own terminators; they are stripped.
-        assert_eq!(
-            replace_line_range("a\nb\n", 2, 2, &["x\n", "y\r\n"]).unwrap(),
-            "a\nx\ny\n"
-        );
-    }
-
-    #[test]
-    fn replace_line_range_rejects_bad_bounds() {
-        assert!(replace_line_range("a\nb\n", 0, 1, &["x"]).is_err());
-        assert!(replace_line_range("a\nb\n", 2, 1, &["x"]).is_err());
-        assert!(replace_line_range("a\nb\n", 1, 3, &["x"]).is_err());
-        assert!(replace_line_range("", 1, 1, &["x"]).is_err());
-    }
-}
+mod tests;
