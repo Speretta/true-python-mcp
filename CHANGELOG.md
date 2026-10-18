@@ -3,6 +3,57 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.1.3] - 2026-10-18
+
+### Fixed
+
+- drop the early read-based existence check in notebook_create
+- guard the ruff walk and format against deep-AST recursion
+- re-check the target before rename and sweep stale temp files
+- preserve per-line endings outside edited line ranges
+- refuse to clobber unreadable files in the create paths
+- write through symlinks and preserve the file mode
+- hold a cross-process lock across the verified write path
+- guard the marimo scope walk and AST drops against stack overflow
+- preserve column-zero string lines when regenerating marimo cells
+- accurate version-field errors, nbformat-aligned output checks
+- fetch the arm64 musl toolchain from a pinned GitHub mirror
+
+### Changed
+
+- split fixture provenance in the marimo NOTICE
+- state the byte-exact and overwrite guarantees precisely
+- pin the float-spelling boundary of the canonical writer
+- spell out single-letter bindings in the wire suite
+- move the requested source instead of cloning it
+- count cell source lines in a single byte scan
+- split output rendering into a private submodule
+- build rendered views without per-line temporaries
+- name the window and output-summary concepts
+- pin write-path robustness against clobbers and races
+- build py_read markdown without per-line temporaries
+- single-read ruff path and drop redundant deep clones
+- resolve ruff settings once per config state
+- apply rustfmt to the marimo module and its tests
+- rename the scope analyzer's refs to ref_sites
+- stop copying unedited marimo cell bytes twice per serialize
+- name the markdown dedent margin helpers
+- unify the marimo parse state in a Builder
+- table-drive the marimo hide_code header surgery
+- split the marimo check into a graph build and named finding passes
+- apply rustfmt to the touched jupyter sources
+- split the per-cell check body into named helpers
+- pin the canonical-form boundary with CRLF and exotic-number fixtures
+- clear all outputs in a single pass
+- emit canonical ipynb bytes straight from the model
+- consume the parsed jupyter document instead of cloning it
+- point contributors at cargo nextest
+- run the test suite with pinned cargo-nextest
+- keep local analysis reports out of version control
+- refresh comparison measurements [skip ci]
+- add dispatchable bench workflow
+- add 8-stack memory, latency and conflict benchmark
+
 ## [0.1.2] - 2026-10-15
 
 ### Changed
