@@ -12,7 +12,7 @@
 use serde_json::Value;
 
 use super::JupyterNotebook;
-use crate::notebook::{Finding, Severity};
+use crate::notebook::{Cell, Finding, Severity};
 
 fn finding(severity: Severity, cell: Option<usize>, code: &str, message: String) -> Finding {
     Finding {
@@ -158,163 +158,13 @@ pub(super) fn check(notebook: &JupyterNotebook) -> Vec<Finding> {
     let mut seen_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     for (index, cell) in notebook.cells.iter().enumerate() {
-        let at = Some(index);
-        let is_code = cell.cell_type == "code";
-
-        if !matches!(cell.cell_type.as_str(), "code" | "markdown" | "raw") {
-            findings.push(error(
-                at,
-                "cell-type",
-                format!(
-                    "invalid \"cell_type\": {:?} (expected code, markdown or raw)",
-                    cell.cell_type
-                ),
-            ));
-        }
-
-        // Unknown cell fields (`cell_type`/`source` were split off at parse
-        // time, so `extra` holds the rest). `outputs`/`execution_count` on a
-        // non-code cell are flagged by the dedicated check below instead.
-        let allowed: &[&str] = if is_code {
-            &["id", "metadata", "outputs", "execution_count"]
-        } else {
-            &[
-                "id",
-                "metadata",
-                "attachments",
-                "outputs",
-                "execution_count",
-            ]
-        };
-        for key in cell.extra.keys() {
-            if !allowed.contains(&key.as_str()) {
-                findings.push(error(
-                    at,
-                    "unexpected-field",
-                    format!(
-                        "cell {index}: unexpected field \"{key}\" for a {} cell",
-                        cell.cell_type
-                    ),
-                ));
-            }
-        }
-
-        if let Some(attachments) = cell.extra.get("attachments")
-            && !attachments.is_object()
-        {
-            findings.push(error(
-                at,
-                "attachments",
-                format!("cell {index}: \"attachments\" must be an object"),
-            ));
-        }
-
-        match cell.extra.get("metadata") {
-            Some(Value::Object(_)) => {}
-            Some(_) => findings.push(error(
-                at,
-                "cell-metadata",
-                format!("cell {index}: \"metadata\" must be an object"),
-            )),
-            None => findings.push(error(
-                at,
-                "cell-metadata",
-                format!("cell {index}: missing \"metadata\" object"),
-            )),
-        }
-
-        match cell.extra.get("id") {
-            Some(Value::String(id)) => {
-                if let Some(first) = seen_ids.get(id) {
-                    findings.push(error(
-                        at,
-                        "duplicate-cell-id",
-                        format!("cell {index}: id \"{id}\" is already used by cell {first}"),
-                    ));
-                } else {
-                    seen_ids.insert(id.clone(), index);
-                }
-            }
-            Some(_) => findings.push(error(
-                at,
-                "cell-id",
-                format!("cell {index}: \"id\" must be a string"),
-            )),
-            None if requires_id => findings.push(error(
-                at,
-                "cell-id",
-                format!("cell {index}: missing \"id\" (required since nbformat 4.5)"),
-            )),
-            None => {}
-        }
-
-        if is_code {
-            match cell.extra.get("outputs") {
-                Some(Value::Array(outputs)) => {
-                    for (position, output) in outputs.iter().enumerate() {
-                        if !output.is_object() {
-                            findings.push(error(
-                                at,
-                                "outputs",
-                                format!("cell {index}: outputs[{position}] must be an object"),
-                            ));
-                        } else if let Some(problem) = check_output(output) {
-                            findings.push(error(
-                                at,
-                                "outputs",
-                                format!("cell {index}: outputs[{position}]: {problem}"),
-                            ));
-                        }
-                    }
-                }
-                Some(_) => findings.push(error(
-                    at,
-                    "outputs",
-                    format!("cell {index}: \"outputs\" must be an array"),
-                )),
-                None => findings.push(error(
-                    at,
-                    "outputs",
-                    format!("cell {index}: code cell is missing \"outputs\""),
-                )),
-            }
-            // nbformat's schema says `["integer", "null"]` with `minimum: 0`
-            // (3.0 and -1 validate as INVALID), but serde_json coerces
-            // integers beyond u64 to floats, which Python's arbitrary-
-            // precision validator accepts — so any number passes here rather
-            // than risk flagging an exotic-but-valid count.
-            match cell.extra.get("execution_count") {
-                Some(Value::Null) | Some(Value::Number(_)) => {}
-                Some(_) => findings.push(error(
-                    at,
-                    "execution-count",
-                    format!("cell {index}: \"execution_count\" must be an integer or null"),
-                )),
-                None => findings.push(error(
-                    at,
-                    "execution-count",
-                    format!("cell {index}: code cell is missing \"execution_count\""),
-                )),
-            }
-        } else {
-            for key in ["outputs", "execution_count"] {
-                if cell.extra.contains_key(key) {
-                    findings.push(error(
-                        at,
-                        "non-code-fields",
-                        format!(
-                            "cell {index}: {} cells must not have \"{key}\"",
-                            cell.cell_type
-                        ),
-                    ));
-                }
-            }
-        }
-
+        check_cell_fields(cell, index, &mut findings);
+        check_cell_id(cell, index, requires_id, &mut seen_ids, &mut findings);
+        check_cell_outputs(cell, index, &mut findings);
         if let Some(markers) = conflict_markers(&cell.source.text()) {
             findings.push(finding(
                 Severity::Warning,
-                at,
+                Some(index),
                 "conflict-marker",
                 format!("cell {index}: source contains git conflict markers ({markers})"),
             ));
@@ -322,4 +172,178 @@ pub(super) fn check(notebook: &JupyterNotebook) -> Vec<Finding> {
     }
 
     findings
+}
+
+/// One cell's field set and shapes: a valid `cell_type`, only the allowed
+/// `extra` keys, and object-typed `attachments`/`metadata`.
+fn check_cell_fields(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
+    let at = Some(index);
+
+    if !matches!(cell.cell_type.as_str(), "code" | "markdown" | "raw") {
+        findings.push(error(
+            at,
+            "cell-type",
+            format!(
+                "invalid \"cell_type\": {:?} (expected code, markdown or raw)",
+                cell.cell_type
+            ),
+        ));
+    }
+
+    // Unknown cell fields (`cell_type`/`source` were split off at parse
+    // time, so `extra` holds the rest). `outputs`/`execution_count` on a
+    // non-code cell are flagged by `check_cell_outputs` instead.
+    let allowed: &[&str] = if cell.is_code() {
+        &["id", "metadata", "outputs", "execution_count"]
+    } else {
+        &[
+            "id",
+            "metadata",
+            "attachments",
+            "outputs",
+            "execution_count",
+        ]
+    };
+    for key in cell.extra.keys() {
+        if !allowed.contains(&key.as_str()) {
+            findings.push(error(
+                at,
+                "unexpected-field",
+                format!(
+                    "cell {index}: unexpected field \"{key}\" for a {} cell",
+                    cell.cell_type
+                ),
+            ));
+        }
+    }
+
+    if let Some(attachments) = cell.extra.get("attachments")
+        && !attachments.is_object()
+    {
+        findings.push(error(
+            at,
+            "attachments",
+            format!("cell {index}: \"attachments\" must be an object"),
+        ));
+    }
+
+    match cell.extra.get("metadata") {
+        Some(Value::Object(_)) => {}
+        Some(_) => findings.push(error(
+            at,
+            "cell-metadata",
+            format!("cell {index}: \"metadata\" must be an object"),
+        )),
+        None => findings.push(error(
+            at,
+            "cell-metadata",
+            format!("cell {index}: missing \"metadata\" object"),
+        )),
+    }
+}
+
+/// One cell's `id`: a string, unique across the notebook (`seen_ids` maps
+/// each id to the first cell using it), and required since nbformat 4.5.
+fn check_cell_id(
+    cell: &Cell,
+    index: usize,
+    requires_id: bool,
+    seen_ids: &mut std::collections::HashMap<String, usize>,
+    findings: &mut Vec<Finding>,
+) {
+    let at = Some(index);
+
+    match cell.extra.get("id") {
+        Some(Value::String(id)) => {
+            if let Some(first) = seen_ids.get(id) {
+                findings.push(error(
+                    at,
+                    "duplicate-cell-id",
+                    format!("cell {index}: id \"{id}\" is already used by cell {first}"),
+                ));
+            } else {
+                seen_ids.insert(id.clone(), index);
+            }
+        }
+        Some(_) => findings.push(error(
+            at,
+            "cell-id",
+            format!("cell {index}: \"id\" must be a string"),
+        )),
+        None if requires_id => findings.push(error(
+            at,
+            "cell-id",
+            format!("cell {index}: missing \"id\" (required since nbformat 4.5)"),
+        )),
+        None => {}
+    }
+}
+
+/// One cell's execution state: code cells need a well-formed `outputs`
+/// array and `execution_count`; non-code cells must carry neither.
+fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
+    let at = Some(index);
+
+    if cell.is_code() {
+        match cell.extra.get("outputs") {
+            Some(Value::Array(outputs)) => {
+                for (position, output) in outputs.iter().enumerate() {
+                    if !output.is_object() {
+                        findings.push(error(
+                            at,
+                            "outputs",
+                            format!("cell {index}: outputs[{position}] must be an object"),
+                        ));
+                    } else if let Some(problem) = check_output(output) {
+                        findings.push(error(
+                            at,
+                            "outputs",
+                            format!("cell {index}: outputs[{position}]: {problem}"),
+                        ));
+                    }
+                }
+            }
+            Some(_) => findings.push(error(
+                at,
+                "outputs",
+                format!("cell {index}: \"outputs\" must be an array"),
+            )),
+            None => findings.push(error(
+                at,
+                "outputs",
+                format!("cell {index}: code cell is missing \"outputs\""),
+            )),
+        }
+        // nbformat's schema says `["integer", "null"]` with `minimum: 0`
+        // (3.0 and -1 validate as INVALID), but serde_json coerces
+        // integers beyond u64 to floats, which Python's arbitrary-
+        // precision validator accepts — so any number passes here rather
+        // than risk flagging an exotic-but-valid count.
+        match cell.extra.get("execution_count") {
+            Some(Value::Null) | Some(Value::Number(_)) => {}
+            Some(_) => findings.push(error(
+                at,
+                "execution-count",
+                format!("cell {index}: \"execution_count\" must be an integer or null"),
+            )),
+            None => findings.push(error(
+                at,
+                "execution-count",
+                format!("cell {index}: code cell is missing \"execution_count\""),
+            )),
+        }
+    } else {
+        for key in ["outputs", "execution_count"] {
+            if cell.extra.contains_key(key) {
+                findings.push(error(
+                    at,
+                    "non-code-fields",
+                    format!(
+                        "cell {index}: {} cells must not have \"{key}\"",
+                        cell.cell_type
+                    ),
+                ));
+            }
+        }
+    }
 }
