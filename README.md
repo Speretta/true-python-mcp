@@ -29,7 +29,7 @@ It does two jobs:
 - Byte-exact edits: your diff shows only what you changed
 - Revision guard: stale writes are refused, not silently applied
 - ruff lint and format for any `.py`, not just notebooks
-- 12 tools, plus 3 for plain Python files with `--file-tools`
+- 13 tools, plus 3 for plain Python files with `--file-tools`
 
 ## Memory footprint
 
@@ -149,7 +149,7 @@ refused.
 ## Development
 
 ```sh
-cargo test
+cargo nextest run
 cargo clippy --all-targets
 cargo fmt
 ```
