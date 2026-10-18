@@ -1,6 +1,7 @@
 //! Jupyter notebooks (`.ipynb`, nbformat v4).
 //!
-//! Parsing keeps every non-`source` field as passthrough JSON, and
+//! Parsing keeps every non-`source` field as passthrough JSON — moved, never
+//! cloned, out of the parsed document — and
 //! [`JupyterNotebook::to_string_canonical`] writes the exact layout Jupyter
 //! and VS Code produce (see [`serialize`]). Untouched cells round-trip
 //! byte-for-byte, including their original `source` shape; an edited cell is
@@ -55,7 +56,7 @@ impl JupyterNotebook {
     pub fn parse(content: &str) -> Result<Self, String> {
         let root: Value =
             serde_json::from_str(content).map_err(|error| format!("invalid JSON: {error}"))?;
-        let Value::Object(map) = &root else {
+        let Value::Object(mut map) = root else {
             return Err("notebook must be a JSON object".to_string());
         };
         match map.get("nbformat").and_then(Value::as_u64) {
@@ -70,15 +71,17 @@ impl JupyterNotebook {
         let Some(minor) = map.get("nbformat_minor").and_then(Value::as_u64) else {
             return Err("missing integer field \"nbformat_minor\"".to_string());
         };
-        let raw_cells = map
-            .get("cells")
-            .and_then(Value::as_array)
-            .ok_or("missing \"cells\" array")?;
+        // Consume the parsed document: the cells array moves out of the root
+        // and every passthrough value moves into `extra` — zero clones.
+        let raw_cells = match map.remove("cells") {
+            Some(Value::Array(cells)) => cells,
+            _ => return Err("missing \"cells\" array".to_string()),
+        };
         let mut cells = Vec::with_capacity(raw_cells.len());
-        for (index, raw) in raw_cells.iter().enumerate() {
+        for (index, raw) in raw_cells.into_iter().enumerate() {
             cells.push(parse_cell(index, raw)?);
         }
-        let extra = passthrough(map, &["cells"]);
+        let extra = passthrough(map);
         Ok(Self {
             cells,
             extra,
@@ -223,26 +226,28 @@ fn clear_cell(cell: &mut Cell) {
     cell.extra.insert("execution_count".into(), Value::Null);
 }
 
-fn parse_cell(index: usize, value: &Value) -> Result<Cell, String> {
-    let Value::Object(map) = value else {
+/// Consume one raw cell object: `cell_type`/`source` become typed fields and
+/// every other entry moves verbatim into `extra`. The original `source` shape
+/// (single string vs. array of lines) is preserved untouched.
+fn parse_cell(index: usize, value: Value) -> Result<Cell, String> {
+    let Value::Object(mut map) = value else {
         return Err(format!("cell {index}: must be a JSON object"));
     };
-    let cell_type = map
-        .get("cell_type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("cell {index}: missing string field \"cell_type\""))?
-        .to_string();
-    let source = match map.get("source") {
-        Some(Value::String(text)) => SourceText::Str(text.clone()),
+    let cell_type = match map.remove("cell_type") {
+        Some(Value::String(cell_type)) => cell_type,
+        _ => return Err(format!("cell {index}: missing string field \"cell_type\"")),
+    };
+    let source = match map.remove("source") {
+        Some(Value::String(text)) => SourceText::Str(text),
         Some(Value::Array(items)) => {
             let mut lines = Vec::with_capacity(items.len());
             for item in items {
-                let Some(line) = item.as_str() else {
+                let Value::String(line) = item else {
                     return Err(format!(
                         "cell {index}: \"source\" array must contain only strings"
                     ));
                 };
-                lines.push(line.to_string());
+                lines.push(line);
             }
             SourceText::Lines(lines)
         }
@@ -253,20 +258,17 @@ fn parse_cell(index: usize, value: &Value) -> Result<Cell, String> {
         }
         None => return Err(format!("cell {index}: missing \"source\" field")),
     };
-    let extra = passthrough(map, &["cell_type", "source"]);
     Ok(Cell {
         cell_type,
         source,
-        extra,
+        extra: passthrough(map),
     })
 }
 
-/// Every field except `exclude`, cloned verbatim (the passthrough contract).
-fn passthrough(map: &Map<String, Value>, exclude: &[&str]) -> BTreeMap<String, Value> {
-    map.iter()
-        .filter(|(key, _)| !exclude.contains(&key.as_str()))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
+/// Every remaining field of a consumed JSON object, moved verbatim into
+/// `extra` (the passthrough contract) — no value is cloned.
+fn passthrough(map: Map<String, Value>) -> BTreeMap<String, Value> {
+    map.into_iter().collect()
 }
 
 /// 8-hex-char id matching nbformat's cell ids.
