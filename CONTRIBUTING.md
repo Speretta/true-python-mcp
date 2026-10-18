@@ -79,6 +79,10 @@ uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo
   CI sets this and installs its own venv, so the live checks always run there.
 - `TPMCP_GROUND_TRUTH_PYTHON=/path/to/python`: use a different interpreter
   (CI uses `/tmp/nbenv/bin/python`).
+- `TPMCP_LOCK_DIR=/absolute/path`: keep the cross-process lock files here
+  instead of the user cache dir. CI sets this so runs are hermetic; setting
+  it locally stops repeated suites from accumulating lock files in
+  `~/.cache/tpmcp/locks`.
 
 ## Test data
 

@@ -8,6 +8,7 @@ on:
 env:
   TPMCP_GROUND_TRUTH_PYTHON: /tmp/nbenv/bin/python
   TPMCP_REQUIRE_GROUND_TRUTH: "1"
+  TPMCP_LOCK_DIR: /tmp/tpmcp-ci-locks
 
 jobs:
   check:

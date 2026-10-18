@@ -31,7 +31,9 @@
 //!   `%LOCALAPPDATA%` (Windows), `tpmcp/locks/<blake3(key)>.lock`. The
 //!   project tree stays clean, locking works for read-only directories, and
 //!   keying by canonical path makes every spelling of the same file share
-//!   one lock — the same key the in-process mutex uses.
+//!   one lock — the same key the in-process mutex uses. `TPMCP_LOCK_DIR`
+//!   (absolute) overrides the directory — the test suites and CI use it to
+//!   stay out of the real cache.
 //!
 //! Lock files are empty and are never deleted: unlinking a lock file
 //! reintroduces an open-vs-unlink race between processes (P2 could lock a
@@ -187,7 +189,13 @@ fn open_lock_file(key: &Path) -> Option<File> {
 fn lock_dir() -> Option<PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = cache_dir()?.join("tpmcp").join("locks");
+        // Override for tests and CI: keeps the suites from minting permanent
+        // lock files in the developer's real cache dir. Same absolute-path
+        // filter as the platform dirs below.
+        let dir = match env_dir("TPMCP_LOCK_DIR") {
+            Some(dir) => dir,
+            None => cache_dir()?.join("tpmcp").join("locks"),
+        };
         match std::fs::create_dir_all(&dir) {
             Ok(()) => Some(dir),
             Err(source) => {
