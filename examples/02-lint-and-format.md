@@ -12,7 +12,7 @@ What follows is the real conversation between the AI (the LLM) and tpmcp,
 captured from the server. The LLM sends tool calls and sees the answers as
 markdown.
 
-## Step 1 — Lint the file (`ruff_check`)
+## Step 1: Lint the file (`ruff_check`)
 
 The LLM sends:
 
@@ -43,7 +43,7 @@ so the next call can chain from it. Note the two labels: removing an unused
 import is a safe fix, but removing the unused variable is marked unsafe,
 because deleting code can change behavior.
 
-## Step 2 — Apply the safe fixes (`ruff_check` with `fix`)
+## Step 2: Apply the safe fixes (`ruff_check` with `fix`)
 
 The LLM sends:
 
@@ -76,7 +76,7 @@ choice is to report it to the user instead of silently deleting code. The new
 revision appears right in the `applied automatic fixes · revision: …` line
 (`f34960ad3fe50f4a`); that is the revision the next call must carry.
 
-## Step 3 — Format the file (`ruff_format`)
+## Step 3: Format the file (`ruff_format`)
 
 The LLM sends:
 

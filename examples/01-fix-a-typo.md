@@ -11,7 +11,7 @@ What follows is the real conversation between the AI (the LLM) and tpmcp,
 captured from the server. The LLM sends tool calls and sees the answers as
 markdown.
 
-## Step 1 — Read the notebook and get the revision (`notebook_read`)
+## Step 1: Read the notebook and get the revision (`notebook_read`)
 
 The LLM sends:
 
@@ -58,7 +58,7 @@ answer reports a revision (`eefc2ea99b5fe065`). The revision is a fingerprint
 of the file contents, and every change must carry it — that way tpmcp never
 writes over a file that changed since the AI last looked at it.
 
-## Step 2 — Replace the typo (`cell_edit`)
+## Step 2: Replace the typo (`cell_edit`)
 
 The LLM sends:
 

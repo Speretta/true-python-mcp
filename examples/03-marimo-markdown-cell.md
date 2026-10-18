@@ -6,7 +6,7 @@ The user has a small marimo app at `examples/demo/plan.py`. A marimo notebook is
 
 What follows is the real conversation between the AI (the LLM) and tpmcp, captured from the server. The LLM sends tool calls and sees the answers as markdown.
 
-## Step 1 — Read the notebook (`notebook_read`)
+## Step 1: Read the notebook (`notebook_read`)
 
 The LLM sends:
 ````json
@@ -49,7 +49,7 @@ revenue = 1200
 
 In the file, cell 0 is stored as a `mo.md(r"""...""")` call. tpmcp hides that wrapper and shows only the markdown text, so the AI works with plain text. The answer also carries a revision — a short hash of the file state — and every write must present the current one.
 
-## Step 2 — Change the title (`cell_edit`)
+## Step 2: Change the title (`cell_edit`)
 
 The LLM sends:
 ````json

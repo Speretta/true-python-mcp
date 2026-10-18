@@ -1,7 +1,7 @@
 # Examples
 
 Real walkthroughs of tpmcp at work. Every request and every answer in these
-docs is quoted verbatim from the released binary — nothing is invented,
+docs is quoted verbatim from the released binary: nothing is invented,
 trimmed, or cleaned up. Each doc shows one task, from the user's question to
 the final git diff.
 
@@ -24,7 +24,7 @@ git checkout examples/demo
 
 ## Replay them yourself
 
-Build the binary — see the [Quickstart](../README.md#quickstart) in the main
-README — and add it to any MCP host. Then send the same tool calls: each doc
+Build the binary (see the [Quickstart](../README.md#quickstart) in the main
+README) and add it to any MCP host. Then send the same tool calls: each doc
 shows them exactly as they go over the wire (JSON). The standard MCP
 handshake (`initialize`) is the same for every server, so the docs omit it.

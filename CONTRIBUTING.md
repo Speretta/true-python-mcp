@@ -35,19 +35,19 @@ Naming and structure conventions the codebase follows (from the 2026-10
 style audit). A change that violates one should say why.
 
 1. **Bindings are domain nouns.** `notebook`, `cell`, `source`,
-   `revision`, `findings`, `diagnostics`, `snapshot` — never
+   `revision`, `findings`, `diagnostics`, `snapshot`; never
    `a`/`s`/`v`/`res`/`out`/`data`/`tmp`, and closure parameters are no
    exception (`|diagnostic|`, not `|d|`). Single letters only for char
    values and domain-less loop counters. (String-builder locals named
    `out` predate this rule and stay until touched.)
 2. **Booleans read as predicates.** `seen_import`,
-   `inserting_before_existing`, `is_past_the_end` — a name that could
+   `inserting_before_existing`, `is_past_the_end`: a name that could
    follow `if` without mental translation.
 3. **Chains cap at ~3-4 adapters; closures stay expressions.** When a
    closure body needs a match, a loop, or a second statement, extract a
    named fn and pass it by reference (`.map(output_summary)`): the chain
    states the shape, the function states the rule.
-4. **Loops and iterators compile to the same code — choose by clarity.**
+4. **Loops and iterators compile to the same code; choose by clarity.**
    One pass doing two jobs is a `for` loop; "select the code cells'
    indexes" is `.filter().map().collect()`. Never hand-roll what one
    adapter names outright (`split_inclusive`, not a byte-index loop).
@@ -59,7 +59,7 @@ style audit). A change that violates one should say why.
    caller.** The top of a long operation should read like a table of
    contents (`check` → `build`/`multiple_definitions`/`cycles`/
    `setup_root`/`drift`). Comments that say "what this block does" are
-   unnamed functions — promote them.
+   unnamed functions. Promote them.
 7. **Errors are classified once, at the definition.** `Error` (thiserror)
    is the crate's language; `anyhow` lives only in `main.rs`. A layer
    that can classify, must: repeated `.map_err(...)` at call sites means

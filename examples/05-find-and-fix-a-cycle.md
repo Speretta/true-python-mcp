@@ -8,7 +8,7 @@ cells spin forever. This doc shows how the AI finds the cause and fixes it.
 What follows is the real conversation between the AI (the LLM) and tpmcp, captured
 from the server. The LLM sends tool calls and sees the answers as markdown.
 
-## Step 1 — Check the file without touching it (`notebook_check`)
+## Step 1: Check the file without touching it (`notebook_check`)
 
 `notebook_check` validates a notebook and writes nothing. The LLM sends:
 
@@ -34,7 +34,7 @@ format: marimo 0.25.1 · revision: afabafff15ed6aaf
 In marimo every cell is a function. Cell 0 needs `b` from cell 1 and cell 1
 needs `a` from cell 0: they wait for each other forever. The check only reads.
 
-## Step 2 — Look at the two cells (`notebook_read`)
+## Step 2: Look at the two cells (`notebook_read`)
 
 The LLM sends:
 
@@ -68,7 +68,7 @@ b = a + 1
 The AI sees the loop and picks a fix: cell 1 should produce `b` on its own
 instead of deriving it from `a`.
 
-## Step 3 — Break the cycle (`cell_set_source`)
+## Step 3: Break the cycle (`cell_set_source`)
 
 The LLM replaces all of cell 1, sending the revision from the read:
 
@@ -99,7 +99,7 @@ revision: 4bd5ac6f7271df02
 
 The edit went through and the file got a new revision, `4bd5ac6f7271df02`.
 
-## Step 4 — Verify the fix (`notebook_check`)
+## Step 4: Verify the fix (`notebook_check`)
 
 The LLM sends the same check as in Step 1:
 
@@ -127,7 +127,7 @@ Zero errors — the cycle is gone. The two info findings report drift: cell 1
 still says `def _(a):` although it no longer uses `a`. tpmcp does not rewrite
 signatures (marimo refreshes them on its next save); the file runs fine.
 
-## Step 5 — Lint the file (`ruff_check`)
+## Step 5: Lint the file (`ruff_check`)
 
 The LLM sends:
 

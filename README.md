@@ -5,33 +5,31 @@
 [![Release](https://img.shields.io/github/v/tag/Speretta/true-python-mcp)](https://github.com/Speretta/true-python-mcp/tags)
 
 *An MCP server for Python: safe notebook editing and built-in ruff
-lint/format — for notebooks and plain `.py` files alike. One Rust binary.
-Nothing else to install.*
+lint/format, for notebooks and plain `.py` files alike. One Rust binary,
+nothing else to install.*
 
 It does two jobs:
 
 1. **Edit notebooks without breaking them.** Jupyter (`.ipynb`) and marimo
-   (`.py`) files keep their exact layout. If you change one line, the git diff
-   shows one line. Notebooks are hard for AI tools: a `.ipynb` file is one big
-   JSON document, and many notebook MCP servers run a hidden Jupyter kernel
-   that can fight with the editor you have open, like VS Code. tpmcp starts no
-   kernel and runs no code — it treats the notebook as a plain file and
-   changes only the bytes you asked it to change.
+   (`.py`) files keep their exact layout. Change one line and the git diff
+   shows one line. Notebooks are hard for AI tools: a `.ipynb` file is one
+   big JSON document, and many notebook MCP servers run a hidden Jupyter
+   kernel that can fight with the editor you have open, like VS Code. tpmcp
+   starts no kernel and runs no code. It treats the notebook as a plain
+   file and changes only the bytes you asked it to change.
 2. **Lint and format any Python file.** ruff is compiled into the binary, so
    `ruff_check` and `ruff_format` work on every `.py`, `.pyi`, and `.ipynb`
-   in your project — not just notebooks. Nothing to install, nothing to
+   in your project, not just notebooks. Nothing to install, nothing to
    configure.
 
 ## At a glance
 
-- One binary, no runtime dependencies
-- Works on plain Python too: ruff lint and format for any `.py`, not just
-  notebooks
-- Byte-exact notebook edits: your diff shows only what you changed
+- One binary; no runtime dependencies, no kernel, no background process
 - Jupyter `.ipynb` and marimo `.py`, detected automatically
+- Byte-exact edits: your diff shows only what you changed
 - Revision guard: stale writes are refused, not silently applied
-- No kernel, no background process, nothing to fight with your editor
-- 12 tools, plus 3 tools for plain Python files with `--file-tools`
+- ruff lint and format for any `.py`, not just notebooks
+- 12 tools, plus 3 for plain Python files with `--file-tools`
 
 ## Memory footprint
 
@@ -60,8 +58,8 @@ Your AI fixes a typo in one cell. The git diff shows one line:
 Nothing else changes. Outputs, cell order, and metadata stay exactly as they
 are. Without tpmcp, the same edit often rewrites the whole file.
 
-Full walkthroughs — every tool call and every answer, captured from the real
-server — live in [examples/](examples/).
+Full walkthroughs live in [examples/](examples/): every tool call and every
+answer, captured from the real server.
 
 ## Quickstart
 
@@ -74,7 +72,7 @@ cd true-python-mcp
 cargo build --release
 ```
 
-(`cargo install --path .` also works — it copies the binary into
+(`cargo install --path .` also works: it copies the binary into
 `~/.cargo/bin`.)
 
 **2. Connect your AI tool.** Add this to its MCP config (for example
@@ -116,28 +114,25 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). |
 
 Notebook outputs, execution counts, and metadata keep their values, and
-only the cell you edit changes. One honest boundary: a file saved in
-Jupyter's standard layout round-trips byte-for-byte; a file in an unusual
-layout (Windows line endings, two-space indent, exotic number spellings)
-normalizes that layout once, on the first tpmcp write, and is byte-stable
-after that.
+only the cell you edit changes. One boundary to know: a file in Jupyter's
+standard layout round-trips byte-for-byte. A file in an unusual layout
+(Windows line endings, two-space indent, exotic number spellings)
+normalizes once on the first tpmcp write; later writes are byte-identical.
 
 ## Safe editing with revisions
 
-A file can change while the AI is working on it. tpmcp stops that from
-causing damage:
+A file can change while the AI is working on it. tpmcp keeps that safe:
 
 - Every read returns a short code called the **revision**.
 - Every change must send that code back.
 - If the file changed in between, the tool refuses the change and sends the
   new code. Then you read again and retry.
 
-So nobody's work is overwritten by accident. The guarantee covers every
-writer that goes through tpmcp: two tpmcp processes (say, two AI clients)
-take a cross-process lock, and each write re-checks the file a moment
-before it lands. An editor outside tpmcp takes no lock; a save landing
-exactly during the final rename is the one window that cannot be closed —
-every longer race is detected and refused.
+Two tpmcp processes never overwrite each other: they take a cross-process
+lock, and every write re-checks the file a moment before it lands. An
+editor outside tpmcp takes no lock. A save from it that lands during the
+final rename can still slip through; every longer race is detected and
+refused.
 
 ## What tpmcp does not do
 

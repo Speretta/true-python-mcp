@@ -6,7 +6,7 @@ The user asks the AI to change `examples/demo/plan.py`, a marimo notebook. While
 
 What follows is the real conversation between the AI (the LLM) and tpmcp, captured from the server. The LLM sends tool calls and sees the answers as markdown.
 
-## Step 1 — Read one cell (`notebook_read`)
+## Step 1: Read one cell (`notebook_read`)
 
 The LLM sends:
 ````json
@@ -41,7 +41,7 @@ Before the AI's edit lands, the user types a comment at the end of the same file
 # edited in VS Code while the AI was thinking
 ````
 
-## Step 2 — Set the new value (`cell_set_source`)
+## Step 2: Set the new value (`cell_set_source`)
 
 The LLM sends:
 ````json
@@ -68,7 +68,7 @@ The machine-readable part (structuredContent):
 
 The AI sent the old revision, so the revision guard refused the write. The refused call changed nothing on disk: the user comment is still there, and cell 3 still says `revenue = 1200`. The error also arrives in machine-readable form, with `"error": "conflict"` and the current revision, so the AI knows what to do next.
 
-## Step 3 — Re-read the cell (`notebook_read`)
+## Step 3: Re-read the cell (`notebook_read`)
 
 The LLM sends:
 ````json
@@ -96,7 +96,7 @@ revenue = 1200
 
 The fresh read returns revision `aad84c8f283906a6`, the same one the error reported. Cell 3 still contains `revenue = 1200`, so the AI keeps its plan and only updates the revision.
 
-## Step 4 — Retry the edit (`cell_set_source`)
+## Step 4: Retry the edit (`cell_set_source`)
 
 The LLM sends:
 ````json
