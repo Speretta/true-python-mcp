@@ -47,8 +47,11 @@ pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
                     }
                 }
                 None => {
-                    let (cell, meta) = broken_cell(text);
+                    let (cell, meta, trailing) = broken_cell(text);
                     builder.push_cell(cell, meta);
+                    if !trailing.is_empty() {
+                        builder.push_literal(trailing);
+                    }
                 }
             },
         }
@@ -91,17 +94,22 @@ fn region_cell(
 }
 
 /// A region that failed to parse: kept verbatim (byte-exact) and shown
-/// read-only so the LLM can see the broken code.
-fn broken_cell(text: &str) -> (Cell, CellMeta) {
-    let display = text.trim_end_matches(['\n', '\r', ' ', '\t']);
+/// read-only so the LLM can see the broken code. The trailing whitespace up
+/// to the next region boundary becomes its own literal segment, so broken
+/// cells honor the file-wide invariant that cell blocks never end in a
+/// newline and separators live between segments — deleting or inserting
+/// cells around a broken one must not fuse its neighbors.
+fn broken_cell(text: &str) -> (Cell, CellMeta, String) {
+    let content_end = text.trim_end_matches(['\n', '\r', ' ', '\t']).len();
+    let (block, trailing) = text.split_at(content_end);
     (
         Cell {
             extra: marimo_extra("broken", None),
-            ..Cell::from_text("code", display)
+            ..Cell::from_text("code", block)
         },
         CellMeta {
             kind: Kind::Broken,
-            block: text.to_string(),
+            block: block.to_string(),
             header: String::new(),
             indent: String::new(),
             indent_memory: None,
@@ -109,6 +117,7 @@ fn broken_cell(text: &str) -> (Cell, CellMeta) {
             md: None,
             edited: false,
         },
+        trailing.to_string(),
     )
 }
 

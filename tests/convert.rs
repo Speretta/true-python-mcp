@@ -532,3 +532,101 @@ fn converted_files_match_marimos_own_serializer() {
     let mine = std::fs::read_to_string(&target).unwrap();
     assert_eq!(mine.trim_end_matches('\n'), official.trim_end_matches('\n'));
 }
+
+/// A notebook whose magic cell converts verbatim and reads back broken.
+const MAGIC_NB: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "g1", "metadata": {}, "outputs": [],
+   "source": ["import math\n"]},
+  {"cell_type": "code", "execution_count": null, "id": "g2", "metadata": {}, "outputs": [],
+   "source": ["!pip install seaborn\n"]},
+  {"cell_type": "markdown", "id": "g3", "metadata": {}, "source": ["# Title\n"]}
+ ],
+ "metadata": {}, "nbformat": 4, "nbformat_minor": 5
+}"##;
+
+/// The repair flow of example 06, pinned: a broken (read-only) cell is
+/// fixed by deleting it and inserting a valid replacement. Broken-cell
+/// blocks must not swallow the separators around them, or the delete fuses
+/// the neighboring cells and the file stays corrupt.
+#[test]
+fn repairing_broken_cells_keeps_the_file_intact() {
+    let dir = temp_dir("convert-repair");
+    let source = dir.join("magic.ipynb");
+    std::fs::write(&source, MAGIC_NB).unwrap();
+    let mut server = Server::start(&[]);
+    let target = dir.join("magic.py");
+    let (err, text, created) = server.call(
+        "notebook_create",
+        json!({"path": target, "from_path": source, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let revision = created["revision"].as_str().unwrap();
+
+    // The magic cell reads back broken (outline JSON carries the kind).
+    let (err, text, outline) = server.call(
+        "notebook_read",
+        json!({"path": target, "detail": "outline", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let cells = outline["cells"].as_array().unwrap();
+    let broken_index = cells
+        .iter()
+        .position(|cell| cell["kind"] == "broken")
+        .unwrap_or_else(|| panic!("the magic cell degrades to broken: {outline}"));
+
+    // Editing a broken cell in place is refused; delete+insert is the repair.
+    let (err, text, _) = server.call(
+        "cell_set_source",
+        json!({"path": target, "cell": broken_index, "source": "# fixed\n",
+               "revision": revision}),
+    );
+    assert!(err && text.contains("read-only"), "{text}");
+    let (err, text, deleted) = server.call(
+        "cell_delete",
+        json!({"path": target, "cell": broken_index, "revision": revision,
+               "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let (err, text, _) = server.call(
+        "cell_insert",
+        json!({"path": target, "index": broken_index, "cell_type": "code",
+               "source": "# seaborn ships with the environment",
+               "revision": deleted["revision"], "format": "json"}),
+    );
+    assert!(!err, "{text}");
+
+    // The repaired file is whole: no fused blocks, no broken cells left,
+    // zero check errors, and real marimo compiles every cell.
+    let raw = std::fs::read_to_string(&target).unwrap();
+    assert!(
+        !raw.contains(")@app.cell"),
+        "cell blocks must not fuse: {raw}"
+    );
+    assert!(
+        !raw.contains("return@app.cell"),
+        "separators must survive: {raw}"
+    );
+    let (err, text, outline) = server.call(
+        "notebook_read",
+        json!({"path": target, "detail": "outline", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        outline["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|cell| cell["kind"] != "broken"),
+        "{outline}"
+    );
+    let (err, text, checked) =
+        server.call("notebook_check", json!({"path": target, "format": "json"}));
+    assert!(!err, "{text}");
+    assert_eq!(checked["error_count"], 0, "{checked}");
+    if let Some(python) = ground_truth_python() {
+        let report = run_python(&python, CONVERT_CHECK, &[target.to_str().unwrap()]);
+        assert!(report.contains("failed:0"), "{report}");
+        assert!(report.contains("unparsable:0"), "{report}");
+    }
+}
