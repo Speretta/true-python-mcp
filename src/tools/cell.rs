@@ -285,18 +285,31 @@ impl Tpmcp {
         Parameters(args): Parameters<CellInsertArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
-            let (index, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
-                let index = args.index.unwrap_or(notebook.cells().len());
-                notebook.insert(index, args.cell_type.as_str(), &args.source)?;
-                Ok(index)
-            })?;
+            let markdown = args.cell_type.as_str() == "markdown";
+            let ((index, warning), new_revision) =
+                with_notebook(&args.path, &args.revision, |notebook| {
+                    let index = args.index.unwrap_or(notebook.cells().len());
+                    notebook.insert(index, args.cell_type.as_str(), &args.source)?;
+                    let warning = if markdown {
+                        notebook.ensure_mo_definition()?
+                    } else {
+                        None
+                    };
+                    Ok((index, warning))
+                })?;
             Ok(mutation_result(
                 args.format,
                 format!("inserted {} cell at index {index}", args.cell_type.as_str()),
                 &args.path,
                 &new_revision,
-                || None,
-                || json!({"index": index, "cell_type": args.cell_type.as_str()}),
+                || warning.clone(),
+                || {
+                    let mut value = json!({"index": index, "cell_type": args.cell_type.as_str()});
+                    if let Some(warning) = &warning {
+                        value["warning"] = json!(warning);
+                    }
+                    value
+                },
             ))
         })
         .await
@@ -386,16 +399,28 @@ impl Tpmcp {
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
             let new_type = args.cell_type.as_str();
-            let (_, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
-                notebook.set_type(args.cell, new_type)
+            let to_markdown = new_type == "markdown";
+            let (warning, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
+                notebook.set_type(args.cell, new_type)?;
+                if to_markdown {
+                    notebook.ensure_mo_definition()
+                } else {
+                    Ok(None)
+                }
             })?;
             Ok(mutation_result(
                 args.format,
                 format!("cell {} is now {new_type}", args.cell),
                 &args.path,
                 &new_revision,
-                || None,
-                || json!({"cell": args.cell, "cell_type": new_type}),
+                || warning.clone(),
+                || {
+                    let mut value = json!({"cell": args.cell, "cell_type": new_type});
+                    if let Some(warning) = &warning {
+                        value["warning"] = json!(warning);
+                    }
+                    value
+                },
             ))
         })
         .await

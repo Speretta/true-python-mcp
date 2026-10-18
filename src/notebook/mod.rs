@@ -225,6 +225,18 @@ impl AnyNotebook {
             )),
         }
     }
+
+    /// After a mutation that introduced a markdown cell into a marimo
+    /// notebook, make sure the file defines `mo` — the same scaffold
+    /// marimo's own converter adds. Returns the scaffold warning when an
+    /// import cell was inserted, `Ok(None)` when nothing was needed.
+    /// Jupyter notebooks never need the scaffold.
+    pub fn ensure_mo_definition(&mut self) -> Result<Option<String>, Error> {
+        match self {
+            Self::Jupyter(_) => Ok(None),
+            Self::Marimo(notebook) => notebook.ensure_mo_definition(),
+        }
+    }
 }
 
 /// Infer the notebook format from a file extension: `.ipynb` is Jupyter,

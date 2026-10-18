@@ -196,3 +196,69 @@ fn execution_count_policy_over_the_wire() {
         .collect();
     assert!(codes.contains(&"execution-count"), "{codes:?}");
 }
+
+/// Introducing markdown into a marimo notebook that lacks a `mo` definition
+/// scaffolds `import marimo as mo` and warns — the cell_insert/cell_set_type
+/// twin of the create/convert scaffold (without it the file NameErrors at
+/// runtime under real marimo).
+#[test]
+fn markdown_mutations_scaffold_mo_in_marimo() {
+    let dir = temp_dir("mo-scaffold");
+    let mut server = Server::start(&[]);
+
+    let path = dir.join("app.py");
+    let (err, text, sc) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [{"cell_type": "code", "source": "x = 1\n"}], "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let revision = sc["revision"].as_str().unwrap().to_string();
+
+    let (err, text, sc) = server.call(
+        "cell_insert",
+        json!({"path": path, "revision": revision, "cell_type": "markdown",
+               "source": "# Title\n", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        sc["warning"]
+            .as_str()
+            .unwrap()
+            .contains("import marimo as mo"),
+        "{sc}"
+    );
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("import marimo as mo"), "{content}");
+
+    // A second markdown insert must NOT scaffold again.
+    let revision = sc["revision"].as_str().unwrap().to_string();
+    let (err, text, sc) = server.call(
+        "cell_insert",
+        json!({"path": path, "revision": revision, "cell_type": "markdown",
+               "source": "## More\n", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert!(sc["warning"].is_null(), "{sc}");
+
+    // cell_set_type to markdown scaffolds the same way.
+    let path2 = dir.join("app2.py");
+    let (err, text, sc) = server.call(
+        "notebook_create",
+        json!({"path": path2, "cells": [{"cell_type": "code", "source": "y = 2\n"}], "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let revision = sc["revision"].as_str().unwrap().to_string();
+    let (err, text, sc) = server.call(
+        "cell_set_type",
+        json!({"path": path2, "revision": revision, "cell": 0,
+               "cell_type": "markdown", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        sc["warning"]
+            .as_str()
+            .unwrap()
+            .contains("import marimo as mo"),
+        "{sc}"
+    );
+}
