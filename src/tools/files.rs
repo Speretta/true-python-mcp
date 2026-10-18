@@ -19,7 +19,7 @@ use crate::error::Error;
 use crate::fs;
 use crate::render::{self, Format};
 use crate::server::Tpmcp;
-use crate::tools::{apply_edit, mutation_result, respond};
+use crate::tools::{apply_edit, blocking, mutation_result, respond};
 
 /// Maximum lines rendered in markdown when no explicit range is given.
 const MAX_RENDER_LINES: usize = 2000;
@@ -79,24 +79,30 @@ impl Tpmcp {
                        line_start/line_end select a 1-based inclusive range. Prefer the host's \
                        native read tool when available."
     )]
-    fn py_read(&self, Parameters(args): Parameters<PyReadArgs>) -> Result<CallToolResult, Error> {
-        let snapshot = fs::read(&args.path)?;
-        let all_lines = fs::logical_lines(&snapshot.content);
-        let (range, lines) = select_range(&all_lines, args.line_start, args.line_end)?;
-        let total = all_lines.len();
-        Ok(respond(
-            args.format,
-            || read_markdown(&args.path, &snapshot.revision, total, range, &lines),
-            || {
-                json!({
-                    "path": args.path.display().to_string(),
-                    "revision": snapshot.revision,
-                    "line_count": total,
-                    "range": [range.0, range.1],
-                    "content": lines.join("\n"),
-                })
-            },
-        ))
+    async fn py_read(
+        &self,
+        Parameters(args): Parameters<PyReadArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let snapshot = fs::read(&args.path)?;
+            let all_lines = fs::logical_lines(&snapshot.content);
+            let (range, lines) = select_range(&all_lines, args.line_start, args.line_end)?;
+            let total = all_lines.len();
+            Ok(respond(
+                args.format,
+                || read_markdown(&args.path, &snapshot.revision, total, range, &lines),
+                || {
+                    json!({
+                        "path": args.path.display().to_string(),
+                        "revision": snapshot.revision,
+                        "line_count": total,
+                        "range": [range.0, range.1],
+                        "content": lines.join("\n"),
+                    })
+                },
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -104,37 +110,43 @@ impl Tpmcp {
                        it exists); pass the current `revision` to overwrite. Returns the new \
                        revision. Prefer the host's native write tool when available."
     )]
-    fn py_write(&self, Parameters(args): Parameters<PyWriteArgs>) -> Result<CallToolResult, Error> {
-        let creating = args.revision.is_none();
-        let new_revision = fs::with_file_lock(&args.path, || {
-            match &args.revision {
-                None => {
-                    // Stat-based existence check: a read-based one treats
-                    // "exists but unreadable" (non-UTF-8, oversized,
-                    // permission-denied, directories) as "does not exist"
-                    // and the rename below would silently destroy it.
-                    if fs::exists(&args.path) {
-                        return Err(Error::AlreadyExists {
-                            path: args.path.clone(),
-                        });
+    async fn py_write(
+        &self,
+        Parameters(args): Parameters<PyWriteArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let creating = args.revision.is_none();
+            let new_revision = fs::with_file_lock(&args.path, || {
+                match &args.revision {
+                    None => {
+                        // Stat-based existence check: a read-based one treats
+                        // "exists but unreadable" (non-UTF-8, oversized,
+                        // permission-denied, directories) as "does not exist"
+                        // and the rename below would silently destroy it.
+                        if fs::exists(&args.path) {
+                            return Err(Error::AlreadyExists {
+                                path: args.path.clone(),
+                            });
+                        }
+                        fs::create(&args.path, &args.content)
                     }
-                    fs::create(&args.path, &args.content)
+                    Some(expected) => {
+                        fs::read_verified(&args.path, expected)?;
+                        fs::write(&args.path, &args.content)
+                    }
                 }
-                Some(expected) => {
-                    fs::read_verified(&args.path, expected)?;
-                    fs::write(&args.path, &args.content)
-                }
-            }
-        })?;
-        let verb = if creating { "created" } else { "wrote" };
-        Ok(mutation_result(
-            args.format,
-            format!("{verb} {}", args.path.display()),
-            &args.path,
-            &new_revision,
-            None,
-            json!({}),
-        ))
+            })?;
+            let verb = if creating { "created" } else { "wrote" };
+            Ok(mutation_result(
+                args.format,
+                format!("{verb} {}", args.path.display()),
+                &args.path,
+                &new_revision,
+                None,
+                json!({}),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -144,30 +156,36 @@ impl Tpmcp {
                        diff and the new revision. Prefer the host's native edit tool when \
                        available."
     )]
-    fn py_edit(&self, Parameters(args): Parameters<PyEditArgs>) -> Result<CallToolResult, Error> {
-        let (diff, new_revision) = fs::with_file_lock(&args.path, || {
-            let snapshot = fs::read_verified(&args.path, &args.revision)?;
-            let updated = apply_edit(
-                &snapshot.content,
-                &args.old_string,
-                &args.new_string,
-                args.replace_all,
-                "file",
-            )?;
-            let new_revision = fs::write(&args.path, &updated)?;
-            Ok((
-                render::unified_diff(&snapshot.content, &updated),
-                new_revision,
+    async fn py_edit(
+        &self,
+        Parameters(args): Parameters<PyEditArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let (diff, new_revision) = fs::with_file_lock(&args.path, || {
+                let snapshot = fs::read_verified(&args.path, &args.revision)?;
+                let updated = apply_edit(
+                    &snapshot.content,
+                    &args.old_string,
+                    &args.new_string,
+                    args.replace_all,
+                    "file",
+                )?;
+                let new_revision = fs::write(&args.path, &updated)?;
+                Ok((
+                    render::unified_diff(&snapshot.content, &updated),
+                    new_revision,
+                ))
+            })?;
+            Ok(mutation_result(
+                args.format,
+                format!("edited {}", args.path.display()),
+                &args.path,
+                &new_revision,
+                Some(format!("```diff\n{diff}```")),
+                json!({"diff": diff}),
             ))
-        })?;
-        Ok(mutation_result(
-            args.format,
-            format!("edited {}", args.path.display()),
-            &args.path,
-            &new_revision,
-            Some(format!("```diff\n{diff}```")),
-            json!({"diff": diff}),
-        ))
+        })
+        .await
     }
 }
 

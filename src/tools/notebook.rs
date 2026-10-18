@@ -17,7 +17,7 @@ use crate::fs;
 use crate::notebook::{self, Format as NotebookFormat, Notebook};
 use crate::render::{self, Detail, Format, Window, WithOutputs};
 use crate::server::Tpmcp;
-use crate::tools::{CellType, mutation_result, read_notebook, respond};
+use crate::tools::{CellType, blocking, mutation_result, read_notebook, respond};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NotebookReadArgs {
@@ -74,28 +74,31 @@ impl Tpmcp {
                        Returns the file revision required by all mutating tools. Never read .ipynb \
                        files as raw JSON text."
     )]
-    fn notebook_read(
+    async fn notebook_read(
         &self,
         Parameters(args): Parameters<NotebookReadArgs>,
     ) -> Result<CallToolResult, Error> {
-        let (snapshot, notebook) = read_notebook(&args.path)?;
-        let path = args.path.display().to_string();
-        let revision = snapshot.revision;
-        let window = Window::resolve(notebook.cells().len(), args.start, args.limit);
-        Ok(respond(
-            args.format,
-            || {
-                render::notebook_markdown(
-                    &path,
-                    &revision,
-                    &notebook,
-                    args.detail,
-                    args.with_outputs,
-                    window,
-                )
-            },
-            || render::notebook_json(&path, &revision, &notebook, args.with_outputs, window),
-        ))
+        blocking(move || {
+            let (snapshot, notebook) = read_notebook(&args.path)?;
+            let path = args.path.display().to_string();
+            let revision = snapshot.revision;
+            let window = Window::resolve(notebook.cells().len(), args.start, args.limit);
+            Ok(respond(
+                args.format,
+                || {
+                    render::notebook_markdown(
+                        &path,
+                        &revision,
+                        &notebook,
+                        args.detail,
+                        args.with_outputs,
+                        window,
+                    )
+                },
+                || render::notebook_json(&path, &revision, &notebook, args.with_outputs, window),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -104,49 +107,52 @@ impl Tpmcp {
                        override. Fails if the file already exists; use the cell tools to modify \
                        existing notebooks."
     )]
-    fn notebook_create(
+    async fn notebook_create(
         &self,
         Parameters(args): Parameters<NotebookCreateArgs>,
     ) -> Result<CallToolResult, Error> {
-        let format = match args.notebook_format {
-            Some(format) => format,
-            None => notebook::format_from_extension(&args.path).ok_or_else(|| {
-                Error::invalid_input(format!(
-                    "cannot infer notebook format from {}; use a .ipynb or .py path, \
+        blocking(move || {
+            let format = match args.notebook_format {
+                Some(format) => format,
+                None => notebook::format_from_extension(&args.path).ok_or_else(|| {
+                    Error::invalid_input(format!(
+                        "cannot infer notebook format from {}; use a .ipynb or .py path, \
                      or pass notebook_format",
-                    args.path.display()
-                ))
-            })?,
-        };
-        let mut notebook = notebook::create(format);
-        for new_cell in args.cells.unwrap_or_default() {
-            let index = notebook.cells().len();
-            notebook
-                .insert(index, new_cell.cell_type.as_str(), &new_cell.source)
-                .map_err(Error::invalid_input)?;
-        }
-        let cell_count = notebook.cells().len();
-        let content = notebook.serialize();
-        let new_revision = fs::with_file_lock(&args.path, || {
-            // Existence check INSIDE the lock, so concurrent creators are
-            // serialized and exactly one wins; stat-based, so entries
-            // fs::read cannot see (non-UTF-8, oversized, permission-denied,
-            // directories, dangling symlinks) are refused instead of
-            // silently clobbered.
-            if fs::exists(&args.path) {
-                return Err(Error::AlreadyExists {
-                    path: args.path.clone(),
-                });
+                        args.path.display()
+                    ))
+                })?,
+            };
+            let mut notebook = notebook::create(format);
+            for new_cell in args.cells.unwrap_or_default() {
+                let index = notebook.cells().len();
+                notebook
+                    .insert(index, new_cell.cell_type.as_str(), &new_cell.source)
+                    .map_err(Error::invalid_input)?;
             }
-            fs::create(&args.path, &content)
-        })?;
-        Ok(mutation_result(
-            args.format,
-            format!("created notebook with {cell_count} cells"),
-            &args.path,
-            &new_revision,
-            None,
-            json!({"cell_count": cell_count}),
-        ))
+            let cell_count = notebook.cells().len();
+            let content = notebook.serialize();
+            let new_revision = fs::with_file_lock(&args.path, || {
+                // Existence check INSIDE the lock, so concurrent creators are
+                // serialized and exactly one wins; stat-based, so entries
+                // fs::read cannot see (non-UTF-8, oversized, permission-denied,
+                // directories, dangling symlinks) are refused instead of
+                // silently clobbered.
+                if fs::exists(&args.path) {
+                    return Err(Error::AlreadyExists {
+                        path: args.path.clone(),
+                    });
+                }
+                fs::create(&args.path, &content)
+            })?;
+            Ok(mutation_result(
+                args.format,
+                format!("created notebook with {cell_count} cells"),
+                &args.path,
+                &new_revision,
+                None,
+                json!({"cell_count": cell_count}),
+            ))
+        })
+        .await
     }
 }

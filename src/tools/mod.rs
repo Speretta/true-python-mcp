@@ -22,6 +22,22 @@ use crate::fs::{self, Snapshot};
 use crate::notebook::{AnyNotebook, Notebook};
 use crate::render::Format;
 
+/// Run one synchronous tool body on the runtime's blocking pool.
+///
+/// Tool bodies block for real work: cross-process file locks wait on other
+/// processes, and ruff lint/format passes take seconds on large files. The
+/// current-thread runtime pumps stdio on its only worker, so bodies must
+/// never run on it directly. A panic inside a body — only possible in
+/// dependencies, since tpmcp's own code is panic-free — surfaces as an
+/// [`Error::Internal`] tool result instead of killing the server.
+pub async fn blocking(
+    work: impl FnOnce() -> Result<CallToolResult, Error> + Send + 'static,
+) -> Result<CallToolResult, Error> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(Error::internal)?
+}
+
 /// Cell type accepted by cell-creating and cell-mutating tools.
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]

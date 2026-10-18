@@ -19,7 +19,7 @@ use crate::notebook::{Finding, Notebook, Severity};
 use crate::render::Format;
 use crate::ruff::{self, CheckOutcome, Diagnostic, FormatWrite, SafeFixes};
 use crate::server::Tpmcp;
-use crate::tools::{read_notebook, respond};
+use crate::tools::{blocking, read_notebook, respond};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RuffCheckArgs {
@@ -70,35 +70,38 @@ impl Tpmcp {
                        tools. Responses report the current revision; set fix=true with that \
                        revision to apply safe fixes in place."
     )]
-    fn ruff_check(
+    async fn ruff_check(
         &self,
         Parameters(args): Parameters<RuffCheckArgs>,
     ) -> Result<CallToolResult, Error> {
-        let outcome = if args.fix {
-            let revision = args.revision.ok_or_else(|| {
-                Error::invalid_input("ruff_check with fix=true requires `revision`")
-            })?;
-            fs::with_file_lock(&args.path, || {
-                // Single read (CPU-F2): verify the caller's revision and lint
-                // the exact same bytes — strictly tighter than verify-then-
-                // reread, since the file cannot change between the two reads.
-                let snapshot = fs::read_verified(&args.path, &revision)?;
-                ruff::check(&args.path, SafeFixes::Apply, snapshot)
-            })?
-        } else {
-            // Single read: lint these bytes and report their revision, so a
-            // follow-up fix=true call chains onto the snapshot we linted.
-            let snapshot = fs::read(&args.path)?;
-            let current = snapshot.revision.clone();
-            let mut outcome = ruff::check(&args.path, SafeFixes::ReportOnly, snapshot)?;
-            outcome.new_revision = Some(current);
-            outcome
-        };
-        Ok(respond(
-            args.format,
-            || check_markdown(&args.path, &outcome),
-            || check_json(&args.path, &outcome),
-        ))
+        blocking(move || {
+            let outcome = if args.fix {
+                let revision = args.revision.ok_or_else(|| {
+                    Error::invalid_input("ruff_check with fix=true requires `revision`")
+                })?;
+                fs::with_file_lock(&args.path, || {
+                    // Single read (CPU-F2): verify the caller's revision and lint
+                    // the exact same bytes — strictly tighter than verify-then-
+                    // reread, since the file cannot change between the two reads.
+                    let snapshot = fs::read_verified(&args.path, &revision)?;
+                    ruff::check(&args.path, SafeFixes::Apply, snapshot)
+                })?
+            } else {
+                // Single read: lint these bytes and report their revision, so a
+                // follow-up fix=true call chains onto the snapshot we linted.
+                let snapshot = fs::read(&args.path)?;
+                let current = snapshot.revision.clone();
+                let mut outcome = ruff::check(&args.path, SafeFixes::ReportOnly, snapshot)?;
+                outcome.new_revision = Some(current);
+                outcome
+            };
+            Ok(respond(
+                args.format,
+                || check_markdown(&args.path, &outcome),
+                || check_json(&args.path, &outcome),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -109,41 +112,44 @@ impl Tpmcp {
                        the in-place call. Notebook formatting is byte-exact: only reformatted \
                        cells change."
     )]
-    fn ruff_format(
+    async fn ruff_format(
         &self,
         Parameters(args): Parameters<RuffFormatArgs>,
     ) -> Result<CallToolResult, Error> {
-        // Single read (CPU-F2): read the file once, format those bytes, and
-        // report the revision of that same snapshot for read-only outcomes.
-        let (outcome, current_revision) = if args.check {
-            let snapshot = fs::read(&args.path)?;
-            let current = snapshot.revision.clone();
-            let outcome = ruff::format_file(&args.path, FormatWrite::DryRun, snapshot)?;
-            (outcome, Some(current))
-        } else {
-            let revision = args.revision.ok_or_else(|| {
-                Error::invalid_input(
-                    "ruff_format (in-place) requires `revision`; use check=true for a dry run",
-                )
-            })?;
-            fs::with_file_lock(&args.path, || {
-                let snapshot = fs::read_verified(&args.path, &revision)?;
+        blocking(move || {
+            // Single read (CPU-F2): read the file once, format those bytes, and
+            // report the revision of that same snapshot for read-only outcomes.
+            let (outcome, current_revision) = if args.check {
+                let snapshot = fs::read(&args.path)?;
                 let current = snapshot.revision.clone();
-                let outcome = ruff::format_file(&args.path, FormatWrite::InPlace, snapshot)?;
-                // An in-place write carries its own new revision; otherwise
-                // report the revision of the bytes we formatted.
-                let current = match &outcome {
-                    ruff::FormatOutcome::Written { .. } => None,
-                    _ => Some(current),
-                };
-                Ok((outcome, current))
-            })?
-        };
-        Ok(respond(
-            args.format,
-            || format_markdown(&args.path, &outcome, current_revision.as_deref()),
-            || format_json(&args.path, &outcome, current_revision.as_deref()),
-        ))
+                let outcome = ruff::format_file(&args.path, FormatWrite::DryRun, snapshot)?;
+                (outcome, Some(current))
+            } else {
+                let revision = args.revision.ok_or_else(|| {
+                    Error::invalid_input(
+                        "ruff_format (in-place) requires `revision`; use check=true for a dry run",
+                    )
+                })?;
+                fs::with_file_lock(&args.path, || {
+                    let snapshot = fs::read_verified(&args.path, &revision)?;
+                    let current = snapshot.revision.clone();
+                    let outcome = ruff::format_file(&args.path, FormatWrite::InPlace, snapshot)?;
+                    // An in-place write carries its own new revision; otherwise
+                    // report the revision of the bytes we formatted.
+                    let current = match &outcome {
+                        ruff::FormatOutcome::Written { .. } => None,
+                        _ => Some(current),
+                    };
+                    Ok((outcome, current))
+                })?
+            };
+            Ok(respond(
+                args.format,
+                || format_markdown(&args.path, &outcome, current_revision.as_deref()),
+                || format_json(&args.path, &outcome, current_revision.as_deref()),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -155,28 +161,31 @@ impl Tpmcp {
                        findings with severity error/warning/info; no findings means the \
                        notebook is clean. Use after edits or merges before trusting a file."
     )]
-    fn notebook_check(
+    async fn notebook_check(
         &self,
         Parameters(args): Parameters<NotebookCheckArgs>,
     ) -> Result<CallToolResult, Error> {
-        let (snapshot, notebook) = read_notebook(&args.path)?;
-        let findings = notebook.check();
-        let label = notebook.format_label();
-        Ok(respond(
-            args.format,
-            || notebook_check_markdown(&args.path, &label, &snapshot.revision, &findings),
-            || {
-                json!({
-                    "path": args.path.display().to_string(),
-                    "format": label,
-                    "revision": snapshot.revision,
-                    "error_count": count(&findings, Severity::Error),
-                    "warning_count": count(&findings, Severity::Warning),
-                    "info_count": count(&findings, Severity::Info),
-                    "findings": findings,
-                })
-            },
-        ))
+        blocking(move || {
+            let (snapshot, notebook) = read_notebook(&args.path)?;
+            let findings = notebook.check();
+            let label = notebook.format_label();
+            Ok(respond(
+                args.format,
+                || notebook_check_markdown(&args.path, &label, &snapshot.revision, &findings),
+                || {
+                    json!({
+                        "path": args.path.display().to_string(),
+                        "format": label,
+                        "revision": snapshot.revision,
+                        "error_count": count(&findings, Severity::Error),
+                        "warning_count": count(&findings, Severity::Warning),
+                        "info_count": count(&findings, Severity::Info),
+                        "findings": findings,
+                    })
+                },
+            ))
+        })
+        .await
     }
 }
 

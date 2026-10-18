@@ -57,6 +57,12 @@ pub enum Error {
     #[error("analysis failed: {message}")]
     Analysis { message: String },
 
+    /// A tool task died catastrophically: a dependency panicked, or the task
+    /// was cancelled. tpmcp's own code is panic-free; containing third-party
+    /// failures here keeps one bad tool call from killing the server.
+    #[error("internal error: {message}")]
+    Internal { message: String },
+
     /// Underlying filesystem failure.
     #[error("I/O error{}: {source}", path_suffix(path.as_ref()))]
     Io {
@@ -103,6 +109,13 @@ impl Error {
         }
     }
 
+    /// Build an [`Error::Internal`] from any displayable message.
+    pub fn internal(message: impl std::fmt::Display) -> Self {
+        Self::Internal {
+            message: message.to_string(),
+        }
+    }
+
     /// Stable machine-readable error code used in `structured_content`.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -114,6 +127,7 @@ impl Error {
             Self::Parse { .. } => "parse_error",
             Self::InvalidInput { .. } => "invalid_input",
             Self::Analysis { .. } => "analysis_error",
+            Self::Internal { .. } => "internal_error",
             Self::Io { .. } => "io_error",
         }
     }
@@ -145,7 +159,7 @@ impl Error {
                     obj.insert("path".into(), Value::String(path.display().to_string()));
                 }
             }
-            Self::InvalidInput { .. } | Self::Analysis { .. } => {}
+            Self::InvalidInput { .. } | Self::Analysis { .. } | Self::Internal { .. } => {}
         }
         Value::Object(obj)
     }
