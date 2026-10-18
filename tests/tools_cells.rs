@@ -111,3 +111,88 @@ fn cell_set_metadata_over_the_wire() {
     );
     assert!(text.contains("Jupyter notebooks only"), "{text}");
 }
+
+/// EC-4 end to end: the cell-level `execution_count` follows nbformat's
+/// integer-or-null policy, so notebook_check no longer calls a file valid
+/// that nbformat rejects (float spellings, negatives) or that the next
+/// tpmcp write would turn into an invalid file (a beyond-u64 integer is
+/// re-spelled as a float by the serializer).
+#[test]
+fn execution_count_policy_over_the_wire() {
+    fn notebook_with_count(count: &str) -> String {
+        format!(
+            r#"{{
+ "cells": [
+  {{
+   "cell_type": "code",
+   "execution_count": {count},
+   "id": "c0000001",
+   "metadata": {{}},
+   "outputs": [],
+   "source": ["x = 1\n"]
+  }}
+ ],
+ "metadata": {{}},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}}"#
+        )
+    }
+
+    let dir = temp_dir("execcount");
+    let mut server = Server::start(&[]);
+    for (name, count, valid) in [
+        ("null", "null", true),
+        ("integer", "3", true),
+        ("u64_max", "18446744073709551615", true),
+        ("float", "3.0", false),
+        ("negative", "-1", false),
+        ("beyond_u64", "18446744073709551616", false),
+        ("string", "\"3\"", false),
+    ] {
+        let path = dir.join(format!("{name}.ipynb"));
+        std::fs::write(&path, notebook_with_count(count)).unwrap();
+        let (err, text, sc) =
+            server.call("notebook_check", json!({"path": path, "format": "json"}));
+        assert!(!err, "{text}");
+        let codes: Vec<&str> = sc["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["code"].as_str().unwrap())
+            .collect();
+        if valid {
+            assert!(codes.is_empty(), "{name}: {codes:?}");
+        } else {
+            assert!(codes.contains(&"execution-count"), "{name}: {codes:?}");
+        }
+    }
+
+    // The EC-4 scenario: a beyond-u64 count survives an edit re-spelled as
+    // a float, and the check reports the file as what it now is.
+    let path = dir.join("edited.ipynb");
+    std::fs::write(&path, notebook_with_count("18446744073709551616")).unwrap();
+    let (err, text, _) = server.call("notebook_read", json!({"path": path}));
+    assert!(!err, "{text}");
+    let revision = revision_of(&text);
+    let (err, text, _) = server.call(
+        "cell_edit",
+        json!({"path": path, "cell": 0, "old_string": "x = 1",
+               "new_string": "x = 2", "revision": revision}),
+    );
+    assert!(!err, "{text}");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !raw.contains("18446744073709551616"),
+        "the integer literal is gone after the write: {raw}"
+    );
+    let (err, _, sc) = server.call("notebook_check", json!({"path": path, "format": "json"}));
+    assert!(!err);
+    let codes: Vec<&str> = sc["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"execution-count"), "{codes:?}");
+}

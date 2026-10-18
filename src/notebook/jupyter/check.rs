@@ -314,13 +314,17 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
                 format!("cell {index}: code cell is missing \"outputs\""),
             )),
         }
-        // nbformat's schema says `["integer", "null"]` with `minimum: 0`
-        // (3.0 and -1 validate as INVALID), but serde_json coerces
-        // integers beyond u64 to floats, which Python's arbitrary-
-        // precision validator accepts — so any number passes here rather
-        // than risk flagging an exotic-but-valid count.
+        // The same strict nbformat policy as the output-level rule
+        // (is_execution_count): null or a non-negative integer. 3.0 and -1
+        // validate as INVALID in nbformat itself. An integer beyond u64 —
+        // which nbformat's arbitrary-precision validator accepts in the
+        // ORIGINAL file — arrives as a float from serde_json and our own
+        // serializer would re-spell it as float notation that nbformat
+        // rejects, so passing it would promise a validity the next write
+        // breaks; it is flagged like every other exotic number spelling
+        // (the documented boundary, tests/data/exotic_numbers.ipynb).
         match cell.extra.get("execution_count") {
-            Some(Value::Null) | Some(Value::Number(_)) => {}
+            Some(value) if is_execution_count(value) => {}
             Some(_) => findings.push(error(
                 at,
                 "execution-count",
@@ -344,6 +348,60 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
                     ),
                 ));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
+mod tests {
+    use super::check;
+    use crate::notebook::JupyterNotebook;
+
+    /// The `execution-count` findings for a one-cell notebook whose code
+    /// cell carries `execution_count: <count_json>`.
+    fn count_findings(count_json: &str) -> Vec<String> {
+        let content = format!(
+            r#"{{
+ "cells": [
+  {{
+   "cell_type": "code",
+   "execution_count": {count_json},
+   "id": "c0000001",
+   "metadata": {{}},
+   "outputs": [],
+   "source": ["x = 1\n"]
+  }}
+ ],
+ "metadata": {{}},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}}"#
+        );
+        check(&JupyterNotebook::parse(&content).unwrap())
+            .into_iter()
+            .filter(|finding| finding.code == "execution-count")
+            .map(|finding| finding.message)
+            .collect()
+    }
+
+    #[test]
+    fn cell_execution_count_follows_the_nbformat_policy() {
+        // nbformat-valid shapes pass (verified against nbformat 5.11.1).
+        for count in ["null", "0", "3", "18446744073709551615"] {
+            assert!(count_findings(count).is_empty(), "{count} must pass");
+        }
+        // Floats and negatives fail nbformat itself; a beyond-u64 integer
+        // would be re-spelled as float notation our serializer writes and
+        // nbformat rejects — so all of them are flagged before any write
+        // can turn the file invalid.
+        for count in ["3.0", "-1", "18446744073709551616", "\"3\""] {
+            let findings = count_findings(count);
+            assert_eq!(findings.len(), 1, "{count}: {findings:?}");
+            assert!(
+                findings[0].contains("must be an integer or null"),
+                "{count}: {findings:?}"
+            );
         }
     }
 }
