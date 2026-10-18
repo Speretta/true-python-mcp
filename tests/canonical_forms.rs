@@ -100,6 +100,23 @@ fn exotic_numbers_normalize_once_then_are_stable() {
         "{normalized}"
     );
 
+    // Python's `repr` spellings that zmij re-spells: minimal-width exponent
+    // digits, and fixed notation for decimal exponents -5..=15. The fixture
+    // carries the Python forms; the canonical writer emits its own — once,
+    // then stable (the idempotence assert below covers the second write).
+    assert!(
+        normalized.contains("\"python_small_exp\": 1e-6"),
+        "{normalized}"
+    );
+    assert!(
+        normalized.contains("\"python_fixed_band\": 0.00001"),
+        "{normalized}"
+    );
+    assert!(
+        normalized.contains("\"python_fixed_edge\": 1000000000000000.0"),
+        "{normalized}"
+    );
+
     let again = JupyterNotebook::parse(&normalized)
         .unwrap()
         .to_string_canonical();
