@@ -7,9 +7,12 @@
 //! passthrough `extra` values are merged in sorted-key order at emit time,
 //! so serialization never rebuilds a second serde_json DOM.
 //!
-//! Numbers in passthrough data go through serde_json: integers round-trip
-//! exactly, exotic float exponent forms (`1e+30`) may normalize on first
-//! write (`1e30`).
+//! Numbers in passthrough data go through serde_json: integers up to u64
+//! round-trip exactly; integers beyond u64 are read as f64 and re-emitted in
+//! float form (`18446744073709551616` → `1.8446744073709552e+19`); floats
+//! are re-emitted in serde_json's shortest round-trip form, which matches
+//! Python's `repr` for the exponential range (`1e+30` stays, `1e30`
+//! normalizes once). tests/canonical_forms.rs pins this boundary.
 
 use std::collections::BTreeMap;
 
