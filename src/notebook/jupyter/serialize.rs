@@ -9,10 +9,13 @@
 //!
 //! Numbers in passthrough data go through serde_json: integers up to u64
 //! round-trip exactly; integers beyond u64 are read as f64 and re-emitted in
-//! float form (`18446744073709551616` → `1.8446744073709552e+19`); floats
-//! are re-emitted in serde_json's shortest round-trip form, which matches
-//! Python's `repr` for the exponential range (`1e+30` stays, `1e30`
-//! normalizes once). tests/canonical_forms.rs pins this boundary.
+//! float form (`18446744073709551616` → `1.8446744073709552e+19`). Floats
+//! use serde_json's shortest round-trip spelling (zmij): exponent digits are
+//! minimal-width and decimal exponents from -5 to 15 print in fixed
+//! notation. That matches Python's `repr` only for multi-digit exponents
+//! (`1e+30` round-trips verbatim); Python's zero-padded `1e-06` normalizes
+//! to `1e-6`, `1e-05` to `0.00001`, and `1e15` to `1000000000000000.0` —
+//! once, then stable. tests/canonical_forms.rs pins this boundary.
 
 use std::collections::BTreeMap;
 

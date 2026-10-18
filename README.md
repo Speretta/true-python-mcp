@@ -29,7 +29,7 @@ It does two jobs:
   notebooks
 - Byte-exact notebook edits: your diff shows only what you changed
 - Jupyter `.ipynb` and marimo `.py`, detected automatically
-- Revision guard: two writers never overwrite each other
+- Revision guard: stale writes are refused, not silently applied
 - No kernel, no background process, nothing to fight with your editor
 - 12 tools, plus 3 tools for plain Python files with `--file-tools`
 
@@ -115,8 +115,12 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). |
 
-Notebook outputs, execution counts, and metadata stay exactly as they are.
-Only the cell you edit changes.
+Notebook outputs, execution counts, and metadata keep their values, and
+only the cell you edit changes. One honest boundary: a file saved in
+Jupyter's standard layout round-trips byte-for-byte; a file in an unusual
+layout (Windows line endings, two-space indent, exotic number spellings)
+normalizes that layout once, on the first tpmcp write, and is byte-stable
+after that.
 
 ## Safe editing with revisions
 
@@ -128,7 +132,12 @@ causing damage:
 - If the file changed in between, the tool refuses the change and sends the
   new code. Then you read again and retry.
 
-So nobody's work is overwritten by accident.
+So nobody's work is overwritten by accident. The guarantee covers every
+writer that goes through tpmcp: two tpmcp processes (say, two AI clients)
+take a cross-process lock, and each write re-checks the file a moment
+before it lands. An editor outside tpmcp takes no lock; a save landing
+exactly during the final rename is the one window that cannot be closed —
+every longer race is detected and refused.
 
 ## What tpmcp does not do
 

@@ -4,8 +4,12 @@
 //! cloned, out of the parsed document — and
 //! [`JupyterNotebook::to_string_canonical`] writes the exact layout Jupyter
 //! and VS Code produce (see [`serialize`]). Untouched cells round-trip
-//! byte-for-byte, including their original `source` shape; an edited cell is
-//! normalized to canonical lines, which is what nbformat does on every save.
+//! byte-for-byte on files already in that canonical layout, including their
+//! original `source` shape; a file in another layout (CRLF structure,
+//! two-space indent, exotic number spellings) normalizes once on the first
+//! write and is stable afterwards — tests/canonical_forms.rs pins the
+//! boundary. An edited cell is normalized to canonical lines, which is what
+//! nbformat does on every save.
 
 mod check;
 mod serialize;
