@@ -70,18 +70,34 @@ pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
 ///
 /// The bytes are written to a sibling temp file, fsynced, then renamed over
 /// the target, so observers never see a partially written file.
+///
+/// Writes follow symlinks, matching reads: `path` is resolved first and the
+/// rename lands next to the RESOLVED target. Renaming over the symlink
+/// itself would replace the link with a regular file while every read keeps
+/// following the old target — after the first edit the user's real file
+/// (dotfiles/sync setups) would silently stop receiving updates. Hardlinks
+/// cannot be preserved by any rename-based atomic write (the edit lands on a
+/// fresh inode); this matches how Jupyter/nbformat itself saves.
+///
+/// The target's permission bits are copied onto the temp file before the
+/// rename (best-effort), so an edit preserves e.g. 0600. Ownership is NOT
+/// preserved: the rename installs the temp file, owned by the writing user —
+/// if the target had another owner (group-writable directory), the owner
+/// changes. Inherent to atomic-rename writes without privileges.
 pub fn write(path: &Path, content: &str) -> Result<String, Error> {
-    if let Some(parent) = path.parent()
+    let target = resolve_target(path);
+    if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent).map_err(|source| Error::io(parent.to_path_buf(), source))?;
     }
-    let tmp = temp_path(path);
+    let tmp = temp_path(&target);
     let result = (|| -> std::io::Result<()> {
         let mut file = fs::File::create(&tmp)?;
+        preserve_mode(&target, &tmp);
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&tmp, path)
+        fs::rename(&tmp, &target)
     })();
     match result {
         Ok(()) => Ok(revision_of(content.as_bytes())),
@@ -89,6 +105,23 @@ pub fn write(path: &Path, content: &str) -> Result<String, Error> {
             let _ = fs::remove_file(&tmp);
             Err(Error::io(path.to_path_buf(), source))
         }
+    }
+}
+
+/// The real file behind `path`: canonicalize resolves every symlink, so an
+/// edit through a symlinked path renames over the real target (see
+/// [`write`]). Falls back to `path` itself when the file does not exist yet
+/// (create paths): there is nothing to resolve, and the create tools refuse
+/// to replace any existing entry, including symlinks.
+fn resolve_target(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Copy the target's permission bits onto the temp file (best-effort: a
+/// platform that cannot do this must not fail the write itself).
+fn preserve_mode(target: &Path, tmp: &Path) {
+    if let Ok(meta) = fs::metadata(target) {
+        let _ = fs::set_permissions(tmp, meta.permissions());
     }
 }
 
@@ -216,6 +249,45 @@ mod tests {
         let snapshot = read(&path).unwrap();
         assert_eq!(snapshot.content, "print('hi')\n");
         assert_eq!(snapshot.revision, revision);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_follows_symlink_and_keeps_the_link() {
+        let dir = temp_dir("symlink");
+        let target = dir.join("real.txt");
+        write(&target, "first").unwrap();
+        let link = dir.join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        write(&link, "second").unwrap();
+
+        // The link survives and the resolved target received the bytes.
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "second");
+        assert_eq!(read(&link).unwrap().content, "second");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_preserves_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("mode");
+        let path = dir.join("secret.py");
+        write(&path, "x = 1\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        write(&path, "x = 2\n").unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "edit must not widen permissions");
         fs::remove_dir_all(&dir).unwrap();
     }
 
