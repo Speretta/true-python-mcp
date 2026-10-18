@@ -16,13 +16,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use similar::{ChangeTag, TextDiff};
 
-use crate::notebook::{AnyNotebook, Cell, Finding, Notebook, Severity, SourceText};
-use crate::ruff::Diagnostic;
+use crate::notebook::{AnyNotebook, Cell, Notebook, SourceText};
 
+pub mod diagnostics;
 pub mod search;
 
 mod output;
 
+pub use diagnostics::{Lint, diagnostic_line, diagnostics_markdown, finding_line};
 use output::{summarize, write_outputs};
 
 /// Output format for tool results (values documented on each tool param).
@@ -388,63 +389,6 @@ fn logical_line_count(text: &str) -> usize {
     }
     let terminators = text.bytes().filter(|byte| *byte == b'\n').count();
     terminators + usize::from(!text.ends_with('\n'))
-}
-
-/// One lint diagnostic as a markdown line (shared by `ruff_check` and the
-/// `notebook_read` diagnostics view).
-pub fn diagnostic_line(diagnostic: &Diagnostic) -> String {
-    let mut line = String::new();
-    if let Some(cell) = diagnostic.cell {
-        line.push_str(&format!("cell {cell} "));
-    }
-    if let Some(location) = &diagnostic.location {
-        line.push_str(&format!("{}:{} ", location.row, location.column));
-    }
-    line.push_str(&format!(
-        "{} {}",
-        diagnostic.code.as_deref().unwrap_or("-"),
-        diagnostic.message
-    ));
-    if let Some(fix) = &diagnostic.fix {
-        line.push_str(&format!(" [fixable: {}]", fix.applicability));
-    }
-    line
-}
-
-/// One validation finding as a markdown bullet (shared by `notebook_check`
-/// and the `notebook_read` diagnostics view).
-pub fn finding_line(finding: &Finding) -> String {
-    let severity = match finding.severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-        Severity::Info => "info",
-    };
-    let cell = finding
-        .cell
-        .map_or(String::new(), |cell| format!(" cell {cell}"));
-    format!("- {severity}{cell} `{}`: {}", finding.code, finding.message)
-}
-
-/// The diagnostics section `notebook_read` appends when validation was
-/// requested: `findings` are structural (notebook_check's list); `lint` is
-/// `Some` only for `check+lint`.
-pub fn diagnostics_markdown(findings: &[Finding], lint: Option<&[Diagnostic]>) -> String {
-    let mut out = format!("\ndiagnostics: {} finding(s)", findings.len());
-    if let Some(lint) = lint {
-        let _ = write!(out, ", {} lint issue(s)", lint.len());
-    }
-    out.push('\n');
-    if findings.is_empty() && lint.unwrap_or(&[]).is_empty() {
-        out.push_str("no findings: the notebook is valid\n");
-        return out;
-    }
-    for finding in findings {
-        let _ = writeln!(out, "\n{}", finding_line(finding));
-    }
-    for diagnostic in lint.unwrap_or(&[]) {
-        let _ = writeln!(out, "\n- lint {}", diagnostic_line(diagnostic));
-    }
-    out
 }
 
 #[cfg(test)]

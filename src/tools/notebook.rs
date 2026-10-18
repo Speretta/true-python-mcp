@@ -17,9 +17,12 @@ use crate::error::Error;
 use crate::fs;
 use crate::notebook::{self, AnyNotebook, Format as NotebookFormat, Notebook};
 use crate::render::{self, Detail, Format, Window, WithOutputs};
-use crate::ruff::{self, SafeFixes};
 use crate::server::Tpmcp;
 use crate::tools::{CellType, blocking, mutation_result, read_notebook, respond};
+
+mod read;
+
+use read::{ReadView, run_validation, search_matches};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NotebookReadArgs {
@@ -49,8 +52,9 @@ pub struct NotebookReadArgs {
     pub limit: Option<usize>,
     /// Validation to attach: "none" (default), "check" (notebook_check
     /// structural findings), or "check+lint" (also ruff lint diagnostics).
-    /// Findings carry 0-based cell indexes. Use notebook_check alone to
-    /// validate without reading content.
+    /// Findings carry 0-based cell indexes. If ruff cannot lint the file,
+    /// the read still succeeds and reports the reason instead of lint
+    /// issues. Use notebook_check alone to validate without reading content.
     #[serde(default)]
     pub diagnostics: DiagnosticsLevel,
     /// Result format, "markdown" (default) or "json".
@@ -125,85 +129,19 @@ impl Tpmcp {
             let (snapshot, notebook) = read_notebook(&args.path)?;
             let fs::Snapshot { content, revision } = snapshot;
             let path = args.path.display().to_string();
-
-            // Optional validation runs on the same snapshot, outside any
-            // lock (reads never lock): the revision reported is the one
-            // these findings were computed from. `content` moves into ruff
-            // only for check+lint — no second read, no clone.
-            let validation = match args.diagnostics {
-                DiagnosticsLevel::None => None,
-                DiagnosticsLevel::Check => Some((notebook.check(), None)),
-                DiagnosticsLevel::CheckLint => {
-                    let outcome = ruff::check(
-                        &args.path,
-                        SafeFixes::ReportOnly,
-                        fs::Snapshot {
-                            content,
-                            revision: revision.clone(),
-                        },
-                    )?;
-                    Some((notebook.check(), Some(outcome.diagnostics)))
-                }
+            let found = search_matches(&args, &notebook)?;
+            let validation = run_validation(&args, &notebook, content, &revision);
+            let view = ReadView {
+                path: &path,
+                revision: &revision,
+                notebook: &notebook,
+                detail: args.detail,
+                with_outputs: args.with_outputs,
+                window: Window::resolve(notebook.cells().len(), args.start, args.limit),
+                found: found.as_ref(),
+                validation: validation.as_ref(),
             };
-
-            let found = match &args.query {
-                Some(query) if query.trim().is_empty() => {
-                    return Err(Error::invalid_input("query must not be empty"));
-                }
-                Some(query) => Some(render::search::search(
-                    notebook.cells(),
-                    query,
-                    args.start,
-                    args.limit,
-                )),
-                None => None,
-            };
-            let window = Window::resolve(notebook.cells().len(), args.start, args.limit);
-
-            Ok(respond(
-                args.format,
-                || {
-                    let mut out = match &found {
-                        Some(found) => {
-                            render::search::query_markdown(&path, &revision, &notebook, found)
-                        }
-                        None => render::notebook_markdown(
-                            &path,
-                            &revision,
-                            &notebook,
-                            args.detail,
-                            args.with_outputs,
-                            window,
-                        ),
-                    };
-                    if let Some((findings, lint)) = &validation {
-                        out.push_str(&render::diagnostics_markdown(findings, lint.as_deref()));
-                    }
-                    out
-                },
-                || {
-                    let mut value = match &found {
-                        Some(found) => {
-                            render::search::query_json(&path, &revision, &notebook, found)
-                        }
-                        None => render::notebook_json(
-                            &path,
-                            &revision,
-                            &notebook,
-                            args.detail,
-                            args.with_outputs,
-                            window,
-                        ),
-                    };
-                    if let Some((findings, lint)) = &validation {
-                        value["findings"] = json!(findings);
-                        if let Some(lint) = lint {
-                            value["lint"] = json!(lint);
-                        }
-                    }
-                    value
-                },
-            ))
+            Ok(respond(args.format, || view.markdown(), || view.json()))
         })
         .await
     }
