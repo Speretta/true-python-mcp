@@ -99,8 +99,8 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 
 | Tool | What it does |
 | --- | --- |
-| `notebook_read` | Shows the cells of a notebook. |
-| `notebook_create` | Creates a new notebook (`.ipynb` or marimo `.py`). |
+| `notebook_read` | Shows the cells of a notebook. Can list them as an outline, search their text, and attach validation and lint findings. |
+| `notebook_create` | Creates a new notebook (`.ipynb` or marimo `.py`), or converts an existing one (`from_path`; `.md` exports to markdown). |
 | `cell_edit` | Replaces a piece of text inside one cell. |
 | `cell_set_source` | Replaces a whole cell, or a line range in it. |
 | `cell_insert` | Adds a new cell. |

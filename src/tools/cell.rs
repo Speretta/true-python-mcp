@@ -240,8 +240,10 @@ impl Tpmcp {
     }
 
     #[tool(
-        description = "Insert a new cell into a notebook at a 0-based index (default: append \
-                       at the end). Returns the new revision."
+        description = "Insert a new cell of type cell_type (code, markdown, raw) into a \
+                       notebook at a 0-based index; omit index to append at the end. source \
+                       may be empty. Returns the new revision.",
+        annotations(destructive_hint = false)
     )]
     async fn cell_insert(
         &self,
@@ -265,7 +267,13 @@ impl Tpmcp {
         .await
     }
 
-    #[tool(description = "Delete a notebook cell by 0-based index. Returns the new revision.")]
+    #[tool(
+        description = "Delete a notebook cell by 0-based index. The cell's source, outputs and \
+                       metadata are discarded and every later cell shifts down one index. \
+                       Returns the new revision. When unsure, re-read the notebook first to \
+                       confirm the index.",
+        annotations(destructive_hint = true)
+    )]
     async fn cell_delete(
         &self,
         Parameters(args): Parameters<CellRefArgs>,
@@ -341,7 +349,8 @@ impl Tpmcp {
     #[tool(
         description = "Clear outputs of one code cell, or of every code cell when `cell` is \
                        omitted: outputs become [] and execution_count becomes null per the \
-                       nbformat spec. Returns the new revision."
+                       nbformat spec. Returns the new revision.",
+        annotations(destructive_hint = true)
     )]
     async fn cell_clear_outputs(
         &self,

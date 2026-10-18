@@ -161,7 +161,8 @@ impl Tpmcp {
                        findings with severity error/warning/info; no findings means the \
                        notebook is clean. Use after edits or merges before trusting a file. To \
                        get findings alongside the notebook content in one call, use \
-                       notebook_read with its diagnostics parameter."
+                       notebook_read with its diagnostics parameter.",
+        annotations(read_only_hint = true)
     )]
     async fn notebook_check(
         &self,

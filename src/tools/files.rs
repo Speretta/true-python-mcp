@@ -77,7 +77,8 @@ impl Tpmcp {
     #[tool(
         description = "Read a Python/text file with line numbers and its revision. Optional \
                        line_start/line_end select a 1-based inclusive range. Prefer the host's \
-                       native read tool when available."
+                       native read tool when available.",
+        annotations(read_only_hint = true)
     )]
     async fn py_read(
         &self,
