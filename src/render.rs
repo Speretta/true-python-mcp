@@ -275,13 +275,17 @@ pub fn notebook_json(
 }
 
 fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {
+    // Bind the concatenated source once: both `line_count` and `"source"`
+    // derive from it (concatenating per cell is the expensive part).
+    let source = cell.source_text();
+    let line_count = logical_line_count(&source);
     let mut value = json!({
         "index": index,
         "cell_type": cell.cell_type,
         "id": cell.extra.get("id").and_then(Value::as_str),
         "execution_count": cell.extra.get("execution_count"),
-        "line_count": crate::fs::logical_lines(&cell.source_text()).len(),
-        "source": cell.source_text(),
+        "line_count": line_count,
+        "source": source,
     });
     // Outputs render for code cells only; `None` never reaches the JSON.
     let cell_outputs = || {
@@ -301,4 +305,37 @@ fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {
         _ => {}
     }
     value
+}
+
+/// Number of lines [`crate::fs::logical_lines`] would yield, in one byte
+/// scan and without allocating the line slice: every `'\n'` terminates one
+/// line, and a non-empty text not ending in `'\n'` has one unterminated
+/// final line. Empty text has no lines.
+fn logical_line_count(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let terminators = text.bytes().filter(|byte| *byte == b'\n').count();
+    terminators + usize::from(!text.ends_with('\n'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The allocation-free counter must agree with the slice-building
+    /// original on every edge shape: empty text, unterminated final line,
+    /// bare and doubled terminators, CRLF.
+    #[test]
+    fn logical_line_count_matches_logical_lines() {
+        for text in [
+            "", "a", "a\n", "a\nb", "a\r\nb\n", "\n", "\n\n", "\r", "\r\n", "a\n\nb\n", "a\r\nb",
+        ] {
+            assert_eq!(
+                logical_line_count(text),
+                crate::fs::logical_lines(text).len(),
+                "line count mismatch for {text:?}"
+            );
+        }
+    }
 }
