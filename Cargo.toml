@@ -6,6 +6,11 @@ description = "MCP server for Python: byte-exact Jupyter/marimo notebook editing
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Speretta/true-python-mcp"
 readme = "README.md"
+keywords = ["mcp", "jupyter", "marimo", "notebook", "ruff"]
+categories = ["development-tools", "command-line-utilities"]
+# Repo machinery that crate consumers do not need; everything the README
+# and COMPARISON.md quote (examples, licenses, changelog) stays in.
+exclude = [".githooks", ".github", "bench", "scripts"]
 rust-version = "1.97"
 
 [dependencies]
