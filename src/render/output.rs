@@ -24,9 +24,7 @@ pub(super) fn write_outputs(
     if matches!(with_outputs, WithOutputs::None) || !cell.is_code() {
         return;
     }
-    let Some(outputs) = cell.extra.get("outputs").and_then(Value::as_array) else {
-        return;
-    };
+    let outputs = cell.outputs();
     if outputs.is_empty() {
         return;
     }

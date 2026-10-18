@@ -17,7 +17,8 @@ pub(super) mod scope;
 
 use std::borrow::Cow;
 
-use super::{Cell, Finding, Notebook, SourceText, check_index};
+use super::{Cell, Finding, Notebook, check_index};
+use crate::error::Error;
 
 /// Version stamped into newly created marimo files. marimo never validates it
 /// and refreshes it on the next save.
@@ -213,11 +214,7 @@ impl MarimoNotebook {
         let indent = "    ".to_string();
         let params = if self.setup_defines("mo") { "" } else { "mo" };
         (
-            Cell {
-                cell_type: "markdown".to_string(),
-                source: SourceText::Lines(SourceText::split_canonical(source)),
-                extra: Default::default(),
-            },
+            Cell::from_text("markdown", source),
             CellMeta {
                 kind: Kind::AppCell,
                 block: String::new(),
@@ -247,20 +244,22 @@ impl Notebook for MarimoNotebook {
         &self.cells
     }
 
-    fn set_source(&mut self, index: usize, text: &str) -> Result<(), String> {
+    fn set_source(&mut self, index: usize, text: &str) -> Result<(), Error> {
         check_index(self.cells.len(), index)?;
         if !self.metas[index].kind.editable() {
-            return Err(if matches!(self.metas[index].kind, Kind::Broken) {
-                format!(
-                    "cell {index} has a syntax error and is read-only; \
+            return Err(Error::invalid_input(
+                if matches!(self.metas[index].kind, Kind::Broken) {
+                    format!(
+                        "cell {index} has a syntax error and is read-only; \
                      repair its Python syntax to edit it here"
-                )
-            } else {
-                format!(
-                    "cell {index} is a marimo {} block; editing it is not supported",
-                    self.metas[index].kind.label()
-                )
-            });
+                    )
+                } else {
+                    format!(
+                        "cell {index} is a marimo {} block; editing it is not supported",
+                        self.metas[index].kind.label()
+                    )
+                },
+            ));
         }
         if self.metas[index].md.is_none() {
             // Python bodies remember which lines lacked the fixed indent; the
@@ -279,15 +278,17 @@ impl Notebook for MarimoNotebook {
         Ok(())
     }
 
-    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), String> {
+    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), Error> {
         if !matches!(cell_type, "code" | "markdown") {
-            return Err(format!("marimo notebooks do not support {cell_type} cells"));
+            return Err(Error::invalid_input(format!(
+                "marimo notebooks do not support {cell_type} cells"
+            )));
         }
         if index > self.cells.len() {
-            return Err(format!(
+            return Err(Error::invalid_input(format!(
                 "insert index {index} out of bounds: notebook has {} cells",
                 self.cells.len()
-            ));
+            )));
         }
         let (cell, meta) = if cell_type == "markdown" {
             self.new_markdown_cell(source)
@@ -298,34 +299,34 @@ impl Notebook for MarimoNotebook {
         Ok(())
     }
 
-    fn delete(&mut self, index: usize) -> Result<Cell, String> {
+    fn delete(&mut self, index: usize) -> Result<Cell, Error> {
         check_index(self.cells.len(), index)?;
         Ok(self.remove_cell(index).0)
     }
 
-    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), String> {
+    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), Error> {
         check_index(self.cells.len(), from)?;
         if from == to {
             return Ok(());
         }
         let (cell, meta) = self.remove_cell(from);
         if to > self.cells.len() {
-            return Err(format!(
+            return Err(Error::invalid_input(format!(
                 "destination index {to} out of bounds: notebook has {} cells",
                 self.cells.len()
-            ));
+            )));
         }
         self.insert_cell(to, cell, meta);
         Ok(())
     }
 
-    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), String> {
+    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), Error> {
         check_index(self.cells.len(), index)?;
         if !matches!(self.metas[index].kind, Kind::AppCell) {
-            return Err(format!(
+            return Err(Error::invalid_input(format!(
                 "cell {index} is a marimo {} block; its type cannot be changed",
                 self.metas[index].kind.label()
-            ));
+            )));
         }
         match cell_type {
             "code" => {
@@ -356,16 +357,18 @@ impl Notebook for MarimoNotebook {
                 }
             }
             other => {
-                return Err(format!(
+                return Err(Error::invalid_input(format!(
                     "marimo cells are code or markdown; cannot convert to {other}"
-                ));
+                )));
             }
         }
         Ok(())
     }
 
-    fn clear_outputs(&mut self, _index: Option<usize>) -> Result<Vec<usize>, String> {
-        Err("marimo notebooks do not store outputs".to_string())
+    fn clear_outputs(&mut self, _index: Option<usize>) -> Result<Vec<usize>, Error> {
+        Err(Error::invalid_input(
+            "marimo notebooks do not store outputs",
+        ))
     }
 
     fn check(&self) -> Vec<Finding> {
@@ -407,11 +410,7 @@ impl Notebook for MarimoNotebook {
 fn new_app_cell(source: &str) -> (Cell, CellMeta) {
     let indent = "    ".to_string();
     (
-        Cell {
-            cell_type: "code".to_string(),
-            source: SourceText::Lines(SourceText::split_canonical(source)),
-            extra: Default::default(),
-        },
+        Cell::from_text("code", source),
         CellMeta {
             kind: Kind::AppCell,
             block: String::new(),

@@ -12,7 +12,7 @@ use ruff_python_parser::{Parsed, parse_module};
 use ruff_text_size::Ranged;
 
 use super::{CellMeta, Kind, MarimoNotebook, Segment};
-use crate::notebook::{Cell, SourceText};
+use crate::notebook::Cell;
 
 /// Cheap marker check mirroring marimo's own detection: both `import marimo`
 /// and `marimo.App` must appear. Structural validation happens in [`parse`].
@@ -279,11 +279,7 @@ pub(super) fn app_cell(
             }
         };
     (
-        Cell {
-            cell_type,
-            source: SourceText::Lines(SourceText::split_canonical(&source)),
-            extra: Default::default(),
-        },
+        Cell::from_text(cell_type, &source),
         CellMeta {
             kind: Kind::AppCell,
             block: src[start..end].to_string(),
@@ -336,9 +332,8 @@ pub(super) fn setup_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -> (C
     let (source, indent_memory) = super::indent::strip_fixed_indent(&src[header_end..end], &indent);
     (
         Cell {
-            cell_type: "code".to_string(),
-            source: SourceText::Lines(SourceText::split_canonical(&source)),
             extra: marimo_extra("setup", None),
+            ..Cell::from_text("code", &source)
         },
         CellMeta {
             kind: Kind::Setup,
@@ -364,9 +359,8 @@ pub(super) fn read_only_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -
     let block = src[start..end].to_string();
     (
         Cell {
-            cell_type: "code".to_string(),
-            source: SourceText::Lines(SourceText::split_canonical(&block)),
             extra: marimo_extra(kind.label(), None),
+            ..Cell::from_text("code", &block)
         },
         CellMeta {
             kind,

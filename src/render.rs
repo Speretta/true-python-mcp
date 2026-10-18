@@ -174,22 +174,18 @@ fn write_cell_markdown(
 ) {
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
     // marimo special blocks (setup/function/class/broken) get a kind label.
-    if let Some(kind) = cell
-        .extra
-        .get("marimo")
-        .and_then(|marimo| marimo.get("kind"))
-        .and_then(Value::as_str)
+    if let Some(kind) = cell.marimo_kind()
         && kind != "cell"
     {
         let _ = write!(out, " ({kind})");
     }
-    if let Some(count) = cell.extra.get("execution_count").and_then(Value::as_u64) {
+    if let Some(count) = cell.execution_count() {
         let _ = write!(out, " · exec {count}");
     }
     let source = cell.source_text();
     let lines = crate::fs::logical_lines(&source);
     let _ = write!(out, " · {} lines", lines.len());
-    if let Some(id) = cell.extra.get("id").and_then(Value::as_str) {
+    if let Some(id) = cell.id() {
         let _ = write!(out, " · id {id}");
     }
     out.push('\n');
@@ -282,19 +278,13 @@ fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {
     let mut value = json!({
         "index": index,
         "cell_type": cell.cell_type,
-        "id": cell.extra.get("id").and_then(Value::as_str),
+        "id": cell.id(),
         "execution_count": cell.extra.get("execution_count"),
         "line_count": line_count,
         "source": source,
     });
     // Outputs render for code cells only; `None` never reaches the JSON.
-    let cell_outputs = || {
-        cell.extra
-            .get("outputs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-    };
+    let cell_outputs = || cell.outputs().to_vec();
     match with_outputs {
         WithOutputs::Summary if cell.is_code() => {
             value["outputs"] = Value::String(summarize(&cell_outputs()));

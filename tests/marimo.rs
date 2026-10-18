@@ -167,23 +167,31 @@ fn read_only_and_unsupported_operations_error_clearly() {
         })
         .expect("a function cell exists");
     let error = nb.set_source(function_index, "x = 1").unwrap_err();
-    assert!(error.contains("not supported"), "{error}");
+    assert!(error.to_string().contains("not supported"), "{error}");
 
-    assert!(nb.clear_outputs(None).unwrap_err().contains("outputs"));
+    assert!(
+        nb.clear_outputs(None)
+            .unwrap_err()
+            .to_string()
+            .contains("outputs")
+    );
     // Read-only blocks cannot change type; app cells cannot become "raw".
     assert!(
         nb.set_type(function_index, "markdown")
             .unwrap_err()
+            .to_string()
             .contains("cannot be changed")
     );
     assert!(
         nb.set_type(1, "raw")
             .unwrap_err()
+            .to_string()
             .contains("cannot convert")
     );
     assert!(
         nb.insert(0, "raw", "x")
             .unwrap_err()
+            .to_string()
             .contains("do not support raw")
     );
 }
@@ -217,7 +225,7 @@ fn broken_file_parses_partially() {
 
     // The broken cell is read-only with a helpful message.
     let error = nb.set_source(1, "x = 2").unwrap_err();
-    assert!(error.contains("syntax error"), "{error}");
+    assert!(error.to_string().contains("syntax error"), "{error}");
 
     // Intact cells are still editable.
     nb.set_source(0, "x = 100").unwrap();
@@ -274,7 +282,7 @@ fn marimo_edit_preserves_column_zero_string_lines() {
 
     // Re-setting cell 1's source to itself must not move a single byte: the
     // regenerated block replays the recorded per-line indent origins.
-    let unchanged = nb.cells()[1].source_text();
+    let unchanged = nb.cells()[1].source_text().into_owned();
     nb.set_source(1, &unchanged).unwrap();
     let out = nb.serialize();
 

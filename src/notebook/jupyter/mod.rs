@@ -21,6 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{Map, Value};
 
 use super::{Cell, Finding, Notebook, SourceText, check_index};
+use crate::error::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct JupyterNotebook {
@@ -105,9 +106,8 @@ impl JupyterNotebook {
             extra.insert("id".into(), Value::String(new_cell_id()));
         }
         Cell {
-            cell_type: cell_type.to_string(),
-            source: SourceText::Lines(SourceText::split_canonical(source_text)),
             extra,
+            ..Cell::from_text(cell_type, source_text)
         }
     }
 }
@@ -121,18 +121,18 @@ impl Notebook for JupyterNotebook {
         &self.cells
     }
 
-    fn set_source(&mut self, index: usize, text: &str) -> Result<(), String> {
+    fn set_source(&mut self, index: usize, text: &str) -> Result<(), Error> {
         check_index(self.cells.len(), index)?;
         self.cells[index].set_source_text(text);
         Ok(())
     }
 
-    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), String> {
+    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), Error> {
         if index > self.cells.len() {
-            return Err(format!(
+            return Err(Error::invalid_input(format!(
                 "insert index {index} out of bounds: notebook has {} cells",
                 self.cells.len()
-            ));
+            )));
         }
         let with_id = self.nbformat_minor() >= 5;
         self.cells
@@ -140,25 +140,25 @@ impl Notebook for JupyterNotebook {
         Ok(())
     }
 
-    fn delete(&mut self, index: usize) -> Result<Cell, String> {
+    fn delete(&mut self, index: usize) -> Result<Cell, Error> {
         check_index(self.cells.len(), index)?;
         Ok(self.cells.remove(index))
     }
 
-    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), String> {
+    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), Error> {
         check_index(self.cells.len(), from)?;
         if to >= self.cells.len() {
-            return Err(format!(
+            return Err(Error::invalid_input(format!(
                 "destination index {to} out of bounds: notebook has {} cells",
                 self.cells.len()
-            ));
+            )));
         }
         let cell = self.cells.remove(from);
         self.cells.insert(to, cell);
         Ok(())
     }
 
-    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), String> {
+    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), Error> {
         check_index(self.cells.len(), index)?;
         let cell = &mut self.cells[index];
         let was_code = cell.is_code();
@@ -181,15 +181,15 @@ impl Notebook for JupyterNotebook {
         Ok(())
     }
 
-    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, String> {
+    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, Error> {
         match index {
             Some(index) => {
                 check_index(self.cells.len(), index)?;
                 if !self.cells[index].is_code() {
-                    return Err(format!(
+                    return Err(Error::invalid_input(format!(
                         "cell {index} is {}, only code cells have outputs",
                         self.cells[index].cell_type
-                    ));
+                    )));
                 }
                 clear_cell(&mut self.cells[index]);
                 Ok(vec![index])

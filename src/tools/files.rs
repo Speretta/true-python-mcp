@@ -142,8 +142,8 @@ impl Tpmcp {
                 format!("{verb} {}", args.path.display()),
                 &args.path,
                 &new_revision,
-                None,
-                json!({}),
+                || None,
+                || json!({}),
             ))
         })
         .await
@@ -181,8 +181,8 @@ impl Tpmcp {
                 format!("edited {}", args.path.display()),
                 &args.path,
                 &new_revision,
-                Some(format!("```diff\n{diff}```")),
-                json!({"diff": diff}),
+                || Some(format!("```diff\n{diff}```")),
+                || json!({"diff": diff.as_str()}),
             ))
         })
         .await

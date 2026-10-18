@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::fs;
-use crate::notebook::{Cell, Notebook, SourceText};
+use crate::notebook::{Cell, Notebook};
 use crate::render::{self, Detail, Format, WithOutputs};
 use crate::server::Tpmcp;
 use crate::tools::{
@@ -161,18 +161,19 @@ impl Tpmcp {
                     args.replace_all,
                     &format!("cell {}", args.cell),
                 )?;
-                notebook
-                    .set_source(args.cell, &updated)
-                    .map_err(Error::invalid_input)?;
-                Ok(render::unified_diff(&source, &updated))
+                // Render the diff before the mutation: `source` borrows the
+                // notebook, and the write needs it mutably.
+                let diff = render::unified_diff(&source, &updated);
+                notebook.set_source(args.cell, &updated)?;
+                Ok(diff)
             })?;
             Ok(mutation_result(
                 args.format,
                 format!("edited cell {}", args.cell),
                 &args.path,
                 &new_revision,
-                Some(format!("```diff\n{diff}```")),
-                json!({"cell": args.cell, "diff": diff}),
+                || Some(format!("```diff\n{diff}```")),
+                || json!({"cell": args.cell, "diff": diff.as_str()}),
             ))
         })
         .await
@@ -213,30 +214,26 @@ impl Tpmcp {
                             ));
                         }
                     };
-                    notebook
-                        .set_source(args.cell, &updated)
-                        .map_err(Error::invalid_input)?;
+                    notebook.set_source(args.cell, &updated)?;
                     let cell_type = notebook.cells()[args.cell].cell_type.clone();
                     Ok((cell_type, updated))
                 })?;
             let line_count = fs::logical_lines(&source).len();
-            let preview = Cell {
-                cell_type,
-                source: SourceText::Lines(SourceText::split_canonical(&source)),
-                extra: Default::default(),
-            };
+            let preview = Cell::from_text(cell_type, &source);
             Ok(mutation_result(
                 args.format,
                 format!("updated source of cell {}", args.cell),
                 &args.path,
                 &new_revision,
-                Some(render::cell_markdown(
-                    args.cell,
-                    &preview,
-                    Detail::Full,
-                    WithOutputs::None,
-                )),
-                json!({"cell": args.cell, "line_count": line_count, "source": source}),
+                || {
+                    Some(render::cell_markdown(
+                        args.cell,
+                        &preview,
+                        Detail::Full,
+                        WithOutputs::None,
+                    ))
+                },
+                || json!({"cell": args.cell, "line_count": line_count, "source": source.as_str()}),
             ))
         })
         .await
@@ -253,9 +250,7 @@ impl Tpmcp {
         blocking(move || {
             let (index, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
                 let index = args.index.unwrap_or(notebook.cells().len());
-                notebook
-                    .insert(index, args.cell_type.as_str(), &args.source)
-                    .map_err(Error::invalid_input)?;
+                notebook.insert(index, args.cell_type.as_str(), &args.source)?;
                 Ok(index)
             })?;
             Ok(mutation_result(
@@ -263,8 +258,8 @@ impl Tpmcp {
                 format!("inserted {} cell at index {index}", args.cell_type.as_str()),
                 &args.path,
                 &new_revision,
-                None,
-                json!({"index": index, "cell_type": args.cell_type.as_str()}),
+                || None,
+                || json!({"index": index, "cell_type": args.cell_type.as_str()}),
             ))
         })
         .await
@@ -277,15 +272,15 @@ impl Tpmcp {
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
             let (deleted, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
-                notebook.delete(args.cell).map_err(Error::invalid_input)
+                notebook.delete(args.cell)
             })?;
             Ok(mutation_result(
                 args.format,
                 format!("deleted {} cell {}", deleted.cell_type, args.cell),
                 &args.path,
                 &new_revision,
-                None,
-                json!({"cell": args.cell, "deleted_type": deleted.cell_type}),
+                || None,
+                || json!({"cell": args.cell, "deleted_type": deleted.cell_type}),
             ))
         })
         .await
@@ -301,17 +296,15 @@ impl Tpmcp {
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
             let (_, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
-                notebook
-                    .move_cell(args.from, args.to)
-                    .map_err(Error::invalid_input)
+                notebook.move_cell(args.from, args.to)
             })?;
             Ok(mutation_result(
                 args.format,
                 format!("moved cell {} to index {}", args.from, args.to),
                 &args.path,
                 &new_revision,
-                None,
-                json!({"from": args.from, "to": args.to}),
+                || None,
+                || json!({"from": args.from, "to": args.to}),
             ))
         })
         .await
@@ -331,17 +324,15 @@ impl Tpmcp {
         blocking(move || {
             let new_type = args.cell_type.as_str();
             let (_, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
-                notebook
-                    .set_type(args.cell, new_type)
-                    .map_err(Error::invalid_input)
+                notebook.set_type(args.cell, new_type)
             })?;
             Ok(mutation_result(
                 args.format,
                 format!("cell {} is now {new_type}", args.cell),
                 &args.path,
                 &new_revision,
-                None,
-                json!({"cell": args.cell, "cell_type": new_type}),
+                || None,
+                || json!({"cell": args.cell, "cell_type": new_type}),
             ))
         })
         .await
@@ -358,9 +349,7 @@ impl Tpmcp {
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
             let (cleared, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
-                notebook
-                    .clear_outputs(args.cell)
-                    .map_err(Error::invalid_input)
+                notebook.clear_outputs(args.cell)
             })?;
             let summary = match args.cell {
                 Some(index) => format!("cleared outputs of cell {index}"),
@@ -371,8 +360,8 @@ impl Tpmcp {
                 summary,
                 &args.path,
                 &new_revision,
-                None,
-                json!({"cleared_cells": cleared}),
+                || None,
+                || json!({"cleared_cells": cleared}),
             ))
         })
         .await

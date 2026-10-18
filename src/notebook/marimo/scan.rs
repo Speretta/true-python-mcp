@@ -13,7 +13,7 @@ use ruff_text_size::Ranged;
 
 use super::parse::{Builder, Top, app_cell, classify, marimo_extra, read_only_cell, setup_cell};
 use super::{CellMeta, Kind, MarimoNotebook};
-use crate::notebook::{Cell, SourceText};
+use crate::notebook::Cell;
 
 #[derive(Clone, Copy)]
 enum Region {
@@ -96,9 +96,8 @@ fn broken_cell(text: &str) -> (Cell, CellMeta) {
     let display = text.trim_end_matches(['\n', '\r', ' ', '\t']);
     (
         Cell {
-            cell_type: "code".to_string(),
-            source: SourceText::Lines(SourceText::split_canonical(display)),
             extra: marimo_extra("broken", None),
+            ..Cell::from_text("code", display)
         },
         CellMeta {
             kind: Kind::Broken,

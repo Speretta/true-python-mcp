@@ -16,10 +16,13 @@ pub use any::AnyNotebook;
 pub use jupyter::JupyterNotebook;
 pub use marimo::MarimoNotebook;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::error::Error;
 
 /// One notebook cell. `extra` carries the format-specific fields verbatim
 /// (Jupyter: `id`/`metadata`/`outputs`/`execution_count`; marimo: its own
@@ -32,6 +35,16 @@ pub struct Cell {
 }
 
 impl Cell {
+    /// A cell of `cell_type` whose source is the canonical line split of
+    /// `text`, with no format extras.
+    pub fn from_text(cell_type: impl Into<String>, text: &str) -> Self {
+        Self {
+            cell_type: cell_type.into(),
+            source: SourceText::Lines(SourceText::split_canonical(text)),
+            extra: BTreeMap::new(),
+        }
+    }
+
     pub fn is_code(&self) -> bool {
         self.cell_type == "code"
     }
@@ -40,13 +53,41 @@ impl Cell {
         self.cell_type == "markdown"
     }
 
-    pub fn source_text(&self) -> String {
+    /// The cell's full source text (see [`SourceText::text`]).
+    pub fn source_text(&self) -> Cow<'_, str> {
         self.source.text()
     }
 
     /// Replace the source, normalizing it to canonical lines.
     pub fn set_source_text(&mut self, text: &str) {
         self.source = SourceText::Lines(SourceText::split_canonical(text));
+    }
+
+    /// Jupyter cell id (nbformat 4.5+), when present.
+    pub fn id(&self) -> Option<&str> {
+        self.extra.get("id").and_then(Value::as_str)
+    }
+
+    /// Jupyter execution count; `None` when absent or null (never run).
+    pub fn execution_count(&self) -> Option<u64> {
+        self.extra.get("execution_count").and_then(Value::as_u64)
+    }
+
+    /// Jupyter cell outputs; empty for non-code cells and for marimo.
+    pub fn outputs(&self) -> &[Value] {
+        self.extra
+            .get("outputs")
+            .and_then(Value::as_array)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// marimo block kind (`cell`, `setup`, `function`, `class`, `unparsable`,
+    /// `broken`); `None` for Jupyter cells.
+    pub fn marimo_kind(&self) -> Option<&str> {
+        self.extra
+            .get("marimo")
+            .and_then(|marimo| marimo.get("kind"))
+            .and_then(Value::as_str)
     }
 }
 
@@ -59,28 +100,19 @@ pub enum SourceText {
 }
 
 impl SourceText {
-    pub fn text(&self) -> String {
+    /// The full source text: borrowed when stored as a single string,
+    /// concatenated when stored as lines.
+    pub fn text(&self) -> Cow<'_, str> {
         match self {
-            Self::Str(text) => text.clone(),
-            Self::Lines(lines) => lines.concat(),
+            Self::Str(text) => Cow::Borrowed(text),
+            Self::Lines(lines) => Cow::Owned(lines.concat()),
         }
     }
 
     /// Split after every `\n` (CRLF stays attached to its line), dropping a
     /// trailing empty chunk — nbformat's canonical line form.
     pub fn split_canonical(text: &str) -> Vec<String> {
-        let mut lines = Vec::new();
-        let mut start = 0;
-        for (index, byte) in text.bytes().enumerate() {
-            if byte == b'\n' {
-                lines.push(text[start..=index].to_string());
-                start = index + 1;
-            }
-        }
-        if start < text.len() {
-            lines.push(text[start..].to_string());
-        }
-        lines
+        text.split_inclusive('\n').map(String::from).collect()
     }
 }
 
@@ -120,28 +152,28 @@ pub struct Finding {
 }
 
 /// A parsed notebook document. All mutations go through these operations so
-/// each format keeps its byte-exactness guarantees; errors are user-facing
-/// messages that tools surface as invalid-input.
+/// each format keeps its byte-exactness guarantees; mutation failures are
+/// [`Error::InvalidInput`] carrying the user-facing message.
 pub trait Notebook {
     /// Short display label, e.g. `nbformat 4.5`.
     fn format_label(&self) -> String;
 
     fn cells(&self) -> &[Cell];
 
-    fn set_source(&mut self, index: usize, text: &str) -> Result<(), String>;
+    fn set_source(&mut self, index: usize, text: &str) -> Result<(), Error>;
 
-    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), String>;
+    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), Error>;
 
-    fn delete(&mut self, index: usize) -> Result<Cell, String>;
+    fn delete(&mut self, index: usize) -> Result<Cell, Error>;
 
     /// Move a cell; `to` is interpreted after removal.
-    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), String>;
+    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), Error>;
 
-    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), String>;
+    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), Error>;
 
     /// Clear outputs of one cell or (with `None`) every code cell;
     /// returns the indexes of the cleared cells.
-    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, String>;
+    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, Error>;
 
     /// Byte-exact serialization: regions no operation touched reproduce the
     /// original bytes.
@@ -182,11 +214,11 @@ pub fn format_from_extension(path: &std::path::Path) -> Option<Format> {
     }
 }
 
-pub fn check_index(len: usize, index: usize) -> Result<(), String> {
+pub fn check_index(len: usize, index: usize) -> Result<(), Error> {
     if index >= len {
-        return Err(format!(
+        return Err(Error::invalid_input(format!(
             "cell index {index} out of bounds: notebook has {len} cells (0-based)"
-        ));
+        )));
     }
     Ok(())
 }

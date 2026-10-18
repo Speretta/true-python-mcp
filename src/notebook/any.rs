@@ -11,6 +11,7 @@
 //! `External(Box<dyn Notebook>)` variant plus a registration API.)
 
 use super::{Cell, Finding, JupyterNotebook, MarimoNotebook, Notebook};
+use crate::error::Error;
 
 /// A parsed notebook of any supported format.
 pub enum AnyNotebook {
@@ -33,42 +34,42 @@ impl Notebook for AnyNotebook {
         }
     }
 
-    fn set_source(&mut self, index: usize, text: &str) -> Result<(), String> {
+    fn set_source(&mut self, index: usize, text: &str) -> Result<(), Error> {
         match self {
             Self::Jupyter(notebook) => notebook.set_source(index, text),
             Self::Marimo(notebook) => notebook.set_source(index, text),
         }
     }
 
-    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), String> {
+    fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), Error> {
         match self {
             Self::Jupyter(notebook) => notebook.insert(index, cell_type, source),
             Self::Marimo(notebook) => notebook.insert(index, cell_type, source),
         }
     }
 
-    fn delete(&mut self, index: usize) -> Result<Cell, String> {
+    fn delete(&mut self, index: usize) -> Result<Cell, Error> {
         match self {
             Self::Jupyter(notebook) => notebook.delete(index),
             Self::Marimo(notebook) => notebook.delete(index),
         }
     }
 
-    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), String> {
+    fn move_cell(&mut self, from: usize, to: usize) -> Result<(), Error> {
         match self {
             Self::Jupyter(notebook) => notebook.move_cell(from, to),
             Self::Marimo(notebook) => notebook.move_cell(from, to),
         }
     }
 
-    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), String> {
+    fn set_type(&mut self, index: usize, cell_type: &str) -> Result<(), Error> {
         match self {
             Self::Jupyter(notebook) => notebook.set_type(index, cell_type),
             Self::Marimo(notebook) => notebook.set_type(index, cell_type),
         }
     }
 
-    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, String> {
+    fn clear_outputs(&mut self, index: Option<usize>) -> Result<Vec<usize>, Error> {
         match self {
             Self::Jupyter(notebook) => notebook.clear_outputs(index),
             Self::Marimo(notebook) => notebook.clear_outputs(index),

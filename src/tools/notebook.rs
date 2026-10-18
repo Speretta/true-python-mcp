@@ -125,9 +125,7 @@ impl Tpmcp {
             let mut notebook = notebook::create(format);
             for new_cell in args.cells.unwrap_or_default() {
                 let index = notebook.cells().len();
-                notebook
-                    .insert(index, new_cell.cell_type.as_str(), &new_cell.source)
-                    .map_err(Error::invalid_input)?;
+                notebook.insert(index, new_cell.cell_type.as_str(), &new_cell.source)?;
             }
             let cell_count = notebook.cells().len();
             let content = notebook.serialize();
@@ -149,8 +147,8 @@ impl Tpmcp {
                 format!("created notebook with {cell_count} cells"),
                 &args.path,
                 &new_revision,
-                None,
-                json!({"cell_count": cell_count}),
+                || None,
+                || json!({"cell_count": cell_count}),
             ))
         })
         .await

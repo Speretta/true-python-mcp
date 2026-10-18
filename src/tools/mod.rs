@@ -84,7 +84,7 @@ pub fn with_notebook<T>(
 }
 
 pub fn check_cell_index(notebook: &AnyNotebook, cell: usize) -> Result<(), Error> {
-    crate::notebook::check_index(notebook.cells().len(), cell).map_err(Error::invalid_input)
+    crate::notebook::check_index(notebook.cells().len(), cell)
 }
 
 /// Shared logic of the surgical edit tools (`cell_edit`, `py_edit`):
@@ -135,14 +135,17 @@ pub fn respond(
 }
 
 /// Standard confirmation returned by mutating tools: what happened, where,
-/// and the new revision to use for the next mutation.
+/// and the new revision to use for the next mutation. The extras are lazy:
+/// each format branch builds only its own payload, so a markdown caller
+/// never pays for the JSON extra (a rendered diff, cloned outputs) or vice
+/// versa.
 pub fn mutation_result(
     format: Format,
     summary: String,
     path: &Path,
     new_revision: &str,
-    extra_markdown: Option<String>,
-    extra_json: Value,
+    extra_markdown: impl FnOnce() -> Option<String>,
+    extra_json: impl FnOnce() -> Value,
 ) -> CallToolResult {
     respond(
         format,
@@ -151,7 +154,7 @@ pub fn mutation_result(
                 "{summary}\npath: {}\nrevision: {new_revision}\n",
                 path.display()
             );
-            if let Some(extra) = extra_markdown {
+            if let Some(extra) = extra_markdown() {
                 out.push('\n');
                 out.push_str(&extra);
             }
@@ -163,7 +166,7 @@ pub fn mutation_result(
             payload.insert("summary".into(), Value::String(summary.clone()));
             payload.insert("path".into(), json!(path.display().to_string()));
             payload.insert("revision".into(), Value::String(new_revision.to_string()));
-            if let Value::Object(extra) = extra_json {
+            if let Value::Object(extra) = extra_json() {
                 for (key, value) in extra {
                     payload.insert(key, value);
                 }
