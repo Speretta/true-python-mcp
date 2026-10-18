@@ -46,7 +46,8 @@ impl ServerHandler for Tpmcp {
                  outlines (detail=outline), searches (query) and attaches validation and lint \
                  findings (diagnostics). Edit with cell_edit (surgical string replacement) or \
                  cell_set_source (whole-cell and line-range edits); cell_insert, cell_delete, \
-                 cell_move, cell_set_type and cell_clear_outputs restructure them. \
+                 cell_move, cell_set_type, cell_clear_outputs and cell_set_metadata (Jupyter \
+                 only) restructure them. \
                  notebook_create makes new notebooks or converts existing ones (from_path); \
                  the extension picks the format (.ipynb Jupyter, .py marimo, .md export). \
                  notebook_check validates without writing: Jupyter schema and git conflict \

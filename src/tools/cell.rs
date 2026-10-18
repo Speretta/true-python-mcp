@@ -8,7 +8,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{tool, tool_router};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::error::Error;
 use crate::fs;
@@ -117,6 +117,21 @@ pub struct CellSetTypeArgs {
     pub cell: usize,
     /// New cell type.
     pub cell_type: CellType,
+    /// Current file revision (from notebook_read or a previous mutation).
+    pub revision: String,
+    /// Result format, "markdown" (default) or "json".
+    #[serde(default)]
+    pub format: Format,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CellSetMetadataArgs {
+    /// Path to the notebook file.
+    pub path: PathBuf,
+    /// 0-based cell index (see notebook_read).
+    pub cell: usize,
+    /// The complete new metadata object for the cell.
+    pub metadata: Map<String, Value>,
     /// Current file revision (from notebook_read or a previous mutation).
     pub revision: String,
     /// Result format, "markdown" (default) or "json".
@@ -341,6 +356,46 @@ impl Tpmcp {
                 &new_revision,
                 || None,
                 || json!({"cell": args.cell, "cell_type": new_type}),
+            ))
+        })
+        .await
+    }
+
+    #[tool(
+        title = "Set Cell Metadata",
+        description = "Replace the metadata object of one Jupyter notebook cell (papermill tags, \
+                       slideshow settings, and similar). Full replace, not a patch: the previous \
+                       metadata is echoed in the response so it can be restored. Source, outputs \
+                       and execution_count are untouched. marimo cell configuration lives in code \
+                       and is not supported. Returns the new revision.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn cell_set_metadata(
+        &self,
+        Parameters(args): Parameters<CellSetMetadataArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let (previous, new_revision) = with_notebook(&args.path, &args.revision, |notebook| {
+                notebook.set_metadata(args.cell, args.metadata)
+            })?;
+            Ok(mutation_result(
+                args.format,
+                format!("replaced metadata of cell {}", args.cell),
+                &args.path,
+                &new_revision,
+                || {
+                    Some(format!(
+                        "previous metadata:\n```json\n{}\n```",
+                        serde_json::to_string_pretty(&previous)
+                            .unwrap_or_else(|_| previous.to_string())
+                    ))
+                },
+                || json!({"cell": args.cell, "previous_metadata": previous}),
             ))
         })
         .await

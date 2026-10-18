@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::error::Error;
 
@@ -199,6 +199,31 @@ pub fn create(format: Format) -> AnyNotebook {
     match format {
         Format::Jupyter => AnyNotebook::Jupyter(JupyterNotebook::new()),
         Format::Marimo => AnyNotebook::Marimo(marimo::MarimoNotebook::create()),
+    }
+}
+
+impl AnyNotebook {
+    /// Replace one cell's metadata object, returning the previous value
+    /// (an empty object when the cell had none).
+    ///
+    /// Jupyter-only by contract: marimo cell configuration lives in code
+    /// (the `@app.cell` decorator arguments), so the marimo arm refuses
+    /// with an explanation. Deliberately an inherent method on the enum,
+    /// not a [`Notebook`] trait method: a trait method would force every
+    /// format to carry an impl that can only refuse, and a trait default
+    /// would silently swallow the Jupyter case at the dispatch site.
+    pub fn set_metadata(
+        &mut self,
+        index: usize,
+        metadata: Map<String, Value>,
+    ) -> Result<Value, Error> {
+        match self {
+            Self::Jupyter(notebook) => notebook.set_metadata(index, metadata),
+            Self::Marimo(_) => Err(Error::invalid_input(
+                "marimo cell configuration lives in code (the @app.cell decorator arguments), \
+                 not in a metadata object; cell_set_metadata supports Jupyter notebooks only",
+            )),
+        }
     }
 }
 

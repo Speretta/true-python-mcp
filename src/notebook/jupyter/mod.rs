@@ -110,6 +110,21 @@ impl JupyterNotebook {
             ..Cell::from_text(cell_type, source_text)
         }
     }
+
+    /// Replace one cell's `metadata` object, returning the previous value
+    /// (an empty object when the cell had none). Every other field (`id`,
+    /// `source`, `outputs`, `execution_count`) is untouched.
+    pub fn set_metadata(
+        &mut self,
+        index: usize,
+        metadata: Map<String, Value>,
+    ) -> Result<Value, Error> {
+        check_index(self.cells.len(), index)?;
+        let previous = self.cells[index]
+            .extra
+            .insert("metadata".into(), Value::Object(metadata));
+        Ok(previous.unwrap_or_else(|| Value::Object(Map::new())))
+    }
 }
 
 impl Notebook for JupyterNotebook {

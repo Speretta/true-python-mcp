@@ -107,6 +107,7 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `cell_delete` | Deletes a cell. |
 | `cell_move` | Moves a cell to another position. |
 | `cell_set_type` | Switches a cell between code and markdown. |
+| `cell_set_metadata` | Replaces one Jupyter cell's metadata (papermill tags, slideshow settings); the previous value comes back in the answer. |
 | `cell_clear_outputs` | Empties the outputs of Jupyter cells. |
 | `notebook_check` | Finds problems without changing anything: a broken notebook structure, merge conflict marks, or marimo graph errors (two cells defining the same name, a cycle). |
 | `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file. With `fix: true` it repairs the safe ones. |
