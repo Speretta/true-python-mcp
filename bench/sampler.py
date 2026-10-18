@@ -59,13 +59,15 @@ def proc_tree(root):
             continue
         rp = stat.rfind(")")
         fields = stat[rp + 2 :].split()
-        # fields[0] = state (stat field 3); ppid = field 4; rss = field 24
+        # fields[0] = state (stat field 3); ppid = field 4; num_threads =
+        # field 20; rss = field 24
         try:
             ppid = int(fields[1])
+            threads = int(fields[17])
             rss = int(fields[21])
         except (IndexError, ValueError):
             continue
-        procs[pid] = (ppid, rss, cmd)
+        procs[pid] = (ppid, rss, threads, cmd)
     out = []
     stack = [root]
     seen = set()
@@ -75,10 +77,10 @@ def proc_tree(root):
             continue
         seen.add(p)
         if p in procs:
-            ppid, rss, cmd = procs[p]
+            ppid, rss, threads, cmd = procs[p]
             out.append({"pid": p, "ppid": ppid, "rss_bytes": rss * PAGE,
-                        "cmd": cmd[:200]})
-        for pid, (ppid, _, _) in procs.items():
+                        "threads": threads, "cmd": cmd[:200]})
+        for pid, (ppid, _, _, _) in procs.items():
             if ppid == p:
                 stack.append(pid)
     return out
@@ -122,6 +124,7 @@ def sample_window(cid, samples, interval, raw):
         "cgroup_median_bytes": median(cg),
         "rss_sum_median_bytes": median(rss_sums),
         "proc_count": len(mid),
+        "threads_total": sum(t["threads"] for t in mid),
     }
     return summary, mid
 
@@ -202,8 +205,8 @@ def main():
     time.sleep(idle_q)
     result["idle"], idle_procs = sample_window(cid, samples, interval, raw)
     (out / "procs_idle.txt").write_text(
-        "PID PPID RSS_KB CMD\n"
-        + "".join(f"{p['pid']} {p['ppid']} {p['rss_bytes'] // 1024} {p['cmd']}\n"
+        "PID PPID RSS_KB THREADS CMD\n"
+        + "".join(f"{p['pid']} {p['ppid']} {p['rss_bytes'] // 1024} {p['threads']} {p['cmd']}\n"
                   for p in idle_procs)
     )
 
@@ -218,8 +221,8 @@ def main():
     time.sleep(ops_q)
     result["ops"], ops_procs = sample_window(cid, samples, interval, raw)
     (out / "procs_ops.txt").write_text(
-        "PID PPID RSS_KB CMD\n"
-        + "".join(f"{p['pid']} {p['ppid']} {p['rss_bytes'] // 1024} {p['cmd']}\n"
+        "PID PPID RSS_KB THREADS CMD\n"
+        + "".join(f"{p['pid']} {p['ppid']} {p['rss_bytes'] // 1024} {p['threads']} {p['cmd']}\n"
                   for p in ops_procs)
     )
 
