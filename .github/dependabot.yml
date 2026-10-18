@@ -1,0 +1,17 @@
+# The ruff_* crates ride a deliberate MANUAL weekly lockstep train: all ten
+# pins move together in one commit and are verified against the matching
+# real ruff CLI (runbook: CONTRIBUTING.md, "Upgrading the ruff train").
+# Dependabot cannot express that coupling, so ruff_* updates are ignored
+# here; a PR that still names one of them is closed intentionally.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: ruff_*
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
