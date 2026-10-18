@@ -15,6 +15,8 @@ pub(super) mod parse;
 mod scan;
 pub(super) mod scope;
 
+use std::borrow::Cow;
+
 use super::{Cell, Finding, Notebook, SourceText, check_index};
 
 /// Version stamped into newly created marimo files. marimo never validates it
@@ -124,10 +126,13 @@ impl MarimoNotebook {
             .collect()
     }
 
-    fn cell_bytes(&self, index: usize) -> String {
+    /// The bytes cell `index` contributes to the serialization: an unedited
+    /// cell borrows its captured block (no copy — serialize writes it into
+    /// the output once); an edited cell regenerates just its body.
+    fn cell_bytes(&self, index: usize) -> Cow<'_, str> {
         let meta = &self.metas[index];
         if !meta.edited {
-            return meta.block.clone();
+            return Cow::Borrowed(&meta.block);
         }
         let source = self.cells[index].source.text();
         let body = match &meta.md {
@@ -140,7 +145,7 @@ impl MarimoNotebook {
             }
             None => indent::indent_lines(&source, &meta.indent, meta.indent_memory.as_deref()),
         };
-        match meta.kind {
+        let block = match meta.kind {
             Kind::AppCell => format!(
                 "{}{}{}",
                 meta.header,
@@ -149,7 +154,8 @@ impl MarimoNotebook {
             ),
             Kind::Setup => format!("{}{}", meta.header, body),
             _ => meta.block.clone(),
-        }
+        };
+        Cow::Owned(block)
     }
 
     fn insert_cell(&mut self, index: usize, cell: Cell, meta: CellMeta) {
@@ -367,7 +373,23 @@ impl Notebook for MarimoNotebook {
     }
 
     fn serialize(&self) -> String {
-        let mut out = String::new();
+        // The literal segments plus every cell's captured block length: a
+        // close bound on the output (edited cells regenerate at roughly
+        // their block's size), so the buffer allocates once.
+        let capacity = self
+            .segments
+            .iter()
+            .map(|segment| match segment {
+                Segment::Lit(text) => text.len(),
+                Segment::Cell => 0,
+            })
+            .sum::<usize>()
+            + self
+                .metas
+                .iter()
+                .map(|meta| meta.block.len())
+                .sum::<usize>();
+        let mut out = String::with_capacity(capacity);
         let mut cell = 0;
         for segment in &self.segments {
             match segment {
