@@ -12,10 +12,9 @@ use ruff_python_parser::parse_module;
 use ruff_text_size::Ranged;
 
 use super::parse::{
-    Top, app_cell, classify, finish, inspect_literal, marimo_extra, push_cell, read_only_cell,
-    setup_cell,
+    Builder, Top, app_cell, classify, marimo_extra, read_only_cell, setup_cell,
 };
-use super::{CellMeta, Kind, MarimoNotebook, Segment};
+use super::{CellMeta, Kind, MarimoNotebook};
 use crate::notebook::{Cell, SourceText};
 
 #[derive(Clone, Copy)]
@@ -25,12 +24,7 @@ enum Region {
 }
 
 pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
-    let mut segments = Vec::new();
-    let mut cells = Vec::new();
-    let mut metas = Vec::new();
-    let mut version = None;
-    let mut seen_import = false;
-    let mut seen_app = false;
+    let mut builder = Builder::default();
 
     for (start, end, region) in split_regions(src) {
         let text = &src[start..end];
@@ -38,30 +32,30 @@ pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
             Region::Literal => {
                 if let Ok(parsed) = parse_module(text) {
                     for stmt in parsed.syntax().body.iter() {
-                        inspect_literal(stmt, &mut seen_import, &mut seen_app, &mut version);
+                        builder.inspect_literal(stmt);
                     }
                     super::parse::guarded_drop(parsed, text.len());
                 }
-                segments.push(Segment::Lit(text.to_string()));
+                builder.push_literal(text.to_string());
             }
             Region::Cell => match parse_cell_region(text) {
                 Some((cell, meta, leading, trailing)) => {
                     if !leading.is_empty() {
-                        segments.push(Segment::Lit(leading));
+                        builder.push_literal(leading);
                     }
-                    push_cell(&mut segments, &mut cells, &mut metas, cell, meta);
+                    builder.push_cell(cell, meta);
                     if !trailing.is_empty() {
-                        segments.push(Segment::Lit(trailing));
+                        builder.push_literal(trailing);
                     }
                 }
                 None => {
                     let (cell, meta) = broken_cell(text);
-                    push_cell(&mut segments, &mut cells, &mut metas, cell, meta);
+                    builder.push_cell(cell, meta);
                 }
             },
         }
     }
-    finish(cells, metas, segments, version, seen_import, seen_app)
+    builder.finish()
 }
 
 /// Parse one cell region; returns the cell plus any leading/trailing literal

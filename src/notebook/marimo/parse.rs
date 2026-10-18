@@ -60,79 +60,113 @@ pub(super) fn guarded_drop<T>(parsed: Parsed<T>, source_len: usize) {
 }
 
 fn parse_structured(src: &str, parsed: &Parsed<ModModule>) -> Result<MarimoNotebook, String> {
-    let mut segments = Vec::new();
-    let mut cells = Vec::new();
-    let mut metas = Vec::new();
-    let mut version = None;
-    let mut seen_import = false;
-    let mut seen_app = false;
+    let mut builder = Builder::default();
     let mut pos = 0usize;
 
     for stmt in parsed.syntax().body.iter() {
         let start = stmt.range().start().to_usize();
         let end = stmt.range().end().to_usize();
         if start > pos {
-            segments.push(Segment::Lit(src[pos..start].to_string()));
+            builder.push_literal(src[pos..start].to_string());
         }
         match classify(stmt) {
             Top::AppCell(func) => {
                 let (cell, meta) = app_cell(src, func, start, end);
-                push_cell(&mut segments, &mut cells, &mut metas, cell, meta);
+                builder.push_cell(cell, meta);
             }
             Top::Setup => {
                 let (cell, meta) = setup_cell(src, stmt, start, end);
-                push_cell(&mut segments, &mut cells, &mut metas, cell, meta);
+                builder.push_cell(cell, meta);
             }
             Top::ReadOnly => {
                 let (cell, meta) = read_only_cell(src, stmt, start, end);
-                push_cell(&mut segments, &mut cells, &mut metas, cell, meta);
+                builder.push_cell(cell, meta);
             }
             Top::Literal => {
-                inspect_literal(stmt, &mut seen_import, &mut seen_app, &mut version);
-                segments.push(Segment::Lit(src[start..end].to_string()));
+                builder.inspect_literal(stmt);
+                builder.push_literal(src[start..end].to_string());
             }
         }
         pos = end;
     }
     if pos < src.len() {
-        segments.push(Segment::Lit(src[pos..].to_string()));
+        builder.push_literal(src[pos..].to_string());
     }
-    finish(cells, metas, segments, version, seen_import, seen_app)
+    builder.finish()
 }
 
-/// Shared finalization: validate the marimo markers and assemble.
-pub(super) fn finish(
+/// The accumulator both marimo walkers fill — the structured parse and the
+/// scanner fallback: literal/cell segments, the parsed cells with their
+/// metas, and the header markers seen so far.
+#[derive(Default)]
+pub(super) struct Builder {
+    segments: Vec<Segment>,
     cells: Vec<Cell>,
     metas: Vec<CellMeta>,
-    segments: Vec<Segment>,
     version: Option<String>,
     seen_import: bool,
     seen_app: bool,
-) -> Result<MarimoNotebook, String> {
-    if !seen_import || !seen_app {
-        return Err(
-            "not a marimo notebook: expected `import marimo` and `app = marimo.App(...)`"
-                .to_string(),
-        );
-    }
-    Ok(MarimoNotebook {
-        cells,
-        metas,
-        segments,
-        version,
-    })
 }
 
-pub(super) fn push_cell(
-    segments: &mut Vec<Segment>,
-    cells: &mut Vec<Cell>,
-    metas: &mut Vec<CellMeta>,
-    cell: Cell,
-    meta: CellMeta,
-) {
-    cells.push(cell);
-    metas.push(meta);
-    segments.push(Segment::Cell);
+impl Builder {
+    pub(super) fn push_cell(&mut self, cell: Cell, meta: CellMeta) {
+        self.cells.push(cell);
+        self.metas.push(meta);
+        self.segments.push(Segment::Cell);
+    }
+
+    pub(super) fn push_literal(&mut self, text: String) {
+        self.segments.push(Segment::Lit(text));
+    }
+
+    /// Record the marimo header markers (`import marimo`, `app =
+    /// marimo.App(...)`, `__generated_with`) of one literal statement.
+    pub(super) fn inspect_literal(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Import(import) => {
+                if import.names.iter().any(|a| a.name.as_str() == "marimo") {
+                    self.seen_import = true;
+                }
+            }
+            Stmt::Assign(assign) => {
+                if let Some(Expr::Name(target)) = assign.targets.first() {
+                    match target.id.as_str() {
+                        "app" => {
+                            if let Expr::Call(call) = &*assign.value
+                                && let Expr::Attribute(attr) = &*call.func
+                                && attr.attr.id.as_str() == "App"
+                            {
+                                self.seen_app = true;
+                            }
+                        }
+                        "__generated_with" => {
+                            if let Expr::StringLiteral(literal) = &*assign.value {
+                                self.version = Some(literal.value.to_str().to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Shared finalization: validate the marimo markers and assemble.
+    pub(super) fn finish(self) -> Result<MarimoNotebook, String> {
+        if !self.seen_import || !self.seen_app {
+            return Err(
+                "not a marimo notebook: expected `import marimo` and `app = marimo.App(...)`"
+                    .to_string(),
+            );
+        }
+        Ok(MarimoNotebook {
+            cells: self.cells,
+            metas: self.metas,
+            segments: self.segments,
+            version: self.version,
+        })
+    }
 }
 
 pub(super) enum Top<'a> {
@@ -353,42 +387,6 @@ pub(super) fn read_only_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -
             edited: false,
         },
     )
-}
-
-pub(super) fn inspect_literal(
-    stmt: &Stmt,
-    seen_import: &mut bool,
-    seen_app: &mut bool,
-    version: &mut Option<String>,
-) {
-    match stmt {
-        Stmt::Import(import) => {
-            if import.names.iter().any(|a| a.name.as_str() == "marimo") {
-                *seen_import = true;
-            }
-        }
-        Stmt::Assign(assign) => {
-            if let Some(Expr::Name(target)) = assign.targets.first() {
-                match target.id.as_str() {
-                    "app" => {
-                        if let Expr::Call(call) = &*assign.value
-                            && let Expr::Attribute(attr) = &*call.func
-                            && attr.attr.id.as_str() == "App"
-                        {
-                            *seen_app = true;
-                        }
-                    }
-                    "__generated_with" => {
-                        if let Expr::StringLiteral(literal) = &*assign.value {
-                            *version = Some(literal.value.to_str().to_string());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 pub(super) fn marimo_extra(
