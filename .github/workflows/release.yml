@@ -1,9 +1,11 @@
 name: Release
 
-# Pushing a version tag (scripts/release.sh creates it) builds the binaries
-# and publishes them on the GitHub release for that tag. Only checkout is an
-# action; toolchains and uploads use shell, rustup, apt and the preinstalled
-# GitHub CLI.
+# Pushing a version tag (scripts/release.sh creates it) runs the test suite,
+# then builds the binaries and publishes them on the GitHub release for that
+# tag. A tag can point anywhere, so the release never trusts a previous CI
+# run: no test pass, no release, no binaries. Only first-party actions
+# (checkout, cache); toolchains and uploads use shell, rustup, apt and the
+# preinstalled GitHub CLI.
 
 on:
   push:
@@ -21,7 +23,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The gate: the same suite CI runs on main, on the tagged commit, with the
+  # mandatory ground-truth venv. Everything else needs this job.
+  test:
+    runs-on: ubuntu-latest
+    env:
+      TPMCP_GROUND_TRUTH_PYTHON: /tmp/nbenv/bin/python
+      TPMCP_REQUIRE_GROUND_TRUTH: "1"
+      TPMCP_LOCK_DIR: /tmp/tpmcp-ci-locks
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache the cargo dirs and the build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install the ground-truth venv (nbformat + marimo)
+        run: |
+          uv venv /tmp/nbenv
+          uv pip install --python /tmp/nbenv/bin/python nbformat==5.11.1 marimo==0.25.1
+      - name: Install cargo-nextest
+        run: curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
+      - run: cargo nextest run
+
   create-release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
