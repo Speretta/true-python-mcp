@@ -89,6 +89,11 @@ type(scope): lowercase subject
 types: feat fix refactor perf docs test build ci chore
 ```
 
+Write self-contained messages: put the numbers, commands and results a
+change rests on into the message itself. Local analysis files (`reports/`,
+`PROGRESS.local.md`) are gitignored, so a message that only points at them
+cannot be checked from a fresh clone.
+
 Enable the check once per clone:
 
 ```sh
@@ -113,6 +118,30 @@ The new version comes from the commits since the last tag:
 The script updates `Cargo.toml` and `Cargo.lock`, adds a `CHANGELOG.md`
 section, commits as `chore(release): vX.Y.Z`, and creates the tag. Push both
 when done: `git push && git push --tags`.
+
+## Upgrading the ruff train
+
+All ten ruff crates are exact-pinned to one ruff release and move together
+in a single commit: `ruff_linter = 0.X.Y` plus nine support crates at
+`= 0.0.Z` (ruff ships this train weekly). The upgrade is manual and
+deliberate; Dependabot ignores `ruff_*` for exactly this reason.
+
+1. Bump every `ruff_*` pin in `Cargo.toml` in one commit, then run
+   `cargo check` to re-lock and surface API breaks.
+2. Breaks can only appear where ruff crates are imported. The linter,
+   formatter, config and diagnostics-mapping imports live in `src/ruff.rs`
+   and its `settings`/`diagnostics` submodules; the marimo parser and scope
+   analysis (`src/notebook/marimo/`) additionally use `ruff_python_ast`,
+   `ruff_python_parser`, `ruff_python_stdlib` and `ruff_text_size`. Any
+   other file seeing a ruff type is a layering bug: fix the layering, not
+   the pin.
+3. Run the full suite with the ground-truth venv
+   (`TPMCP_REQUIRE_GROUND_TRUTH=1`); `tests/analysis.rs` was captured
+   against the real CLI, so install the matching one
+   (`uv tool install ruff==0.X.Y`) whenever you need to compare behavior
+   by hand.
+4. Record the release binary size delta in the commit message; the fat-LTO
+   x86_64 baseline is 17,711,816 bytes (measured 2026-10-18).
 
 ## Ground-truth tests
 
