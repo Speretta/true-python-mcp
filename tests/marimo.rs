@@ -237,6 +237,95 @@ fn broken_file_matches_marimo_status() {
     assert_eq!(nb.format_label(), "marimo 0.25.1");
 }
 
+/// Python `repr()` of a string, limited to what the fixture sources contain
+/// (single-quoted form; they contain no `'`, no `\` and no control chars
+/// beyond newlines).
+fn python_repr(text: &str) -> String {
+    assert!(
+        !text.contains('\'') && !text.contains('\\'),
+        "python_repr only covers quote/backslash-free text"
+    );
+    format!("'{}'", text.replace('\n', "\\n"))
+}
+
+/// Editing a cell whose body contains column-0 triple-quoted string lines
+/// must not re-indent the string CONTENT on write-back: that silently changes
+/// the string's value, and the tool's diff (computed on the dedented logical
+/// source) hides it. Ground truth: marimo 0.25.1's own loader (`fixed_dedent`)
+/// leaves under-indented string interiors untouched, and our written file
+/// must load in marimo with exactly the intended change.
+#[test]
+fn marimo_edit_preserves_column_zero_string_lines() {
+    let src = fixture("col0_string.py");
+    let mut nb = open(&src).unwrap();
+
+    // Parse exposes the string interiors exactly as marimo's loader sees
+    // them: col-0 content stays col-0, a uniformly indented block dedents.
+    let cell0_before = "sql = \"\"\"\nSELECT 1\n\"\"\"\nprint(sql)";
+    let cell1 = "note = \"\"\"\n    kept\n\"\"\"\nprint(note)";
+    assert_eq!(nb.cells()[0].source_text(), cell0_before);
+    assert_eq!(nb.cells()[1].source_text(), cell1);
+
+    // Edit one token inside the column-0 string.
+    let edited = nb.cells()[0].source_text().replacen("SELECT 1", "SELECT 2", 1);
+    nb.set_source(0, &edited).unwrap();
+
+    // Re-setting cell 1's source to itself must not move a single byte: the
+    // regenerated block replays the recorded per-line indent origins.
+    let unchanged = nb.cells()[1].source_text();
+    nb.set_source(1, &unchanged).unwrap();
+    let out = nb.serialize();
+
+    // The whole file changed in exactly the one intended line.
+    assert_eq!(src.lines().count(), out.lines().count(), "{out}");
+    let changed: Vec<(&str, &str)> = src
+        .lines()
+        .zip(out.lines())
+        .filter(|(before, after)| before != after)
+        .collect();
+    assert_eq!(changed, vec![("SELECT 1", "SELECT 2")], "{out}");
+    assert!(open(&out).is_ok());
+
+    // Ground truth: marimo 0.25.1 loads both files; its exposed cell codes
+    // match ours before and after the edit, and only the intended edit shows.
+    let Some(py) = ground_truth_python() else {
+        return;
+    };
+    const CODES: &str = r#"
+import sys
+from pathlib import Path
+from marimo._ast.load import get_notebook_status
+from marimo._ast.parse import parse_notebook
+
+path = Path(sys.argv[1])
+print("status", get_notebook_status(str(path)).status)
+nb = parse_notebook(path.read_text(), str(path))
+for cell in nb.cells:
+    print(repr(cell.code))
+"#;
+    let dir = std::env::temp_dir().join(format!("tpmcp-col0-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let original_path = dir.join("original.py");
+    let edited_path = dir.join("edited.py");
+    std::fs::write(&original_path, &src).unwrap();
+    std::fs::write(&edited_path, &out).unwrap();
+
+    let marimo_codes = |path: &std::path::Path| -> Vec<String> {
+        let report = run_python(&py, CODES, &[path.to_str().unwrap()]);
+        let mut lines: Vec<String> = report.lines().map(str::to_string).collect();
+        assert_eq!(lines.remove(0), "status valid", "{report}");
+        lines
+    };
+    assert_eq!(
+        marimo_codes(&original_path),
+        vec![python_repr(cell0_before), python_repr(cell1)]
+    );
+    assert_eq!(
+        marimo_codes(&edited_path),
+        vec![python_repr(&nb.cells()[0].source_text()), python_repr(cell1)]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Markdown cells
 // ---------------------------------------------------------------------------

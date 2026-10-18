@@ -151,5 +151,6 @@ pub(super) fn wrap_call(content: &str, indent: &str, tag: &str) -> String {
     }
     text = text.replace("\"\"", "\"\\\"");
     let call = format!("mo.md({tag}\"\"\"\n{text}\n\"\"\")");
-    super::indent_lines(&call, indent)
+    // marimo's format_markdown indents every line of the wrapper call.
+    super::indent::indent_lines(&call, indent, None)
 }

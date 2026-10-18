@@ -209,20 +209,21 @@ pub(super) fn app_cell(
 
     let header = src[start..body_line_start].to_string();
     let raw_body = &src[body_line_start..body_end];
-    let (cell_type, source, md) = match super::markdown::detect(src, body, body_line_start) {
+    let (cell_type, source, indent_memory, md) = match super::markdown::detect(src, body, body_line_start)
+    {
         Some(detected) => (
             "markdown".to_string(),
             detected.text,
+            None,
             Some(super::MdInfo {
                 tag: detected.tag,
                 comments: detected.comments,
             }),
         ),
-        None => (
-            "code".to_string(),
-            strip_fixed_indent(raw_body, &indent),
-            None,
-        ),
+        None => {
+            let (source, indent_memory) = super::indent::strip_fixed_indent(raw_body, &indent);
+            ("code".to_string(), source, indent_memory, None)
+        }
     };
     (
         Cell {
@@ -235,6 +236,7 @@ pub(super) fn app_cell(
             block: src[start..end].to_string(),
             header,
             indent,
+            indent_memory,
             return_suffix,
             md,
             edited: false,
@@ -276,7 +278,7 @@ pub(super) fn setup_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -> (C
     let first_start = body.first().map_or(end, |s| s.range().start().to_usize());
     let indent = src[header_end..first_start].to_string();
     let header = src[start..header_end].to_string();
-    let source = strip_fixed_indent(&src[header_end..end], &indent);
+    let (source, indent_memory) = super::indent::strip_fixed_indent(&src[header_end..end], &indent);
     (
         Cell {
             cell_type: "code".to_string(),
@@ -288,6 +290,7 @@ pub(super) fn setup_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -> (C
             block: src[start..end].to_string(),
             header,
             indent,
+            indent_memory,
             return_suffix: None,
             md: None,
             edited: false,
@@ -315,6 +318,7 @@ pub(super) fn read_only_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -
             block,
             header: String::new(),
             indent: String::new(),
+            indent_memory: None,
             return_suffix: None,
             md: None,
             edited: false,
@@ -374,18 +378,4 @@ pub(super) fn marimo_extra(
 
 pub(super) fn line_start(src: &str, offset: usize) -> usize {
     src[..offset].rfind('\n').map_or(0, |index| index + 1)
-}
-
-/// Strip a fixed indent prefix from each line (best effort; lines inside
-/// triple-quoted strings that are indented less than `indent` are preserved).
-/// Not to be confused with markdown::dedent_common_margin (textwrap-style).
-fn strip_fixed_indent(text: &str, indent: &str) -> String {
-    if indent.is_empty() {
-        return text.trim_end_matches('\n').to_string();
-    }
-    let lines: Vec<&str> = text
-        .split('\n')
-        .map(|line| line.strip_prefix(indent).unwrap_or(line))
-        .collect();
-    lines.join("\n").trim_end_matches('\n').to_string()
 }

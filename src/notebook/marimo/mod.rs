@@ -9,6 +9,7 @@
 
 mod check;
 mod cycles;
+mod indent;
 pub(super) mod markdown;
 pub(super) mod parse;
 mod scan;
@@ -68,6 +69,13 @@ pub(super) struct CellMeta {
     header: String,
     /// Observed body indent, used to re-indent an edited body.
     indent: String,
+    /// Per-line record of the body's original shape: `false` for lines that
+    /// lacked the fixed indent in the file (column-0 multiline-string
+    /// interiors, stray comments) — written back verbatim so string values
+    /// survive edits. `None` when every line carried the indent (the common
+    /// case, and cells tpmcp creates). Unused for markdown cells (re-wrapped
+    /// wholesale) and read-only blocks (replayed verbatim).
+    indent_memory: Option<Vec<bool>>,
     /// Trailing `return` statement (marimo regenerates it), preserved verbatim.
     return_suffix: Option<String>,
     /// Set for markdown cells (`mo.md` wrapper); the source is then the
@@ -130,7 +138,7 @@ impl MarimoNotebook {
                     markdown::wrap_call(&source, &meta.indent, &md.tag)
                 )
             }
-            None => indent_lines(&source, &meta.indent),
+            None => indent::indent_lines(&source, &meta.indent, meta.indent_memory.as_deref()),
         };
         match meta.kind {
             Kind::AppCell => format!(
@@ -209,6 +217,7 @@ impl MarimoNotebook {
                 block: String::new(),
                 header: format!("@app.cell(hide_code=True)\ndef _({params}):\n"),
                 indent,
+                indent_memory: None,
                 return_suffix: Some("    return".to_string()),
                 md: Some(MdInfo {
                     tag: "r".to_string(),
@@ -246,6 +255,18 @@ impl Notebook for MarimoNotebook {
                     self.metas[index].kind.label()
                 )
             });
+        }
+        if self.metas[index].md.is_none() {
+            // Python bodies remember which lines lacked the fixed indent; the
+            // memory must follow the edit. Markdown sources are re-wrapped
+            // wholesale and need none.
+            let old_source = self.cells[index].source_text();
+            let memory = indent::remap_indent_memory(
+                &old_source,
+                self.metas[index].indent_memory.as_deref(),
+                text,
+            );
+            self.metas[index].indent_memory = memory;
         }
         self.cells[index].set_source_text(text);
         self.metas[index].edited = true;
@@ -374,31 +395,12 @@ fn new_app_cell(source: &str) -> (Cell, CellMeta) {
             block: String::new(),
             header: "@app.cell\ndef _():\n".to_string(),
             indent,
+            indent_memory: None,
             return_suffix: Some("    return".to_string()),
             md: None,
             edited: true,
         },
     )
-}
-
-/// Re-indent `text` by `indent`, one trailing newline per line, blank lines
-/// left empty (matching marimo's generator).
-fn indent_lines(text: &str, indent: &str) -> String {
-    let text = text.strip_suffix('\n').unwrap_or(text);
-    if text.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    for line in text.split('\n') {
-        if line.is_empty() {
-            out.push('\n');
-        } else {
-            out.push_str(indent);
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
 }
 
 /// Rebuild a header for a markdown cell: ensure `hide_code=True` on the

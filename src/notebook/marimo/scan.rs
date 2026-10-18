@@ -103,6 +103,7 @@ fn broken_cell(text: &str) -> (Cell, CellMeta) {
             block: text.to_string(),
             header: String::new(),
             indent: String::new(),
+            indent_memory: None,
             return_suffix: None,
             md: None,
             edited: false,
