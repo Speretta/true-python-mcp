@@ -46,6 +46,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::SystemTime;
 
 use crate::error::Error;
 
@@ -60,9 +61,58 @@ pub fn with_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T, Error>) -> R
     let _in_process = mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Start with a clean fingerprint: a previous flow that aborted between
+    // verify and write must not leak its stamp into this flow's pre-rename
+    // recheck. Cleared under the mutex, so only the lock holder can clear.
+    clear_stamp(&key);
     let mut os_lock = open_lock_file(&key).map(fd_lock::RwLock::new);
     let _cross_process = os_lock.as_mut().and_then(write_lock);
     f()
+}
+
+/// `(mtime, size)` fingerprint of a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStat(pub SystemTime, pub u64);
+
+/// What the file looked like when `read_verified` accepted the caller's
+/// revision, plus that revision. `fs::write` consumes the stamp for a
+/// final re-stat before the rename (see `recheck_unchanged` in `fs`): an
+/// external editor that saves mid-call turns the write into the same
+/// Conflict the revision guard produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedStamp {
+    /// `None` when the stat was unavailable at verify time; the recheck
+    /// then stays permissive.
+    pub stat: Option<FileStat>,
+    pub revision: String,
+}
+
+/// Record the fingerprint `read_verified` accepted for `key`.
+pub fn record_verified(key: &Path, stamp: VerifiedStamp) {
+    stamp_table()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key.to_path_buf(), stamp);
+}
+
+/// Remove and return the stamp recorded for `key`; the verified flow's
+/// write consumes it.
+pub fn take_stamp(key: &Path) -> Option<VerifiedStamp> {
+    stamp_table()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(key)
+}
+
+fn clear_stamp(key: &Path) {
+    take_stamp(key);
+}
+
+fn stamp_table() -> &'static RwLock<HashMap<PathBuf, VerifiedStamp>> {
+    // Poison recovery (same policy as the lock table): the map only holds
+    // independent entries, so a poisoned table is still a valid table.
+    static TABLE: OnceLock<RwLock<HashMap<PathBuf, VerifiedStamp>>> = OnceLock::new();
+    TABLE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Blocking write lock on the sidecar lock file. On failure we warn and

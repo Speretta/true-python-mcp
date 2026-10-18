@@ -15,6 +15,7 @@
 //! always observes either the old or the new file, never a partial one.
 
 pub mod lock;
+mod sweep;
 
 use std::fs;
 use std::io::Write as _;
@@ -53,7 +54,13 @@ pub fn read(path: &Path) -> Result<Snapshot, Error> {
 ///
 /// On mismatch returns [`Error::Conflict`] carrying the current revision so
 /// the caller can re-read and retry.
+///
+/// On success the file's stat fingerprint is recorded for the pre-rename
+/// recheck in [`write`]. The fingerprint is taken BEFORE the bytes are
+/// read: an external save landing during the read shows up as a revision
+/// mismatch here, and one landing after the read shows up at write time.
 pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
+    let stat = stat_fingerprint(path);
     let snapshot = read(path)?;
     if snapshot.revision != revision {
         return Err(Error::Conflict {
@@ -62,6 +69,13 @@ pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
             current: snapshot.revision,
         });
     }
+    lock::record_verified(
+        &lock::lock_key(path),
+        lock::VerifiedStamp {
+            stat,
+            revision: snapshot.revision.clone(),
+        },
+    );
     Ok(snapshot)
 }
 
@@ -87,21 +101,72 @@ pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
 /// changes. Inherent to atomic-rename writes without privileges.
 pub fn write(path: &Path, content: &str) -> Result<String, Error> {
     let target = resolve_target(path);
+    if let Some(parent) = target.parent() {
+        sweep::sweep_stale_temps(parent);
+    }
     let tmp = temp_path(&target);
-    let result = (|| -> std::io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
-        preserve_mode(&target, &tmp);
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&tmp, &target)
-    })();
-    match result {
+    match write_via_temp(&tmp, &target, path, content) {
         Ok(()) => Ok(revision_of(content.as_bytes())),
-        Err(source) => {
+        Err(error) => {
             let _ = fs::remove_file(&tmp);
-            Err(Error::io(path.to_path_buf(), source))
+            Err(error)
         }
     }
+}
+
+/// The write itself: temp file, fsync, external-editor recheck, rename.
+/// `reported` is the caller's spelling of the path, used in errors.
+fn write_via_temp(tmp: &Path, target: &Path, reported: &Path, content: &str) -> Result<(), Error> {
+    let io = |source| Error::io(reported.to_path_buf(), source);
+    let mut file = fs::File::create(tmp).map_err(io)?;
+    preserve_mode(target, tmp);
+    file.write_all(content.as_bytes()).map_err(io)?;
+    file.sync_all().map_err(io)?;
+    recheck_unchanged(target, reported)?;
+    fs::rename(tmp, target).map_err(io)?;
+    Ok(())
+}
+
+/// Final external-editor check immediately before the rename.
+///
+/// If this flow verified a revision earlier ([`read_verified`] recorded the
+/// fingerprint) and the target's `(mtime, size)` changed since, an external
+/// program — one that takes neither our lock nor part in the revision
+/// protocol — saved mid-call. The stat is only a cheap filter: when it
+/// differs we re-read and decide by content, so a bare `touch` or a
+/// byte-identical save is not a conflict; anything else aborts with the
+/// same [`Error::Conflict`] the revision guard produces.
+///
+/// This SHRINKS the in-call TOCTOU window from "parse + mutate + serialize"
+/// (milliseconds) to "re-stat → rename" (microseconds); it does not close
+/// it. A save landing between the re-stat and the rename is still lost, and
+/// an identical-size save inside the filesystem's timestamp granularity is
+/// undetectable. Create flows verified nothing and skip the check.
+fn recheck_unchanged(target: &Path, reported: &Path) -> Result<(), Error> {
+    let Some(stamp) = lock::take_stamp(&lock::lock_key(reported)) else {
+        return Ok(()); // create path / unverified flow: nothing to recheck
+    };
+    let Some(verified) = stamp.stat else {
+        return Ok(()); // fingerprint unavailable at verify time
+    };
+    if stat_fingerprint(target) == Some(verified) {
+        return Ok(());
+    }
+    let current = read(target)?;
+    if current.revision == stamp.revision {
+        return Ok(()); // timestamp-only change: content is what we verified
+    }
+    Err(Error::Conflict {
+        path: reported.to_path_buf(),
+        expected: stamp.revision,
+        current: current.revision,
+    })
+}
+
+/// `(mtime, size)` fingerprint of `path`, or `None` when unavailable.
+fn stat_fingerprint(path: &Path) -> Option<lock::FileStat> {
+    let meta = fs::metadata(path).ok()?;
+    Some(lock::FileStat(meta.modified().ok()?, meta.len()))
 }
 
 /// Like [`write`], but creates missing parent directories first. Only the
@@ -253,7 +318,16 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, Error> {
             max_mib: MAX_FILE_SIZE / (1024 * 1024),
         });
     }
-    fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))
+    let bytes = fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    // The metadata check above is TOCTOU: recheck the actual byte count so a
+    // file grown past the cap between stat and read is still rejected.
+    if bytes.len() as u64 > MAX_FILE_SIZE {
+        return Err(Error::TooLarge {
+            path: path.to_path_buf(),
+            max_mib: MAX_FILE_SIZE / (1024 * 1024),
+        });
+    }
+    Ok(bytes)
 }
 
 /// Sibling temp file name: same directory (hence same filesystem), so the

@@ -188,3 +188,68 @@ fn replace_line_range_keeps_foreign_endings_outside_the_range() {
     assert_eq!(detect_eol("a\r\nb\r\nc\n"), "\r\n");
     assert_eq!(detect_eol("no eol at all"), "\n");
 }
+
+#[test]
+fn write_conflicts_when_external_save_lands_after_verify() {
+    let dir = temp_dir("recheck");
+    let path = dir.join("a.txt");
+    write(&path, "one").unwrap();
+    let revision = read(&path).unwrap().revision;
+    read_verified(&path, &revision).unwrap(); // records the fingerprint
+    std::fs::write(&path, "external").unwrap(); // external editor saves
+
+    let error = write(&path, "two").unwrap_err();
+    match error {
+        Error::Conflict {
+            expected, current, ..
+        } => {
+            assert_eq!(expected, revision);
+            assert_eq!(current, revision_of(b"external"));
+        }
+        other => panic!("expected conflict, got {other:?}"),
+    }
+    // The refused write renamed nothing: the external bytes survive.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "external");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn write_proceeds_when_external_save_keeps_content_identical() {
+    let dir = temp_dir("recheck-same");
+    let path = dir.join("a.txt");
+    write(&path, "same").unwrap();
+    let revision = read(&path).unwrap().revision;
+    read_verified(&path, &revision).unwrap();
+    // An external save of identical bytes changes the stat, not the
+    // content: the stat filter fires, the content check clears it.
+    std::fs::write(&path, "same").unwrap();
+
+    assert_eq!(write(&path, "next").unwrap(), revision_of(b"next"));
+    assert_eq!(read(&path).unwrap().content, "next");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn stamps_are_consumed_and_never_leak_across_flows() {
+    let dir = temp_dir("stamps");
+    let path = dir.join("a.txt");
+    write(&path, "one").unwrap();
+
+    // A verified write consumes its stamp: a second plain write without a
+    // new read_verified does not recheck.
+    let revision = read(&path).unwrap().revision;
+    read_verified(&path, &revision).unwrap();
+    write(&path, "two").unwrap();
+    std::fs::write(&path, "external").unwrap();
+    assert!(write(&path, "three").is_ok(), "no stamp, no recheck");
+
+    // An aborted flow's fingerprint (verified, never written) is dropped at
+    // the next lock acquisition instead of poisoning the new flow.
+    let current = read(&path).unwrap().revision;
+    read_verified(&path, &current).unwrap();
+    std::fs::write(&path, "external2").unwrap(); // file moves on
+    let result = with_file_lock(&path, || write(&path, "four"));
+    assert!(result.is_ok(), "stale stamp must not leak into a new flow");
+    assert_eq!(read(&path).unwrap().content, "four");
+    fs::remove_dir_all(&dir).unwrap();
+}
