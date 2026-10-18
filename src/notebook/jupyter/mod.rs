@@ -59,18 +59,13 @@ impl JupyterNotebook {
         let Value::Object(mut map) = root else {
             return Err("notebook must be a JSON object".to_string());
         };
-        match map.get("nbformat").and_then(Value::as_u64) {
-            Some(4) => {}
-            Some(version) => {
-                return Err(format!(
-                    "unsupported nbformat version {version}: only v4 is supported"
-                ));
-            }
-            None => return Err("missing integer field \"nbformat\"".to_string()),
+        let version = version_field(&map, "nbformat")?;
+        if version != 4 {
+            return Err(format!(
+                "unsupported nbformat version {version}: only v4 is supported"
+            ));
         }
-        let Some(minor) = map.get("nbformat_minor").and_then(Value::as_u64) else {
-            return Err("missing integer field \"nbformat_minor\"".to_string());
-        };
+        let minor = version_field(&map, "nbformat_minor")?;
         // Consume the parsed document: the cells array moves out of the root
         // and every passthrough value moves into `extra` — zero clones.
         let raw_cells = match map.remove("cells") {
@@ -222,6 +217,19 @@ fn clear_cell(cell: &mut Cell) {
     cell.extra
         .insert("outputs".into(), Value::Array(Vec::new()));
     cell.extra.insert("execution_count".into(), Value::Null);
+}
+
+/// Read a required version field: it must be present and a non-negative
+/// integer. A JSON float like `4.0` is present but not an integer (nbformat
+/// itself rejects it), so the error reports the value that was found instead
+/// of claiming the field is missing.
+fn version_field(map: &Map<String, Value>, key: &str) -> Result<u64, String> {
+    let Some(value) = map.get(key) else {
+        return Err(format!("missing integer field \"{key}\""));
+    };
+    value.as_u64().ok_or_else(|| {
+        format!("field \"{key}\" must be a non-negative integer, got {value}")
+    })
 }
 
 /// Consume one raw cell object: `cell_type`/`source` become typed fields and

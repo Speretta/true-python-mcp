@@ -49,6 +49,16 @@ fn is_mime_bundle(value: &Value) -> bool {
     })
 }
 
+/// `execution_count` per the official nbformat v4.5 schema — both on a code
+/// cell and inside an `execute_result` output:
+/// `{"type": ["integer", "null"], "minimum": 0}`, i.e. `null` until the cell
+/// has run (verified against nbformat 5.11.1's `validate`). Integers beyond
+/// u64 arrive as floats from serde_json and get flagged; that is the
+/// documented exotic-number boundary (tests/data/exotic_numbers.ipynb).
+fn is_execution_count(value: &Value) -> bool {
+    value.is_null() || value.is_u64()
+}
+
 /// Validate one entry of a code cell's `outputs` array; returns a problem
 /// description when the output object violates the nbformat schema.
 fn check_output(output: &Value) -> Option<String> {
@@ -66,9 +76,12 @@ fn check_output(output: &Value) -> Option<String> {
     };
     match output_type {
         "stream" => {
+            // The official schema types `name` as a plain string; "(stdout,
+            // stderr)" is only its description and nbformat.validate accepts
+            // any string (verified against nbformat 5.11.1).
             require("name", Value::is_string).or_else(|| require("text", is_multiline_string))
         }
-        "execute_result" => require("execution_count", Value::is_u64)
+        "execute_result" => require("execution_count", is_execution_count)
             .or_else(|| require("data", is_mime_bundle))
             .or_else(|| require("metadata", Value::is_object)),
         "display_data" => {
@@ -265,6 +278,11 @@ pub(super) fn check(notebook: &JupyterNotebook) -> Vec<Finding> {
                     format!("cell {index}: code cell is missing \"outputs\""),
                 )),
             }
+            // nbformat's schema says `["integer", "null"]` with `minimum: 0`
+            // (3.0 and -1 validate as INVALID), but serde_json coerces
+            // integers beyond u64 to floats, which Python's arbitrary-
+            // precision validator accepts — so any number passes here rather
+            // than risk flagging an exotic-but-valid count.
             match cell.extra.get("execution_count") {
                 Some(Value::Null) | Some(Value::Number(_)) => {}
                 Some(_) => findings.push(error(
