@@ -27,16 +27,16 @@ use ruff_python_ast::{PySourceType, SourceType};
 use ruff_python_formatter::format_module_source;
 use ruff_text_size::{TextLen, TextRange, TextSize};
 use ruff_workspace::Settings;
-use ruff_workspace::configuration::Configuration;
-use ruff_workspace::resolver::{
-    ConfigurationOrigin, ConfigurationTransformer, resolve_root_settings,
-};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::fs;
 use crate::notebook::JupyterNotebook;
+
+mod settings;
+
+use settings::resolve_settings;
 
 /// A 1-based line/column position, matching ruff's JSON output.
 #[derive(Debug, Clone, Serialize)]
@@ -280,54 +280,6 @@ fn load_source_kind(path: &Path, source_type: PySourceType) -> Result<SourceKind
         .ok_or_else(|| {
             Error::invalid_input(format!("empty or unsupported file: {}", path.display()))
         })
-}
-
-/// Resolve the effective settings for `path` by walking up to the nearest
-/// ruff config (`ruff.toml`, `.ruff.toml`, or a `pyproject.toml` carrying a
-/// `[tool.ruff]` table), falling back to ruff defaults.
-fn resolve_settings(path: &Path) -> Result<Settings, Error> {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let start = absolute.parent().unwrap_or(&absolute);
-    for dir in start.ancestors() {
-        for name in ["ruff.toml", ".ruff.toml"] {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return root_settings(&candidate);
-            }
-        }
-        let pyproject = dir.join("pyproject.toml");
-        if pyproject.is_file() && pyproject_has_ruff(&pyproject) {
-            return root_settings(&pyproject);
-        }
-    }
-    Ok(Settings::default())
-}
-
-fn root_settings(config_path: &Path) -> Result<Settings, Error> {
-    resolve_root_settings(config_path, &NoOpTransformer, ConfigurationOrigin::Ancestor).map_err(
-        |error| {
-            Error::analysis(format!(
-                "invalid ruff config {}: {error}",
-                config_path.display()
-            ))
-        },
-    )
-}
-
-/// Cheap check for a `[tool.ruff` table so unrelated pyproject.toml files do
-/// not stop the upward search.
-fn pyproject_has_ruff(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .map(|text| text.contains("[tool.ruff"))
-        .unwrap_or(false)
-}
-
-struct NoOpTransformer;
-
-impl ConfigurationTransformer for NoOpTransformer {
-    fn transform(&self, config: Configuration) -> Configuration {
-        config
-    }
 }
 
 fn empty_check() -> CheckOutcome {
