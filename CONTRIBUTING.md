@@ -21,13 +21,63 @@ cargo clippy --all-targets    # must stay warning-free
 cargo fmt                     # code style
 ```
 
-Two house rules:
+Two rules are enforced by tooling:
 
 - Production code must not panic. Clippy denies `unwrap`, `expect`, and
   `panic` outside tests; handle errors with the `Error` type in
   `src/error.rs`.
 - Keep source files under ~500 lines. Split large modules the way
   `marimo/check.rs` + `marimo/check_tests.rs` do.
+
+## House style
+
+Naming and structure conventions the codebase follows (from the 2026-10
+style audit). A change that violates one should say why.
+
+1. **Bindings are domain nouns.** `notebook`, `cell`, `source`,
+   `revision`, `findings`, `diagnostics`, `snapshot` — never
+   `a`/`s`/`v`/`res`/`out`/`data`/`tmp`, and closure parameters are no
+   exception (`|diagnostic|`, not `|d|`). Single letters only for char
+   values and domain-less loop counters. (String-builder locals named
+   `out` predate this rule and stay until touched.)
+2. **Booleans read as predicates.** `seen_import`,
+   `inserting_before_existing`, `is_past_the_end` — a name that could
+   follow `if` without mental translation.
+3. **Chains cap at ~3-4 adapters; closures stay expressions.** When a
+   closure body needs a match, a loop, or a second statement, extract a
+   named fn and pass it by reference (`.map(output_summary)`): the chain
+   states the shape, the function states the rule.
+4. **Loops and iterators compile to the same code — choose by clarity.**
+   One pass doing two jobs is a `for` loop; "select the code cells'
+   indexes" is `.filter().map().collect()`. Never hand-roll what one
+   adapter names outright (`split_inclusive`, not a byte-index loop).
+5. **Guard early, then stay flat.** let-else for extract-or-bail,
+   let-chains for compound conditions, early returns instead of else
+   pyramids; a body nested more than two blocks deep inside its outermost
+   loop wants a helper.
+6. **Every phase of an algorithm is a named function, even with one
+   caller.** The top of a long operation should read like a table of
+   contents (`check` → `build`/`multiple_definitions`/`cycles`/
+   `setup_root`/`drift`). Comments that say "what this block does" are
+   unnamed functions — promote them.
+7. **Errors are classified once, at the definition.** `Error` (thiserror)
+   is the crate's language; `anyhow` lives only in `main.rs`. A layer
+   that can classify, must: repeated `.map_err(...)` at call sites means
+   the callee returns the wrong type. User-visible strings live in
+   exactly one place.
+8. **Repeated shapes become types.** A heterogeneous tuple is a struct
+   (`LintPass`); parallel locals threaded through functions are a builder
+   (`marimo/parse.rs`); a literal repeated at many sites is a constructor
+   (`Cell::from_text`).
+9. **No boolean-trap arguments across module boundaries.**
+   `ruff::check(path, SafeFixes::Apply)` says what a `fix: bool` cannot.
+   A fieldless enum costs the same as a bool. Intra-module booleans with
+   named bindings at a single call site (`with_id`) are tolerable.
+10. **Knowledge lives behind its owning module's facade.** `tools/`
+    speaks only `notebook::{Notebook, AnyNotebook, Cell}`;
+    format-specific keys of `Cell.extra` are read through typed accessors
+    owned by the model (`Cell::marimo_kind`), never re-spelled in
+    renderers. Readability rewrites must be codegen-neutral or cheaper.
 
 ## Commit messages
 
