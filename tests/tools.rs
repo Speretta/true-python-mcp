@@ -469,3 +469,27 @@ fn notebook_check_over_the_wire() {
     let (err, text, _) = server.call("notebook_check", json!({"path": "nope_missing.ipynb"}));
     assert!(err, "{text}");
 }
+
+/// An explicit line range on an empty file is a bounds error, not a silent
+/// empty result; the implicit whole-file read stays an empty view.
+#[test]
+fn py_read_explicit_range_on_empty_file_is_a_bounds_error() {
+    let dir = temp_dir("empty-range");
+    let path = dir.join("empty.py");
+    std::fs::write(&path, "").unwrap();
+    let mut server = Server::start(&["--file-tools"]);
+
+    let (err, text, _) = server.call("py_read", json!({"path": path}));
+    assert!(!err, "{text}");
+    assert!(text.contains("lines: 0"), "{text}");
+
+    let (err, text, _) = server.call(
+        "py_read",
+        json!({"path": path, "line_start": 1, "line_end": 1}),
+    );
+    assert!(
+        err,
+        "an explicit range on an empty file must not silently succeed"
+    );
+    assert!(text.contains("out of bounds: file has 0 lines"), "{text}");
+}

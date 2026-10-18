@@ -219,14 +219,15 @@ fn select_range<'a>(
 ) -> Result<((usize, usize), Vec<&'a str>), Error> {
     let total = all.len();
     let (start, end) = match (start, end) {
+        // A whole-file read of an empty file is an empty view; an EXPLICIT
+        // range must hit the bounds error below like any other out-of-range
+        // request, instead of silently returning nothing.
+        (None, None) if total == 0 => return Ok(((0, 0), Vec::new())),
         (None, None) => (1, total),
         (Some(s), Some(e)) => (s, e),
         (Some(s), None) => (s, total),
         (None, Some(e)) => (1, e),
     };
-    if total == 0 {
-        return Ok(((0, 0), Vec::new()));
-    }
     if start < 1 || start > end || end > total {
         return Err(Error::invalid_input(format!(
             "line range {start}..{end} out of bounds: file has {total} lines"
