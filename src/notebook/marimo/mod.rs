@@ -412,14 +412,7 @@ fn to_markdown_header(header: &str, needs_mo: bool) -> String {
     for line in header.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with('@') && !trimmed.contains("hide_code") {
-            if trimmed.ends_with(')') {
-                out.push_str(line);
-                out.truncate(out.len() - 1);
-                out.push_str(", hide_code=True)");
-            } else {
-                out.push_str(line);
-                out.push_str("(hide_code=True)");
-            }
+            out.push_str(&add_hide_code_to_decorator(line));
         } else if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
             let indent = &line[..line.len() - trimmed.len()];
             let (prefix, rest) = match trimmed.strip_prefix("async def ") {
@@ -436,34 +429,42 @@ fn to_markdown_header(header: &str, needs_mo: bool) -> String {
     out
 }
 
+/// One decorator line of a header, with `hide_code=True` appended to its
+/// argument list (the decorator gains parentheses when it had none).
+fn add_hide_code_to_decorator(line: &str) -> String {
+    match line.strip_suffix(')') {
+        Some(before_close) => format!("{before_close}, hide_code=True)"),
+        None => format!("{line}(hide_code=True)"),
+    }
+}
+
+/// Decorator fragments carrying `hide_code=True`, paired with what replaces
+/// them (keeping any remaining decorator arguments intact).
+const HIDE_CODE_FRAGMENTS: [(&str, &str); 3] = [
+    ("(hide_code=True, ", "("),
+    (", hide_code=True)", ")"),
+    ("(hide_code=True)", ""),
+];
+
+fn strip_hide_code_from_line(line: &str) -> String {
+    if !line.trim_start().starts_with('@') {
+        return line.to_string();
+    }
+    for (pattern, replacement) in HIDE_CODE_FRAGMENTS {
+        if line.contains(pattern) {
+            return line.replacen(pattern, replacement, 1);
+        }
+    }
+    line.to_string()
+}
+
 /// Remove `hide_code=True` from a header's decorator (markdown → code).
+/// The `join("\n") + "\n"` tail is load-bearing: an empty header yields
+/// exactly "\n".
 fn strip_hide_code(header: &str) -> String {
     header
         .lines()
-        .map(|line| {
-            if !line.trim_start().starts_with('@') {
-                return line.to_string();
-            }
-            for pattern in ["(hide_code=True, ", ", hide_code=True)", "(hide_code=True)"] {
-                if line.contains(pattern) {
-                    let replacement = if pattern == "(hide_code=True)" {
-                        ""
-                    } else {
-                        "("
-                    };
-                    return line.replacen(
-                        pattern,
-                        if pattern == ", hide_code=True)" {
-                            ")"
-                        } else {
-                            replacement
-                        },
-                        1,
-                    );
-                }
-            }
-            line.to_string()
-        })
+        .map(strip_hide_code_from_line)
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
