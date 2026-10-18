@@ -309,14 +309,15 @@ fn outline_cell_json(index: usize, cell: &Cell) -> Value {
 }
 
 /// Export a notebook as a standalone markdown document: markdown cells
-/// verbatim, other cells fenced, outputs blockquoted. Binary outputs are
-/// not exported; each is reported in the returned warnings, so a conversion
-/// never loses content silently.
+/// verbatim, other cells fenced, outputs blockquoted. Binary outputs and
+/// Jupyter attachments are not exported; each is reported in the returned
+/// warnings, so a conversion never loses content silently.
 pub fn markdown_export(notebook: &AnyNotebook) -> (String, Vec<String>) {
     let mut out = String::new();
     let mut warnings = Vec::new();
     for (index, cell) in notebook.cells().iter().enumerate() {
         let source = cell.source_text();
+        warn_attachments(index, cell, &mut warnings);
         if cell.is_markdown() {
             let _ = writeln!(out, "{}\n", source.trim_end());
             continue;
@@ -326,6 +327,28 @@ pub fn markdown_export(notebook: &AnyNotebook) -> (String, Vec<String>) {
         output::export_outputs(&mut out, index, cell, &mut warnings);
     }
     (out, warnings)
+}
+
+/// Jupyter attachments (images embedded in cell metadata) have no place in a
+/// standalone markdown document; report them so the export never loses
+/// content silently. Direct `extra` read: no typed accessor exists for
+/// attachments.
+fn warn_attachments(index: usize, cell: &Cell, warnings: &mut Vec<String>) {
+    let Some(attachments) = cell
+        .extra
+        .get("attachments")
+        .and_then(|value| value.as_object())
+    else {
+        return;
+    };
+    if attachments.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = attachments.keys().map(String::as_str).collect();
+    warnings.push(format!(
+        "cell {index}: attachments not exported ({})",
+        names.join(", ")
+    ));
 }
 
 fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {

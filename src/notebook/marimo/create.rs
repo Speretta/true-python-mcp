@@ -96,6 +96,35 @@ impl MarimoNotebook {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
     }
+    /// What converting this file into another format leaves behind: literal
+    /// text outside cells (module comments, PEP 723 dependency blocks, stray
+    /// code) and `marimo.App(...)` configuration. One warning per category,
+    /// only when present, so a conversion never drops them silently.
+    pub(crate) fn conversion_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut stray_example: Option<String> = None;
+        for segment in &self.segments {
+            let Segment::Lit(text) = segment else {
+                continue;
+            };
+            if let Some(configuration) = app_configuration(text) {
+                warnings.push(format!(
+                    "marimo.App configuration ({configuration}) is not carried over"
+                ));
+            }
+            for line in text.lines() {
+                if !line.trim().is_empty() && !is_scaffold_line(line) {
+                    stray_example.get_or_insert_with(|| truncate_example(line));
+                }
+            }
+        }
+        if let Some(example) = stray_example {
+            warnings.push(format!(
+                "top-level lines outside cells (e.g. `{example}`) are not carried over"
+            ));
+        }
+        warnings
+    }
 }
 
 /// A new code cell: the plain `@app.cell` shape marimo writes for a body
@@ -116,6 +145,37 @@ pub(super) fn new_app_cell(source: &str) -> (Cell, CellMeta) {
             edited: true,
         },
     )
+}
+
+/// The arguments of a `marimo.App(...)` call in a literal segment, when it
+/// carries any configuration.
+fn app_configuration(text: &str) -> Option<String> {
+    let after = text.split("marimo.App(").nth(1)?;
+    let arguments = after.split(')').next().unwrap_or("").trim();
+    (!arguments.is_empty()).then(|| arguments.to_string())
+}
+
+/// Lines of the standard file scaffold: the imports, the version stamp, the
+/// app declaration and the run guard. Everything else in a literal segment
+/// is user content a conversion would leave behind.
+fn is_scaffold_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed == "import marimo"
+        || trimmed.starts_with("__generated_with")
+        || trimmed.starts_with("app = marimo.App")
+        || trimmed.starts_with("if __name__")
+        || trimmed == "app.run()"
+}
+
+/// One literal line shortened for a warning message (byte-safe).
+fn truncate_example(line: &str) -> String {
+    let trimmed = line.trim();
+    let end = trimmed.floor_char_boundary(60);
+    if end < trimmed.len() {
+        format!("{}…", &trimmed[..end])
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Rebuild a header for a markdown cell: ensure `hide_code=True` on the

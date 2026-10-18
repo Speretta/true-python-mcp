@@ -317,7 +317,10 @@ fn convert_notebook(
 ) -> Result<(String, usize, Vec<String>), Error> {
     let (_, source) = read_notebook(from_path)?;
     if has_extension(path, "md") {
-        let (content, warnings) = render::markdown_export(&source);
+        let (content, mut warnings) = render::markdown_export(&source);
+        if let AnyNotebook::Marimo(marimo) = &source {
+            warnings.extend(marimo.conversion_warnings());
+        }
         return Ok((content, source.cells().len(), warnings));
     }
     let target = match format_override {
@@ -331,7 +334,11 @@ fn convert_notebook(
         })?,
     };
     let mut notebook = notebook::create(target);
-    let mut warnings = Vec::new();
+    let mut warnings = match (&source, target) {
+        (AnyNotebook::Marimo(marimo), _) => marimo.conversion_warnings(),
+        (AnyNotebook::Jupyter(_), NotebookFormat::Marimo) => jupyter_metadata_warnings(&source),
+        (AnyNotebook::Jupyter(_), NotebookFormat::Jupyter) => Vec::new(),
+    };
     let mut dropped_outputs = false;
     for (index, cell) in source.cells().iter().enumerate() {
         let text = cell.source_text();
@@ -342,7 +349,11 @@ fn convert_notebook(
                         "cell {index}: raw cells have no marimo equivalent; kept as a code cell"
                     ));
                 }
-                if let Some(magic) = first_magic(&text) {
+                // Magics are a code-cell concept: markdown text starting
+                // with `!` or `%` (e.g. an image `![alt](...)`) is content.
+                if !cell.is_markdown()
+                    && let Some(magic) = first_magic(&text)
+                {
                     warnings.push(format!(
                         "cell {index}: Jupyter magic `{magic}` has no marimo equivalent; kept \
                          verbatim, marimo will report a syntax error"
@@ -373,6 +384,7 @@ fn convert_notebook(
     if dropped_outputs {
         warnings.push("outputs and execution counts are not stored in marimo files".to_string());
     }
+    preserve_jupyter_extras(&source, &mut notebook);
     // cell_count reports the converted source cells; a scaffold cell tpmcp
     // adds (the `mo` import marimo markdown cells need) is disclosed in the
     // warnings instead.
@@ -387,6 +399,71 @@ fn ensure_mo_definition(notebook: &mut AnyNotebook) -> Result<Vec<String>, Error
     match notebook {
         AnyNotebook::Jupyter(_) => Ok(Vec::new()),
         AnyNotebook::Marimo(marimo) => Ok(marimo.ensure_mo_definition()?.into_iter().collect()),
+    }
+}
+
+/// The Jupyter metadata layers a marimo target cannot carry, warned once per
+/// layer when actually present. Direct `extra` reads: no typed accessors
+/// exist for metadata or attachments.
+fn jupyter_metadata_warnings(source: &AnyNotebook) -> Vec<String> {
+    let AnyNotebook::Jupyter(jupyter) = source else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    let cells_carry_metadata = jupyter.cells.iter().any(|cell| {
+        carries_content(cell.extra.get("metadata"))
+            || carries_content(cell.extra.get("attachments"))
+    });
+    if cells_carry_metadata {
+        warnings.push(
+            "cell metadata (tags, attachments, ...) is not stored in marimo files".to_string(),
+        );
+    }
+    if carries_content(jupyter.extra.get("metadata")) {
+        warnings.push(
+            "notebook metadata (kernelspec, language_info, ...) is not stored in marimo files"
+                .to_string(),
+        );
+    }
+    warnings
+}
+
+/// Whether a passthrough field holds anything worth warning about: a
+/// non-empty object, or an unexpected non-object shape (still dropped).
+fn carries_content(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        Some(serde_json::Value::Object(map)) => !map.is_empty(),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Same-format Jupyter conversion is a rebuild, not a strip-down: carry the
+/// per-cell passthrough fields (outputs, execution counts, metadata, ids)
+/// and the notebook metadata across. Values move as already-parsed JSON and
+/// are never interpreted; the fresh target keeps its own nbformat 4.5
+/// version fields. No-op unless both sides are Jupyter.
+fn preserve_jupyter_extras(source: &AnyNotebook, target: &mut AnyNotebook) {
+    let (AnyNotebook::Jupyter(source_notebook), AnyNotebook::Jupyter(target_notebook)) =
+        (source, target)
+    else {
+        return;
+    };
+    for (source_cell, target_cell) in source_notebook
+        .cells
+        .iter()
+        .zip(target_notebook.cells.iter_mut())
+    {
+        for (key, value) in &source_cell.extra {
+            if key != "cell_type" && key != "source" {
+                target_cell.extra.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    if let Some(metadata) = source_notebook.extra.get("metadata") {
+        target_notebook
+            .extra
+            .insert("metadata".to_string(), metadata.clone());
     }
 }
 
