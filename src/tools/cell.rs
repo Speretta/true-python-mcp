@@ -187,7 +187,8 @@ impl Tpmcp {
             with_notebook(&args.path, &args.revision, |notebook| {
                 check_cell_index(notebook, args.cell)?;
                 let updated = match (args.start_line, args.end_line) {
-                    (None, None) => args.source.clone(),
+                    // args is owned and no later step needs source: move it.
+                    (None, None) => args.source,
                     (Some(start), Some(end)) => {
                         let current = notebook.cells()[args.cell].source_text();
                         fs::replace_line_range(
