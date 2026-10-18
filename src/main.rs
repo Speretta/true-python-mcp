@@ -14,7 +14,12 @@ struct Cli {
     file_tools: bool,
 }
 
-#[tokio::main]
+// Single-threaded runtime: the stdio pump and tool routing share one worker,
+// while tool bodies run on the blocking pool (tools::blocking), so long
+// lint/format passes and cross-process lock waits never stall the
+// connection. Also drops the ~12 idle multi-thread workers from the
+// footprint.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
