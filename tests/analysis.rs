@@ -2,20 +2,14 @@
 //! from the real `ruff 0.17.0` binary (see tests/data/ruff.toml, select=["F"]).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
-use std::fs;
-use std::path::{Path, PathBuf};
+mod common;
 
+use std::fs;
+use std::path::Path;
+
+use common::temp_dir;
 use tpmcp::notebook::JupyterNotebook;
 use tpmcp::ruff::{self, FormatOutcome, FormatWrite, SafeFixes};
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let unique = blake3::hash(tag.as_bytes()).to_hex()[..8].to_string();
-    let dir =
-        std::env::temp_dir().join(format!("tpmcp-ruff-{}-{tag}-{unique}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 fn code(d: &tpmcp::ruff::Diagnostic) -> &str {
     d.code.as_deref().unwrap_or("")

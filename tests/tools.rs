@@ -2,126 +2,12 @@
 //! protocol, exactly as a host (opencode, Claude, VS Code) would.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+mod common;
 
+use common::{server::Server, temp_dir};
 use serde_json::{Value, json};
 
-/// A running tpmcp server spoken to over JSON-RPC on stdio.
-struct Server {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_id: i64,
-}
-
-impl Server {
-    fn start(extra_args: &[&str]) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_tpmcp"))
-            .args(extra_args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn tpmcp");
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut server = Self {
-            child,
-            stdin,
-            stdout,
-            next_id: 0,
-        };
-        server.initialize();
-        server
-    }
-
-    fn initialize(&mut self) {
-        let resp = self.request(
-            "initialize",
-            json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "integration", "version": "0"}
-            }),
-        );
-        assert_eq!(resp["result"]["serverInfo"]["name"], "tpmcp");
-        self.notify("notifications/initialized", Value::Null);
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        self.next_id += 1;
-        let id = self.next_id;
-        let msg = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        writeln!(self.stdin, "{msg}").unwrap();
-        self.stdin.flush().unwrap();
-        let mut line = String::new();
-        self.stdout.read_line(&mut line).unwrap();
-        let resp: Value =
-            serde_json::from_str(&line).unwrap_or_else(|error| panic!("bad JSON {line}: {error}"));
-        assert_eq!(resp["id"], json!(id), "response id mismatch: {resp}");
-        resp
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        let msg = json!({"jsonrpc": "2.0", "method": method, "params": params});
-        writeln!(self.stdin, "{msg}").unwrap();
-        self.stdin.flush().unwrap();
-    }
-
-    fn list_tools(&mut self) -> Vec<String> {
-        let resp = self.request("tools/list", json!({}));
-        let mut names: Vec<String> = resp["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_string())
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// Call a tool, returning (is_error, text, structured_content).
-    fn call(&mut self, name: &str, args: Value) -> (bool, String, Value) {
-        let resp = self.request("tools/call", json!({"name": name, "arguments": args}));
-        assert!(
-            resp.get("error").is_none(),
-            "protocol error from {name}: {}",
-            resp["error"]
-        );
-        let result = &resp["result"];
-        let is_error = result["isError"].as_bool().unwrap_or(false);
-        let text = result["content"]
-            .as_array()
-            .map(|blocks| {
-                blocks
-                    .iter()
-                    .filter(|block| block["type"] == "text")
-                    .map(|block| block["text"].as_str().unwrap_or(""))
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_default();
-        (is_error, text, result["structuredContent"].clone())
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let unique = blake3::hash(tag.as_bytes()).to_hex()[..8].to_string();
-    let dir = std::env::temp_dir().join(format!("tpmcp-it-{}-{tag}-{unique}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
+/// Pull the revision out of a markdown tool response.
 fn revision_of(text: &str) -> String {
     for line in text.lines() {
         if let Some(rev) = line.strip_prefix("revision: ") {

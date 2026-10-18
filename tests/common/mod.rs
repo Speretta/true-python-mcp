@@ -1,5 +1,22 @@
 //! Shared helpers for the integration tests.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
+// Included by several test binaries; not every binary uses every helper.
+#![allow(dead_code)]
+
+pub mod server;
+
+use std::path::PathBuf;
+
+/// Unique temp dir for one test tag: pid + a hash of the tag, cleared and
+/// recreated on every call.
+pub fn temp_dir(tag: &str) -> PathBuf {
+    let unique = blake3::hash(tag.as_bytes()).to_hex()[..8].to_string();
+    let dir =
+        std::env::temp_dir().join(format!("tpmcp-test-{}-{tag}-{unique}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 /// Default python of the ground-truth venv (real marimo + nbformat), overridable
 /// with `TPMCP_GROUND_TRUTH_PYTHON`. Recreate with:
