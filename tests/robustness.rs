@@ -9,6 +9,8 @@
 mod common;
 
 use std::path::Path;
+// Only the debug-only rename-gate test measures time.
+#[cfg(debug_assertions)]
 use std::time::{Duration, Instant};
 
 use common::{server::Server, temp_dir};
@@ -24,6 +26,7 @@ fn fixture_notebook(sources: &[&str]) -> String {
     notebook.serialize()
 }
 
+#[cfg(debug_assertions)]
 fn wait_for_file(path: &Path, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -128,6 +131,10 @@ fn create_refuses_existing_unreadable_file() {
 /// cross-process lock both would verify revision A and both renames would
 /// land, silently destroying one update. With it, P2 blocks until P1
 /// releases, then sees the new revision and conflicts.
+///
+/// Debug builds only: the TPMCP_TEST_RENAME_GATE hook is compiled out of
+/// release builds, where this test would wait for a gate that never opens.
+#[cfg(debug_assertions)]
 #[test]
 fn two_processes_conflict_is_detected() {
     let dir = temp_dir("twoproc");
