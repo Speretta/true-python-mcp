@@ -70,6 +70,45 @@ fn output_summary(output: &Value) -> String {
     }
 }
 
+/// Append the cell's outputs to a markdown export: every output rendered
+/// as a blockquote; binary MIME parts are reported as warnings (their
+/// `<N bytes>` placeholder in the rendering is the only trace left).
+pub(super) fn export_outputs(
+    out: &mut String,
+    index: usize,
+    cell: &Cell,
+    warnings: &mut Vec<String>,
+) {
+    let outputs = cell.outputs();
+    if outputs.is_empty() {
+        return;
+    }
+    let mut binaries = Vec::new();
+    let mut rendered = String::new();
+    for output in outputs {
+        if let Some(data) = output.get("data").and_then(Value::as_object) {
+            binaries.extend(
+                data.keys()
+                    .filter(|mime| *mime != "text/plain")
+                    .map(String::as_str),
+            );
+        }
+        rendered.push_str(&render_output_full(output, Detail::Full));
+        rendered.push('\n');
+    }
+    if !binaries.is_empty() {
+        warnings.push(format!(
+            "cell {index}: binary outputs not exported ({})",
+            binaries.join(", ")
+        ));
+    }
+    out.push_str("\noutputs:\n");
+    for line in rendered.trim_end().lines() {
+        let _ = writeln!(out, "> {line}");
+    }
+    out.push('\n');
+}
+
 fn render_output_full(output: &Value, detail: Detail) -> String {
     let kind = output
         .get("output_type")

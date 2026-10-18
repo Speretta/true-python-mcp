@@ -308,6 +308,26 @@ fn outline_cell_json(index: usize, cell: &Cell) -> Value {
     })
 }
 
+/// Export a notebook as a standalone markdown document: markdown cells
+/// verbatim, other cells fenced, outputs blockquoted. Binary outputs are
+/// not exported; each is reported in the returned warnings, so a conversion
+/// never loses content silently.
+pub fn markdown_export(notebook: &AnyNotebook) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut warnings = Vec::new();
+    for (index, cell) in notebook.cells().iter().enumerate() {
+        let source = cell.source_text();
+        if cell.is_markdown() {
+            let _ = writeln!(out, "{}\n", source.trim_end());
+            continue;
+        }
+        let language = if cell.is_code() { "python" } else { "text" };
+        let _ = writeln!(out, "```{language}\n{}\n```", source.trim_end());
+        output::export_outputs(&mut out, index, cell, &mut warnings);
+    }
+    (out, warnings)
+}
+
 fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {
     // Bind the concatenated source once: both `line_count` and `"source"`
     // derive from it (concatenating per cell is the expensive part).

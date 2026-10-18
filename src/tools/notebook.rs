@@ -5,7 +5,7 @@
 //! `notebook_read` returns the file revision that every mutating tool
 //! requires.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -83,14 +83,22 @@ pub struct NewCell {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NotebookCreateArgs {
-    /// Path of the notebook file to create; must not exist yet. The extension
-    /// picks the format (.ipynb → Jupyter, .py → marimo) unless notebook_format
-    /// is given.
+    /// Path of the notebook file to create; must not exist yet. The
+    /// extension picks the format: .ipynb Jupyter, .py marimo, .md a
+    /// markdown export of from_path.
     pub path: PathBuf,
-    /// Optional initial cells; an empty notebook is created when omitted.
+    /// Optional initial cells for a fresh notebook; an empty notebook is
+    /// created when omitted. Mutually exclusive with from_path.
     #[serde(default)]
     pub cells: Option<Vec<NewCell>>,
-    /// Override the format inferred from the extension: "jupyter" or "marimo".
+    /// Path of an existing notebook to convert into the new file (.ipynb →
+    /// marimo .py or .md, marimo .py → .ipynb or .md). Mutually exclusive
+    /// with cells. Nothing is dropped silently: magics, raw cells and
+    /// binary outputs are kept or reported as per-cell warnings.
+    #[serde(default)]
+    pub from_path: Option<PathBuf>,
+    /// Override the format inferred from the extension: "jupyter" or
+    /// "marimo" (not valid for a .md export target).
     #[serde(default)]
     pub notebook_format: Option<NotebookFormat>,
     /// Result format, "markdown" (default) or "json".
@@ -106,7 +114,8 @@ impl Tpmcp {
                        (see the detail, query and diagnostics parameters). Returns the file \
                        revision required by all mutating tools. Never read notebooks as raw JSON \
                        or raw Python; use this tool. On large notebooks prefer detail=outline or \
-                       query over reading every cell."
+                       query over reading every cell.",
+        annotations(read_only_hint = true)
     )]
     async fn notebook_read(
         &self,
@@ -200,33 +209,55 @@ impl Tpmcp {
     }
 
     #[tool(
-        description = "Create a new empty notebook. The extension picks the format: .ipynb for \
-                       Jupyter (nbformat 4.5) or .py for marimo; pass notebook_format to \
-                       override. Fails if the file already exists; use the cell tools to modify \
-                       existing notebooks."
+        description = "Create a new notebook file, or convert an existing one via from_path \
+                       (.ipynb to marimo .py, or either to markdown). The extension picks the \
+                       format (.ipynb Jupyter nbformat 4.5, .py marimo, .md markdown export); \
+                       notebook_format overrides Jupyter/marimo. Fails if the file already \
+                       exists; use the cell tools to modify existing notebooks. Conversions \
+                       never drop content silently: cells that cannot convert exactly are kept \
+                       and reported as per-cell warnings.",
+        annotations(destructive_hint = false)
     )]
     async fn notebook_create(
         &self,
         Parameters(args): Parameters<NotebookCreateArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
-            let format = match args.notebook_format {
-                Some(format) => format,
-                None => notebook::format_from_extension(&args.path).ok_or_else(|| {
-                    Error::invalid_input(format!(
-                        "cannot infer notebook format from {}; use a .ipynb or .py path, \
-                     or pass notebook_format",
-                        args.path.display()
-                    ))
-                })?,
-            };
-            let mut notebook = notebook::create(format);
-            for new_cell in args.cells.unwrap_or_default() {
-                let index = notebook.cells().len();
-                notebook.insert(index, new_cell.cell_type.as_str(), &new_cell.source)?;
+            if args.from_path.is_some() && args.cells.is_some() {
+                return Err(Error::invalid_input(
+                    "from_path and cells are mutually exclusive",
+                ));
             }
-            let cell_count = notebook.cells().len();
-            let content = notebook.serialize();
+            if args.from_path.is_none() && has_extension(&args.path, "md") {
+                return Err(Error::invalid_input("a .md target requires from_path"));
+            }
+            if args.notebook_format.is_some() && has_extension(&args.path, "md") {
+                return Err(Error::invalid_input(
+                    "notebook_format does not apply to a .md export target",
+                ));
+            }
+            let (content, cell_count, warnings) = match &args.from_path {
+                Some(from_path) => convert_notebook(from_path, &args.path, args.notebook_format)?,
+                None => {
+                    let format = match args.notebook_format {
+                        Some(format) => format,
+                        None => notebook::format_from_extension(&args.path).ok_or_else(|| {
+                            Error::invalid_input(format!(
+                                "cannot infer notebook format from {}; use a .ipynb or .py path, \
+                                 or pass notebook_format",
+                                args.path.display()
+                            ))
+                        })?,
+                    };
+                    let mut notebook = notebook::create(format);
+                    for new_cell in args.cells.unwrap_or_default() {
+                        let index = notebook.cells().len();
+                        notebook.insert(index, new_cell.cell_type.as_str(), &new_cell.source)?;
+                    }
+                    let cell_count = notebook.cells().len();
+                    (notebook.serialize(), cell_count, Vec::new())
+                }
+            };
             let new_revision = fs::with_file_lock(&args.path, || {
                 // Existence check INSIDE the lock, so concurrent creators are
                 // serialized and exactly one wins; stat-based, so entries
@@ -240,15 +271,113 @@ impl Tpmcp {
                 }
                 fs::create(&args.path, &content)
             })?;
+            let summary = match &args.from_path {
+                Some(from_path) => format!(
+                    "created notebook with {cell_count} cells from {}",
+                    from_path.display()
+                ),
+                None => format!("created notebook with {cell_count} cells"),
+            };
             Ok(mutation_result(
                 args.format,
-                format!("created notebook with {cell_count} cells"),
+                summary,
                 &args.path,
                 &new_revision,
-                || None,
-                || json!({"cell_count": cell_count}),
+                || {
+                    (!warnings.is_empty()).then(|| {
+                        let lines: Vec<String> = warnings
+                            .iter()
+                            .map(|warning| format!("- {warning}"))
+                            .collect();
+                        format!("warnings:\n{}", lines.join("\n"))
+                    })
+                },
+                || json!({"cell_count": cell_count, "warnings": &warnings}),
             ))
         })
         .await
     }
+}
+
+fn has_extension(path: &Path, extension: &str) -> bool {
+    path.extension().and_then(|found| found.to_str()) == Some(extension)
+}
+
+/// Convert the notebook at `from_path` into the format the target `path`
+/// (or `format_override`) selects. Returns the file content, the cell
+/// count, and per-cell warnings; nothing is ever dropped silently.
+fn convert_notebook(
+    from_path: &Path,
+    path: &Path,
+    format_override: Option<NotebookFormat>,
+) -> Result<(String, usize, Vec<String>), Error> {
+    let (_, source) = read_notebook(from_path)?;
+    if has_extension(path, "md") {
+        let (content, warnings) = render::markdown_export(&source);
+        return Ok((content, source.cells().len(), warnings));
+    }
+    let target = match format_override {
+        Some(format) => format,
+        None => notebook::format_from_extension(path).ok_or_else(|| {
+            Error::invalid_input(format!(
+                "cannot infer a target format from {}; use a .ipynb or .py path, \
+                 or pass notebook_format",
+                path.display()
+            ))
+        })?,
+    };
+    let mut notebook = notebook::create(target);
+    let mut warnings = Vec::new();
+    let mut dropped_outputs = false;
+    for (index, cell) in source.cells().iter().enumerate() {
+        let text = cell.source_text();
+        let cell_type = match target {
+            NotebookFormat::Marimo => {
+                if cell.cell_type == "raw" {
+                    warnings.push(format!(
+                        "cell {index}: raw cells have no marimo equivalent; kept as a code cell"
+                    ));
+                }
+                if let Some(magic) = first_magic(&text) {
+                    warnings.push(format!(
+                        "cell {index}: Jupyter magic `{magic}` has no marimo equivalent; kept \
+                         verbatim, marimo will report a syntax error"
+                    ));
+                }
+                if !cell.outputs().is_empty() {
+                    dropped_outputs = true;
+                }
+                if cell.is_markdown() {
+                    "markdown"
+                } else {
+                    "code"
+                }
+            }
+            NotebookFormat::Jupyter => {
+                if let Some(kind) = cell.marimo_kind()
+                    && kind != "cell"
+                {
+                    warnings.push(format!(
+                        "cell {index}: marimo {kind} block exported as a plain code cell"
+                    ));
+                }
+                cell.cell_type.as_str()
+            }
+        };
+        notebook.insert(notebook.cells().len(), cell_type, &text)?;
+    }
+    if dropped_outputs {
+        warnings.push("outputs and execution counts are not stored in marimo files".to_string());
+    }
+    let cell_count = notebook.cells().len();
+    Ok((notebook.serialize(), cell_count, warnings))
+}
+
+/// The first Jupyter magic (`%`) or shell (`!`) line of a cell source.
+fn first_magic(source: &str) -> Option<&str> {
+    source.lines().find_map(|line| {
+        let trimmed = line.trim_start();
+        (trimmed.starts_with('%') || trimmed.starts_with('!'))
+            .then_some(trimmed.split_whitespace().next().unwrap_or(trimmed))
+    })
 }
