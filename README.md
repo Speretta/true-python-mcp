@@ -75,6 +75,9 @@ cargo build --release
 (`cargo install --path .` also works: it copies the binary into
 `~/.cargo/bin`.)
 
+The binary is the product. The `tpmcp` library API behind it is internal
+and may change in any release.
+
 **2. Connect your AI tool.** Add this to its MCP config (for example
 `opencode.json`, `claude_desktop_config.json`, or `.cursor/mcp.json`):
 
