@@ -25,7 +25,11 @@ jobs:
         run: |
           uv venv /tmp/nbenv
           uv pip install --python /tmp/nbenv/bin/python nbformat marimo
+      # Pinned official nextest binary via curl; no third-party GitHub
+      # Actions beyond checkout (house rule).
+      - name: Install cargo-nextest
+        run: curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo nextest run
       - run: cargo build --release
