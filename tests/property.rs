@@ -42,35 +42,18 @@ fn arb_text(max_chars: usize) -> impl Strategy<Value = String> {
         .prop_map(|characters| characters.into_iter().collect())
 }
 
-/// An f64 that serde_json's default (fast) parser reads back exactly.
+/// Arbitrary f64s.
 ///
-/// Without its `float_roundtrip` feature, serde_json documents its float
-/// parser as possibly 1 ULP off, and measurements show that applies to ~30%
-/// of full-precision values: their zmij spelling (which matches Python's
-/// `repr` and round-trips) parses back shifted, so canonical output would
-/// drift one ULP per write. The parse→canonicalize idempotence property can
-/// only hold for values that survive serde_json's parse, so the generator
-/// filters them — and the filter doubles as a live regression pin: enabling
-/// `float_roundtrip` in Cargo.toml makes it stop rejecting anything.
+/// serde_json's `float_roundtrip` feature (Cargo.toml) makes the parser
+/// read every spelling — zmij's, which matches Python's `repr` — back
+/// exactly. Without it, ~30% of full-precision values parse 1 ULP off and
+/// canonical output drifts one ULP per write, silently breaking the
+/// normalize-once-then-stable contract. The parse→canonicalize idempotence
+/// property below — together with the checked-in regression seed
+/// `-8.087848827836297e-215` — fails immediately if the feature is ever
+/// removed, so no generator filter is needed anymore.
 fn arb_exact_float() -> impl Strategy<Value = f64> {
-    any::<f64>().prop_filter(
-        "serde_json default float parsing is 1-ULP lossy for this value \
-         (needs the float_roundtrip feature)",
-        |value| serde_json_parses_exactly(*value),
-    )
-}
-
-fn serde_json_parses_exactly(value: f64) -> bool {
-    if !value.is_finite() {
-        return true; // Value maps non-finite floats to null; nothing parses back
-    }
-    let Some(number) = serde_json::Number::from_f64(value) else {
-        return true;
-    };
-    serde_json::from_str::<Value>(&number.to_string())
-        .ok()
-        .and_then(|parsed| parsed.as_f64())
-        == Some(value)
+    any::<f64>()
 }
 
 /// Arbitrary JSON value trees (bounded depth) for metadata and passthrough
