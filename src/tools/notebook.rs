@@ -113,13 +113,19 @@ pub struct NotebookCreateArgs {
 #[tool_router(router = notebook_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
+        title = "Read notebook",
         description = "Read a notebook (Jupyter .ipynb or marimo .py) as indexed, token-efficient \
                        markdown or JSON, with optional outline, content search and diagnostics \
                        (see the detail, query and diagnostics parameters). Returns the file \
                        revision required by all mutating tools. Never read notebooks as raw JSON \
                        or raw Python; use this tool. On large notebooks prefer detail=outline or \
                        query over reading every cell.",
-        annotations(read_only_hint = true)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn notebook_read(
         &self,
@@ -147,6 +153,7 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Create or convert notebook",
         description = "Create a new notebook file, or convert an existing one via from_path \
                        (.ipynb to marimo .py, or either to markdown). The extension picks the \
                        format (.ipynb Jupyter nbformat 4.5, .py marimo, .md markdown export); \
@@ -154,7 +161,12 @@ impl Tpmcp {
                        exists; use the cell tools to modify existing notebooks. Conversions \
                        never drop content silently: cells that cannot convert exactly are kept \
                        and reported as per-cell warnings.",
-        annotations(destructive_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn notebook_create(
         &self,
