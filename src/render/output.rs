@@ -11,8 +11,9 @@ use serde_json::Value;
 use super::{Detail, WithOutputs};
 use crate::notebook::Cell;
 
-/// Maximum characters shown per output payload in full mode.
-const FULL_OUTPUT_CHARS: usize = 4000;
+/// Maximum bytes shown per output payload in full mode; truncation backs off
+/// to a char boundary.
+const FULL_OUTPUT_BYTES: usize = 4000;
 
 /// Append the cell's output section to `out`, if it has one to render.
 pub(super) fn write_outputs(
@@ -180,10 +181,10 @@ fn multiline_to_string(value: Option<&Value>) -> String {
 
 fn truncate(text: &str, detail: Detail) -> String {
     match detail {
-        Detail::Full if text.len() <= FULL_OUTPUT_CHARS => text.to_string(),
+        Detail::Full if text.len() <= FULL_OUTPUT_BYTES => text.to_string(),
         Detail::Full => format!(
-            "{}\n... truncated ({} chars total)",
-            &text[..text.floor_char_boundary(FULL_OUTPUT_CHARS)],
+            "{}\n... truncated ({} bytes total)",
+            &text[..text.floor_char_boundary(FULL_OUTPUT_BYTES)],
             text.len()
         ),
         // Outline never renders output payloads; group it with brief.

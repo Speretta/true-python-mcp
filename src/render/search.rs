@@ -12,14 +12,17 @@ use crate::notebook::{AnyNotebook, Cell, Notebook};
 /// as a count with a steering line (page or narrow the query).
 const MATCH_CELL_CAP: usize = 100;
 
-/// Maximum characters of one matching line rendered.
-const MATCH_LINE_CHARS: usize = 120;
+/// Maximum bytes of one matching line rendered; truncation backs off to a
+/// char boundary, so multibyte lines can end slightly earlier.
+const MATCH_LINE_BYTES: usize = 120;
 
 /// One matching cell: its absolute notebook index and matching lines
 /// (1-based line numbers, as `cell_set_source` ranges use).
 pub struct CellHits {
     pub index: usize,
     pub cell_type: String,
+    /// marimo block label (`setup`, `broken`, ...) when not a plain cell.
+    pub kind: Option<String>,
     pub lines: Vec<(usize, String)>,
 }
 
@@ -52,7 +55,7 @@ pub fn search(cells: &[Cell], query: &str, start: Option<usize>, limit: Option<u
                 let text = line.trim();
                 (
                     number + 1,
-                    text[..text.floor_char_boundary(MATCH_LINE_CHARS)].to_string(),
+                    text[..text.floor_char_boundary(MATCH_LINE_BYTES)].to_string(),
                 )
             })
             .collect();
@@ -63,6 +66,7 @@ pub fn search(cells: &[Cell], query: &str, start: Option<usize>, limit: Option<u
         matched.push(CellHits {
             index,
             cell_type: cell.cell_type.clone(),
+            kind: super::kind_label(cell).map(str::to_string),
             lines,
         });
     }
@@ -72,7 +76,7 @@ pub fn search(cells: &[Cell], query: &str, start: Option<usize>, limit: Option<u
         Some(limit) => start.saturating_add(limit).min(matched_cells),
         None => matched_cells,
     };
-    let end = end.min(start + MATCH_CELL_CAP);
+    let end = end.min(start.saturating_add(MATCH_CELL_CAP));
     let more = matched_cells - end;
     Search {
         query: query.to_string(),
@@ -105,18 +109,19 @@ pub fn query_markdown(
         "query: \"{}\"\nmatches: {} cell(s), {} line(s)",
         search.query, search.matched_cells, search.matched_lines
     );
-    if search.hits.is_empty() {
+    if search.matched_cells == 0 {
         out.push_str("\nno cells match the query\n");
         return out;
     }
+    if search.hits.is_empty() {
+        out.push_str("\nthis page is empty: start/limit selected no matching cells\n");
+    }
     for hits in &search.hits {
-        let _ = writeln!(
-            out,
-            "\n### [{}] {} · {} match(es)",
-            hits.index,
-            hits.cell_type,
-            hits.lines.len()
-        );
+        let _ = write!(out, "\n### [{}] {}", hits.index, hits.cell_type);
+        if let Some(kind) = &hits.kind {
+            let _ = write!(out, " ({kind})");
+        }
+        let _ = writeln!(out, " · {} match(es)", hits.lines.len());
         for (number, text) in &hits.lines {
             let _ = writeln!(out, "{number:>4} | {text}");
         }
@@ -149,6 +154,7 @@ pub fn query_json(path: &str, revision: &str, notebook: &AnyNotebook, search: &S
                 json!({
                     "index": hits.index,
                     "cell_type": hits.cell_type,
+                    "kind": hits.kind,
                     "matches": hits
                         .lines
                         .iter()

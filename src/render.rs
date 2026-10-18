@@ -175,10 +175,7 @@ fn write_cell_markdown(
     with_outputs: WithOutputs,
 ) {
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
-    // marimo special blocks (setup/function/class/broken) get a kind label.
-    if let Some(kind) = cell.marimo_kind()
-        && kind != "cell"
-    {
+    if let Some(kind) = kind_label(cell) {
         let _ = write!(out, " ({kind})");
     }
     if let Some(count) = cell.execution_count() {
@@ -195,24 +192,28 @@ fn write_cell_markdown(
     write_outputs(out, cell, detail, with_outputs);
 }
 
-/// One outline row: index, type, line count, first source line (trimmed to
-/// [`OUTLINE_FIRST_LINE_CHARS`]). The navigational view of a notebook.
+/// One outline row: index, type, line count, first source line (truncated to
+/// [`OUTLINE_FIRST_LINE_BYTES`]). The navigational view of a notebook.
 fn write_cell_outline(out: &mut String, index: usize, cell: &Cell) {
-    const OUTLINE_FIRST_LINE_CHARS: usize = 80;
+    const OUTLINE_FIRST_LINE_BYTES: usize = 80;
     let source = cell.source_text();
     let line_count = logical_line_count(&source);
     let first = crate::fs::logical_lines(&source)
         .first()
         .map(|line| line.trim())
         .unwrap_or("");
-    let first = &first[..first.floor_char_boundary(OUTLINE_FIRST_LINE_CHARS)];
+    let first = &first[..first.floor_char_boundary(OUTLINE_FIRST_LINE_BYTES)];
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
-    if let Some(kind) = cell.marimo_kind()
-        && kind != "cell"
-    {
+    if let Some(kind) = kind_label(cell) {
         let _ = write!(out, " ({kind})");
     }
     let _ = writeln!(out, " · {line_count} lines · {first}");
+}
+
+/// The marimo block label shown next to the cell type when the cell is not a
+/// plain app cell (`setup`, `function`, `class`, `unparsable`, `broken`).
+fn kind_label(cell: &Cell) -> Option<&str> {
+    cell.marimo_kind().filter(|kind| *kind != "cell")
 }
 
 /// Append the fenced source block of a cell; full detail numbers each line
@@ -301,6 +302,7 @@ fn outline_cell_json(index: usize, cell: &Cell) -> Value {
     json!({
         "index": index,
         "cell_type": cell.cell_type,
+        "kind": kind_label(cell),
         "line_count": logical_line_count(&source),
         "first_line": crate::fs::logical_lines(&source)
             .first()
@@ -324,10 +326,23 @@ pub fn markdown_export(notebook: &AnyNotebook) -> (String, Vec<String>) {
             continue;
         }
         let language = if cell.is_code() { "python" } else { "text" };
-        let _ = writeln!(out, "```{language}\n{}\n```", source.trim_end());
+        let fence = code_fence(&source);
+        let _ = writeln!(out, "{fence}{language}\n{}\n{fence}", source.trim_end());
         output::export_outputs(&mut out, index, cell, &mut warnings);
     }
     (out, warnings)
+}
+
+/// The shortest backtick fence `source` cannot close from the inside: at
+/// least three backticks, one more than the longest backtick run in the
+/// source (CommonMark's rule for fenced blocks).
+fn code_fence(source: &str) -> String {
+    let longest_run = source
+        .split(|character: char| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    "`".repeat((longest_run + 1).max(3))
 }
 
 /// Jupyter attachments (images embedded in cell metadata) have no place in a
