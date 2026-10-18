@@ -407,16 +407,22 @@ pub(super) fn check(notebook: &MarimoNotebook) -> Vec<Finding> {
 /// as signature parameters).
 fn block_definition_name(meta: &CellMeta) -> Option<String> {
     let parsed = ruff_python_parser::parse_module(&meta.block).ok()?;
+    let mut name = None;
     for stmt in parsed.syntax().body.iter() {
         match stmt {
             ruff_python_ast::Stmt::FunctionDef(function) => {
-                return Some(function.name.to_string());
+                name = Some(function.name.to_string());
+                break;
             }
-            ruff_python_ast::Stmt::ClassDef(class) => return Some(class.name.to_string()),
+            ruff_python_ast::Stmt::ClassDef(class) => {
+                name = Some(class.name.to_string());
+                break;
+            }
             _ => {}
         }
     }
-    None
+    super::parse::guarded_drop(parsed, meta.block.len());
+    name
 }
 
 #[cfg(test)]

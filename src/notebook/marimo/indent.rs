@@ -187,6 +187,7 @@ fn string_interiors(source: &str) -> StringInteriors {
             block_count += 1;
         }
     }
+    super::parse::guarded_drop(parsed, source.len());
     StringInteriors {
         block_of_line,
         block_count,

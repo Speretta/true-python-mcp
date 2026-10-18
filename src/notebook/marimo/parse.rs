@@ -25,9 +25,38 @@ pub fn is_marimo(content: &str) -> bool {
 /// uneditable (matching `marimo edit --watch`).
 pub fn parse(src: &str) -> Result<MarimoNotebook, String> {
     match parse_module(src) {
-        Ok(parsed) => parse_structured(src, &parsed),
+        Ok(parsed) => {
+            let result = parse_structured(src, &parsed);
+            guarded_drop(parsed, src.len());
+            result
+        }
         Err(_) => super::scan::scan(src),
     }
+}
+
+/// Upper bound for one AST node's recursive `Drop` glue frame, generous for
+/// debug builds. Every node consumes at least one source byte (a unary-chain
+/// `-` per level is the densest nesting), so `source_len * DROP_FRAME_BOUND`
+/// bounds the stack any parsed tree's drop can need.
+const DROP_FRAME_BOUND: usize = 256;
+
+/// Cap on the virtual reservation for a drop segment. Linux overcommits the
+/// mapping; only pages the drop actually touches cost memory. Sources near
+/// the 32 MiB read cap could still exceed this in debug builds — a residual,
+/// documented limit (release drop frames are ~2-4× smaller).
+const DROP_STACK_CAP: usize = 4 * 1024 * 1024 * 1024;
+
+/// Drop a parsed tree without risking the worker stack: ruff's AST `Drop`
+/// glue recurses per node (a 200k-term expression is ~200k nested drop
+/// frames), and ruff guards only its own parser recursion, never the drop.
+/// Shallow trees drop inline for free; when the remaining stack cannot
+/// provably contain the worst-case drop, the tree drops on a stacker segment
+/// sized from the source length.
+pub(super) fn guarded_drop<T>(parsed: Parsed<T>, source_len: usize) {
+    let worst_case = DROP_FRAME_BOUND
+        .saturating_mul(source_len)
+        .min(DROP_STACK_CAP);
+    stacker::maybe_grow(worst_case, worst_case.max(1024 * 1024), move || drop(parsed));
 }
 
 fn parse_structured(src: &str, parsed: &Parsed<ModModule>) -> Result<MarimoNotebook, String> {

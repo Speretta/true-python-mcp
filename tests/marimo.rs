@@ -791,6 +791,52 @@ fn check_matches_real_marimo_graph_errors() {
     }
 }
 
+/// F5 regression: deeply nested Python in a marimo cell (a 200k-term sum —
+/// ruff's stacker-guarded parser handles it, then the scope analysis walks
+/// the expression tree) must not overflow the stack and SIGSEGV the whole
+/// server during notebook_check. The work runs in a CHILD process so a stack
+/// overflow can never kill the test runner; the child does it in-process on
+/// an ordinary libtest thread (2 MiB stack, the same shape as the tokio
+/// workers the server runs tools on), so passing demonstrates the
+/// stacker::maybe_grow guard works without any thread-spawning tricks.
+/// The child's term count is overridable via TPMCP_TEST_DEEP_TERMS for
+/// threshold measurements.
+#[test]
+fn deeply_nested_marimo_cell_does_not_crash() {
+    const CHILD_ENV: &str = "TPMCP_TEST_DEEP_NESTING";
+    const TERMS_ENV: &str = "TPMCP_TEST_DEEP_TERMS";
+    if std::env::var(CHILD_ENV).is_ok() {
+        let terms: usize = std::env::var(TERMS_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(200_000)
+            .max(2);
+        let body = format!("x = {}1", "1+".repeat(terms - 1));
+        let src = synthetic(&[&body]);
+        eprintln!("stage: opening ({terms} terms)");
+        let nb = open(&src).unwrap_or_else(|error| panic!("deep cell must parse: {error}"));
+        eprintln!("stage: opened, checking");
+        let findings = nb.check();
+        eprintln!("stage: checked");
+        eprintln!("deep-nesting child survived {terms} terms, {} findings", findings.len());
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("deeply_nested_marimo_cell_does_not_crash")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .output()
+        .unwrap_or_else(|error| panic!("spawn deep-nesting child: {error}"));
+    assert!(
+        output.status.success(),
+        "deep nesting killed the analysis child (exit {:?}); stderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Cell indexes mentioned in a finding message ("cells [0, 1]", "(0, 1)").
 fn message_cells(message: &str) -> Vec<String> {
     let mut cells = Vec::new();

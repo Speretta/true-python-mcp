@@ -9,7 +9,30 @@ use ruff_python_ast::{
 use super::{Analyzer, DefKind, Kind, is_local};
 
 impl<'a> Visitor<'a> for Analyzer<'a> {
+    /// Every recursive entry point of the walk (statement, expression,
+    /// binding target, match pattern) runs under the [`Analyzer::grow_stack`]
+    /// guard, so deeply nested Python cannot overflow the worker stack.
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        self.grow_stack(|analyzer| analyzer.visit_stmt_inner(stmt))
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        self.grow_stack(|analyzer| analyzer.visit_expr_inner(expr))
+    }
+
+    fn visit_pattern(&mut self, pattern: &'a Pattern) {
+        // Match patterns bind names; marimo defines them at parse time since
+        // the bound subset is unknown statically.
+        self.bind_pattern(pattern);
+    }
+
+    fn visit_decorator(&mut self, decorator: &'a Decorator) {
+        self.visit_expr(&decorator.expression);
+    }
+}
+
+impl<'a> Analyzer<'a> {
+    fn visit_stmt_inner(&mut self, stmt: &'a Stmt) {
         match stmt {
             Stmt::FunctionDef(function) => {
                 let name = function.name.as_str();
@@ -149,8 +172,10 @@ impl<'a> Visitor<'a> for Analyzer<'a> {
             _ => walk_stmt(self, stmt),
         }
     }
+}
 
-    fn visit_expr(&mut self, expr: &'a Expr) {
+impl<'a> Analyzer<'a> {
+    fn visit_expr_inner(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Name(name) => {
                 let id = name.id.as_str();
@@ -260,16 +285,6 @@ impl<'a> Visitor<'a> for Analyzer<'a> {
             }
             _ => walk_expr(self, expr),
         }
-    }
-
-    fn visit_pattern(&mut self, pattern: &'a Pattern) {
-        // Match patterns bind names; marimo defines them at parse time since
-        // the bound subset is unknown statically.
-        self.bind_pattern(pattern);
-    }
-
-    fn visit_decorator(&mut self, decorator: &'a Decorator) {
-        self.visit_expr(&decorator.expression);
     }
 }
 

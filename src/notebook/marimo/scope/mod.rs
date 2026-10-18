@@ -30,6 +30,16 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::{Comprehension, Expr, Parameters, Pattern, TypeParam, TypeParams};
 use ruff_python_parser::parse_module;
 
+/// Stack-growth parameters for the AST walk, mirroring ruff's parser (which
+/// uses the same crate): shallow nesting runs unchecked, deeper recursion
+/// probes the remaining stack and grows into 1 MiB heap segments when it runs
+/// low. Without the guard, deeply nested Python — which ruff's own guarded
+/// parser happily accepts — overflows the 2 MiB tokio worker stacks and
+/// SIGSEGVs the whole server during notebook_check.
+const STACK_RED_ZONE: usize = 100 * 1024;
+const STACK_SIZE: usize = 1024 * 1024;
+const MAX_UNCHECKED_RECURSION_DEPTH: usize = 20;
+
 /// A name is cell-local when it is `__` or starts with a single underscore
 /// (mirroring marimo's `is_local`): never a ref, never an exported def.
 fn is_local(name: &str) -> bool {
@@ -98,11 +108,12 @@ pub(super) fn analyze(code: &str) -> Option<CellInfo> {
         refs: HashMap::new(),
         obscured: Vec::new(),
         is_sql: false,
+        recursion_depth: 0,
     };
     for stmt in parsed.syntax().body.iter() {
         visitor.visit_stmt(stmt);
     }
-    Some(CellInfo {
+    let result = Some(CellInfo {
         defs: visitor
             .module
             .defs
@@ -118,7 +129,9 @@ pub(super) fn analyze(code: &str) -> Option<CellInfo> {
             .map(|(name, _)| name.clone())
             .collect(),
         is_sql: visitor.is_sql,
-    })
+    });
+    super::parse::guarded_drop(parsed, code.len());
+    result
 }
 
 struct Analyzer<'a> {
@@ -133,9 +146,25 @@ struct Analyzer<'a> {
     /// Exception handler names currently in scope (`except ... as name:`).
     obscured: Vec<&'a str>,
     is_sql: bool,
+    /// Nesting depth of the AST walk, for the stack guard ([`grow_stack`]).
+    recursion_depth: usize,
 }
 
 impl<'a> Analyzer<'a> {
+    /// Run one recursive step of the AST walk, growing the stack once
+    /// nesting gets deep (ruff's parser recursion-guard pattern; see the
+    /// constants above).
+    fn grow_stack<T>(&mut self, step: impl FnOnce(&mut Self) -> T) -> T {
+        self.recursion_depth += 1;
+        let result = if self.recursion_depth > MAX_UNCHECKED_RECURSION_DEPTH {
+            stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || step(self))
+        } else {
+            step(self)
+        };
+        self.recursion_depth -= 1;
+        result
+    }
+
     /// The innermost open block; the module block when no nested scope is
     /// open. Structurally total: the module block cannot be popped.
     fn current(&self) -> &Block {
@@ -231,6 +260,10 @@ impl<'a> Analyzer<'a> {
 
     /// Define every name bound by an assignment target (Name / destructuring).
     fn bind_target(&mut self, expr: &'a Expr) {
+        self.grow_stack(|analyzer| analyzer.bind_target_inner(expr))
+    }
+
+    fn bind_target_inner(&mut self, expr: &'a Expr) {
         match expr {
             Expr::Name(name) => self.visit_name_target(name.id.as_str()),
             Expr::Tuple(tuple) => tuple
@@ -314,6 +347,10 @@ impl<'a> Analyzer<'a> {
     }
 
     fn bind_pattern(&mut self, pattern: &'a Pattern) {
+        self.grow_stack(|analyzer| analyzer.bind_pattern_inner(pattern))
+    }
+
+    fn bind_pattern_inner(&mut self, pattern: &'a Pattern) {
         match pattern {
             Pattern::MatchAs(pattern) => {
                 if let Some(name) = &pattern.name {

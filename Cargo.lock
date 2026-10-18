@@ -2812,6 +2812,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "stacker",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

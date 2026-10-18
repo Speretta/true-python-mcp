@@ -40,6 +40,7 @@ pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
                     for stmt in parsed.syntax().body.iter() {
                         inspect_literal(stmt, &mut seen_import, &mut seen_app, &mut version);
                     }
+                    super::parse::guarded_drop(parsed, text.len());
                 }
                 segments.push(Segment::Lit(text.to_string()));
             }
@@ -67,6 +68,15 @@ pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
 /// bytes around the statement (so the region reconstructs byte-for-byte).
 fn parse_cell_region(text: &str) -> Option<(Cell, CellMeta, String, String)> {
     let parsed = parse_module(text).ok()?;
+    let result = region_cell(text, &parsed);
+    super::parse::guarded_drop(parsed, text.len());
+    result
+}
+
+fn region_cell(
+    text: &str,
+    parsed: &ruff_python_parser::Parsed<ruff_python_ast::ModModule>,
+) -> Option<(Cell, CellMeta, String, String)> {
     let body = &parsed.syntax().body;
     if body.len() != 1 {
         return None;
