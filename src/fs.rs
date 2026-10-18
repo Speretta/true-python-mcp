@@ -4,7 +4,8 @@
 //! Every mutating tool follows the same protocol:
 //!
 //! 1. Take the per-path lock ([`with_file_lock`]) so concurrent tpmcp calls
-//!    to the same file are serialized.
+//!    to the same file are serialized — in-process (pipelined tool calls)
+//!    and cross-process (separate tpmcp servers, e.g. two AI clients).
 //! 2. [`read_verified`] the file against the caller-supplied revision.
 //! 3. Mutate the in-memory snapshot.
 //! 4. [`write`] it back atomically (temp file + rename) and return the new
@@ -13,13 +14,15 @@
 //! Readers never need the lock: because writes land via `rename`, a reader
 //! always observes either the old or the new file, never a partial one.
 
-use std::collections::HashMap;
+pub mod lock;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::error::Error;
+
+pub use lock::with_file_lock;
 
 /// Files larger than this are rejected to keep reads and diffs token-safe.
 const MAX_FILE_SIZE: u64 = 32 * 1024 * 1024;
@@ -87,18 +90,6 @@ pub fn write(path: &Path, content: &str) -> Result<String, Error> {
             Err(Error::io(path.to_path_buf(), source))
         }
     }
-}
-
-/// Run `f` while holding the lock for `path`, serializing tpmcp's own
-/// mutations of the same file across concurrent tool calls.
-pub fn with_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
-    let mutex = mutex_for(path);
-    // A poisoned lock only means a previous holder panicked; the atomic
-    // write design keeps the file itself consistent, so keep going.
-    let _guard = mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f()
 }
 
 /// Dominant line ending of `text`: CRLF if it occurs anywhere, else LF.
@@ -200,34 +191,6 @@ fn temp_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-fn lock_table() -> &'static RwLock<HashMap<PathBuf, Arc<Mutex<()>>>> {
-    static TABLE: OnceLock<RwLock<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
-    TABLE.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-fn mutex_for(path: &Path) -> Arc<Mutex<()>> {
-    // Key locks by canonical path so `./a.ipynb` and `/abs/a.ipynb` share one
-    // lock; fall back to the absolute path for files that do not exist yet.
-    let key = fs::canonicalize(path)
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf());
-    // Poison recovery (same policy as with_file_lock below): only map
-    // get/entry/or_default and Arc clones run under the table lock, none of
-    // which can leave the table inconsistent, so a poisoned table is still a
-    // valid table and recovery is safe.
-    if let Some(mutex) = lock_table()
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&key)
-    {
-        return mutex.clone();
-    }
-    let mut table = lock_table()
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    table.entry(key).or_default().clone()
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 mod tests {
@@ -299,36 +262,6 @@ mod tests {
         file.set_len(MAX_FILE_SIZE + 1).unwrap();
         drop(file);
         assert_eq!(read(&path).unwrap_err().kind(), "too_large");
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn file_lock_serializes_mutations() {
-        let dir = temp_dir("lock");
-        let path = dir.join("counter.txt");
-        write(&path, "0").unwrap();
-
-        let counter = Arc::new(Mutex::new(0));
-        std::thread::scope(|scope| {
-            for _ in 0..4 {
-                let (path, counter) = (&path, &counter);
-                scope.spawn(move || {
-                    for _ in 0..25 {
-                        with_file_lock(path, || {
-                            let snapshot = read(path)?;
-                            let value: i32 = snapshot.content.trim().parse().unwrap();
-                            *counter.lock().unwrap() += 1;
-                            write(path, &(value + 1).to_string())?;
-                            Ok(())
-                        })
-                        .unwrap();
-                    }
-                });
-            }
-        });
-
-        assert_eq!(read(&path).unwrap().content, "100");
-        assert_eq!(*counter.lock().unwrap(), 100);
         fs::remove_dir_all(&dir).unwrap();
     }
 

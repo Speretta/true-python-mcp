@@ -12,6 +12,7 @@ rust-version = "1.97"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+fd-lock = "4"
 rmcp = { version = "3.5", features = ["transport-io"] }
 ruff_db = "=0.0.17"
 ruff_diagnostics = "=0.0.17"
