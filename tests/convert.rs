@@ -485,3 +485,50 @@ fn markdown_export_outfences_backticks() {
     assert!(exported.contains("````python"), "{exported}");
     assert!(exported.contains("```python\ny = 2\n```"), "{exported}");
 }
+
+/// Ground truth: marimo's own converter, invoked exactly as the CLI does.
+const MARIMO_CONVERT: &str = r#"
+import subprocess, sys
+completed = subprocess.run(
+    [sys.executable, "-m", "marimo", "convert", sys.argv[1]],
+    capture_output=True, text=True, check=True,
+)
+sys.stdout.write(completed.stdout)
+"#;
+
+/// EC-7 oracle: for a clean code+markdown source, the converted file is
+/// byte-identical to `marimo convert`'s output (modulo the trailing newline
+/// the CLI's print adds): header spacing, the blank line before `return`
+/// after a final import, named returns for defs other cells use, bare
+/// `return` elsewhere, and the disclosed `mo` scaffold cell in the position
+/// marimo puts it.
+#[test]
+fn converted_files_match_marimos_own_serializer() {
+    let dir = temp_dir("convert-canonical");
+    let source = dir.join("clean.ipynb");
+    std::fs::write(&source, CLEAN_WITH_MARKDOWN).unwrap();
+    let mut server = Server::start(&[]);
+    let target = dir.join("mine.py");
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": target, "from_path": source}),
+    );
+    assert!(!err, "{text}");
+
+    // A created (not converted) empty file keeps the same header spacing.
+    let empty = dir.join("empty.py");
+    let (err, text, _) = server.call("notebook_create", json!({"path": empty}));
+    assert!(!err, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&empty).unwrap(),
+        "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n\
+         if __name__ == \"__main__\":\n    app.run()\n"
+    );
+
+    let Some(python) = ground_truth_python() else {
+        return;
+    };
+    let official = run_python(&python, MARIMO_CONVERT, &[source.to_str().unwrap()]);
+    let mine = std::fs::read_to_string(&target).unwrap();
+    assert_eq!(mine.trim_end_matches('\n'), official.trim_end_matches('\n'));
+}

@@ -6,7 +6,13 @@
 //! cells); parsed files serialize from their captured bytes and never pass
 //! through this module.
 
-use super::{CellMeta, Kind, MarimoNotebook, MdInfo, Segment, scope};
+use std::collections::BTreeSet;
+
+use ruff_python_ast::Stmt;
+use ruff_python_parser::parse_module;
+use ruff_text_size::Ranged;
+
+use super::{CellMeta, Kind, MarimoNotebook, MdInfo, Segment, parse::guarded_drop, scope};
 use crate::error::Error;
 use crate::notebook::{Cell, Notebook};
 
@@ -30,7 +36,10 @@ impl MarimoNotebook {
             metas: Vec::new(),
             segments: vec![
                 Segment::Lit(head),
-                Segment::Lit("\n\n\n".to_string()),
+                // The header literal ends with a newline, so the gap to the
+                // run guard is two newlines (two blank lines), the spacing
+                // marimo writes between its header and the first block.
+                Segment::Lit("\n\n".to_string()),
                 Segment::Lit("if __name__ == \"__main__\":\n    app.run()\n".to_string()),
             ],
             version: Some(MARIMO_VERSION.to_string()),
@@ -96,6 +105,80 @@ impl MarimoNotebook {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
     }
+    /// Rewrite the generated cells' trailing `return` and signature the way
+    /// marimo's serializer writes them: `return` names exactly the cell's
+    /// defs that some cell refs (sorted), and the signature takes exactly
+    /// the refs that are not allowed (own defs, setup defs, unshadowed
+    /// builtins), sorted — the same expectations check.rs reports drift
+    /// against, so a freshly built file carries no stale-return or
+    /// stale-signature findings. Parsed cells serialize from their captured
+    /// bytes and are never touched, so roundtrips stay byte-exact. Very long
+    /// name lists keep the one-line shape (marimo wraps them into multiline
+    /// tuples and rewraps ours on its next save).
+    pub(crate) fn canonicalize_generated_cells(&mut self) {
+        let mut used_refs: BTreeSet<String> = BTreeSet::new();
+        let mut all_defs: BTreeSet<String> = BTreeSet::new();
+        let mut setup_defs: BTreeSet<String> = BTreeSet::new();
+        let mut infos: Vec<Option<scope::CellInfo>> = Vec::with_capacity(self.cells.len());
+        for (cell, meta) in self.cells.iter().zip(&self.metas) {
+            // A markdown cell's wrapper call refs `mo`; its source is not Python.
+            if meta.md.is_some() {
+                used_refs.insert("mo".to_string());
+                infos.push(None);
+                continue;
+            }
+            let info = scope::analyze(&cell.source.text());
+            if let Some(info) = &info {
+                used_refs.extend(info.refs.iter().cloned());
+                all_defs.extend(info.defs.iter().cloned());
+                if matches!(meta.kind, Kind::Setup) {
+                    setup_defs.extend(info.defs.iter().cloned());
+                }
+            }
+            infos.push(info);
+        }
+        for (index, meta) in self.metas.iter_mut().enumerate() {
+            let generated = meta.block.is_empty()
+                && meta.edited
+                && meta.md.is_none()
+                && matches!(meta.kind, Kind::AppCell);
+            if !generated {
+                continue;
+            }
+            let Some(info) = infos[index].as_ref() else {
+                continue;
+            };
+            if info.is_sql {
+                continue; // marimo keeps SQL cells' defs out of the return
+            }
+            let mut exported: Vec<&str> = info
+                .defs
+                .iter()
+                .map(String::as_str)
+                .filter(|name| used_refs.contains(*name))
+                .collect();
+            exported.sort_unstable();
+            let mut params: Vec<&str> = info
+                .refs
+                .iter()
+                .map(String::as_str)
+                .filter(|name| {
+                    !info.defs.contains(*name)
+                        && !setup_defs.contains(*name)
+                        && !(super::check::is_marimo_builtin(name) && !all_defs.contains(*name))
+                })
+                .filter(|name| ruff_python_stdlib::identifiers::is_identifier(name))
+                .collect();
+            params.sort_unstable();
+            let blank_line = meta
+                .return_suffix
+                .as_deref()
+                .is_some_and(|suffix| suffix.starts_with('\n'));
+            meta.return_suffix = Some(return_statement(&meta.indent, &exported, blank_line));
+            meta.header = format!("@app.cell\ndef _({}):\n", params.join(", "));
+        }
+    }
+
     /// What converting this file into another format leaves behind: literal
     /// text outside cells (module comments, PEP 723 dependency blocks, stray
     /// code) and `marimo.App(...)` configuration. One warning per category,
@@ -132,6 +215,14 @@ impl MarimoNotebook {
 /// return on its next save.
 pub(super) fn new_app_cell(source: &str) -> (Cell, CellMeta) {
     let indent = "    ".to_string();
+    let return_suffix = Some(format!(
+        "{}{indent}return",
+        if blank_before_return(source) {
+            "\n"
+        } else {
+            ""
+        }
+    ));
     (
         Cell::from_text("code", source),
         CellMeta {
@@ -140,11 +231,47 @@ pub(super) fn new_app_cell(source: &str) -> (Cell, CellMeta) {
             header: "@app.cell\ndef _():\n".to_string(),
             indent,
             indent_memory: None,
-            return_suffix: Some("    return".to_string()),
+            return_suffix,
             md: None,
             edited: true,
         },
     )
+}
+
+/// Whether marimo's serializer separates the trailing `return` with a blank
+/// line: its `_needs_trailing_blank_line` puts one after a final import,
+/// function or class definition, and only when that statement is truly the
+/// last content (no trailing comment lines).
+fn blank_before_return(source: &str) -> bool {
+    let Ok(parsed) = parse_module(source) else {
+        return false;
+    };
+    let needs_blank = match parsed.syntax().body.last() {
+        Some(
+            stmt @ (Stmt::Import(_)
+            | Stmt::ImportFrom(_)
+            | Stmt::FunctionDef(_)
+            | Stmt::ClassDef(_)),
+        ) => {
+            let code_lines = source.trim_end().matches('\n').count() + 1;
+            let statement_end = stmt.range().end().to_usize();
+            source[..statement_end].matches('\n').count() + 1 == code_lines
+        }
+        _ => false,
+    };
+    guarded_drop(parsed, source.len());
+    needs_blank
+}
+
+/// marimo's `return` shape (`format_tuple_elements` with a naked empty and
+/// single-name forms): bare, `(name,)` for one, paren-less for several.
+fn return_statement(indent: &str, names: &[&str], blank_line: bool) -> String {
+    let prefix = if blank_line { "\n" } else { "" };
+    match names {
+        [] => format!("{prefix}{indent}return"),
+        [one] => format!("{prefix}{indent}return ({one},)"),
+        many => format!("{prefix}{indent}return {}", many.join(", ")),
+    }
 }
 
 /// The arguments of a `marimo.App(...)` call in a literal segment, when it

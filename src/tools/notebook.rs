@@ -208,7 +208,7 @@ impl Tpmcp {
                     // tpmcp adds (the `mo` import marimo markdown cells need)
                     // is disclosed in the warnings instead.
                     let cell_count = notebook.cells().len();
-                    let warnings = ensure_mo_definition(&mut notebook)?;
+                    let warnings = canonicalize_new_notebook(&mut notebook)?;
                     (notebook.serialize(), cell_count, warnings)
                 }
             };
@@ -339,16 +339,23 @@ fn convert_notebook(
     // adds (the `mo` import marimo markdown cells need) is disclosed in the
     // warnings instead.
     let cell_count = notebook.cells().len();
-    warnings.extend(ensure_mo_definition(&mut notebook)?);
+    warnings.extend(canonicalize_new_notebook(&mut notebook)?);
     Ok((notebook.serialize(), cell_count, warnings))
 }
 
-/// The `mo` definition every marimo markdown cell needs at runtime: returns
-/// the warning announcing the scaffold cell, empty for every other shape.
-fn ensure_mo_definition(notebook: &mut AnyNotebook) -> Result<Vec<String>, Error> {
+/// Final shaping of a freshly built notebook: marimo files gain the `mo`
+/// definition markdown cells need at runtime (returning the warning that
+/// discloses the scaffold cell), and their generated cells get the return
+/// statements and signatures marimo's own serializer would write. A no-op
+/// for Jupyter targets.
+fn canonicalize_new_notebook(notebook: &mut AnyNotebook) -> Result<Vec<String>, Error> {
     match notebook {
         AnyNotebook::Jupyter(_) => Ok(Vec::new()),
-        AnyNotebook::Marimo(marimo) => Ok(marimo.ensure_mo_definition()?.into_iter().collect()),
+        AnyNotebook::Marimo(marimo) => {
+            let warning = marimo.ensure_mo_definition()?;
+            marimo.canonicalize_generated_cells();
+            Ok(warning.into_iter().collect())
+        }
     }
 }
 

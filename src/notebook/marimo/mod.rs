@@ -141,7 +141,6 @@ impl MarimoNotebook {
     }
 
     fn insert_cell(&mut self, index: usize, cell: Cell, meta: CellMeta) {
-        let separator = Segment::Lit("\n\n\n".to_string());
         let positions = self.cell_positions();
         let at = if index < positions.len() {
             positions[index]
@@ -155,12 +154,30 @@ impl MarimoNotebook {
                 )
                 .map_or(self.segments.len(), |position| position + 1)
         };
-        let new_segments = if index < positions.len() {
-            vec![Segment::Cell, separator]
+        let appending = index >= positions.len();
+        let new_segments = if appending {
+            // The gap in front of the new cell depends on what precedes the
+            // insertion point: a literal ending in a newline (the header of a
+            // created file) only needs "\n\n" for marimo's two blank lines;
+            // a cell block does not end in a newline, so the standard gap is
+            // the full "\n\n\n".
+            let gap = match self.segments.get(at.checked_sub(1).unwrap_or(at)) {
+                Some(Segment::Lit(text)) if text.ends_with('\n') => "\n\n",
+                _ => "\n\n\n",
+            };
+            vec![Segment::Lit(gap.to_string()), Segment::Cell]
         } else {
-            vec![separator, Segment::Cell]
+            vec![Segment::Cell, Segment::Lit("\n\n\n".to_string())]
         };
         self.segments.splice(at..at, new_segments);
+        if positions.is_empty()
+            && let Some(Segment::Lit(gap)) = self.segments.get_mut(at + 2)
+            && gap == "\n\n"
+        {
+            // First cell into a cell-less file: the empty-file gap now sits
+            // behind a cell block and becomes the standard pre-guard gap.
+            *gap = "\n\n\n".to_string();
+        }
         self.cells.insert(index, cell);
         self.metas.insert(index, meta);
     }

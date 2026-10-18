@@ -21,7 +21,7 @@ use crate::notebook::{Finding, Severity};
 
 /// BUILTINS as marimo sees them: the interpreter's builtins plus the module
 /// dunders and special names in `builtins.__dict__` (marimo/_ast/variables.py).
-fn is_marimo_builtin(name: &str) -> bool {
+pub(super) fn is_marimo_builtin(name: &str) -> bool {
     ruff_python_stdlib::builtins::is_python_builtin(name, 13, false)
         || matches!(
             name,
