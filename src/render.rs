@@ -16,44 +16,42 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use similar::{ChangeTag, TextDiff};
 
-use crate::notebook::{AnyNotebook, Cell, Notebook, SourceText};
+use crate::notebook::{AnyNotebook, Cell, Finding, Notebook, Severity, SourceText};
+use crate::ruff::Diagnostic;
+
+pub mod search;
 
 mod output;
 
 use output::{summarize, write_outputs};
 
-/// Output format for tool results.
+/// Output format for tool results (values documented on each tool param).
 #[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
-    /// Human/LLM-friendly markdown (default).
     #[default]
     Markdown,
-    /// Structured JSON in `structuredContent`.
     Json,
 }
 
-/// How much cell content `notebook_read` renders.
+/// How much cell content `notebook_read` renders (values documented on the
+/// param).
 #[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Detail {
-    /// Truncate long sources; compact headers (default).
     #[default]
     Brief,
-    /// Numbered source lines (for line-range edits) and complete outputs.
     Full,
+    Outline,
 }
 
-/// How cell outputs are rendered.
+/// How cell outputs are rendered (values documented on the param).
 #[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum WithOutputs {
-    /// Omit outputs entirely.
     None,
-    /// One compact line per cell listing output types (default).
     #[default]
     Summary,
-    /// Render output payloads (text inline, binaries described).
     Full,
 }
 
@@ -116,7 +114,10 @@ pub fn notebook_markdown(
     }
     for (index, cell) in window.cells(cells) {
         out.push('\n');
-        write_cell_markdown(&mut out, index, cell, detail, with_outputs);
+        match detail {
+            Detail::Outline => write_cell_outline(&mut out, index, cell),
+            _ => write_cell_markdown(&mut out, index, cell, detail, with_outputs),
+        }
     }
     out
 }
@@ -193,6 +194,26 @@ fn write_cell_markdown(
     write_outputs(out, cell, detail, with_outputs);
 }
 
+/// One outline row: index, type, line count, first source line (trimmed to
+/// [`OUTLINE_FIRST_LINE_CHARS`]). The navigational view of a notebook.
+fn write_cell_outline(out: &mut String, index: usize, cell: &Cell) {
+    const OUTLINE_FIRST_LINE_CHARS: usize = 80;
+    let source = cell.source_text();
+    let line_count = logical_line_count(&source);
+    let first = crate::fs::logical_lines(&source)
+        .first()
+        .map(|line| line.trim())
+        .unwrap_or("");
+    let first = &first[..first.floor_char_boundary(OUTLINE_FIRST_LINE_CHARS)];
+    let _ = write!(out, "### [{index}] {}", cell.cell_type);
+    if let Some(kind) = cell.marimo_kind()
+        && kind != "cell"
+    {
+        let _ = write!(out, " ({kind})");
+    }
+    let _ = writeln!(out, " · {line_count} lines · {first}");
+}
+
 /// Append the fenced source block of a cell; full detail numbers each line
 /// (the numbers `cell_set_source` line ranges refer to), brief shows the
 /// first [`BRIEF_SOURCE_LINES`] lines raw.
@@ -205,14 +226,14 @@ fn write_source_block(out: &mut String, cell_type: &str, lines: &[&str], detail:
     let _ = writeln!(out, "```{language}");
     let shown = match detail {
         Detail::Full => lines.len(),
-        Detail::Brief => lines.len().min(BRIEF_SOURCE_LINES),
+        Detail::Brief | Detail::Outline => lines.len().min(BRIEF_SOURCE_LINES),
     };
     for (number, line) in lines.iter().take(shown).enumerate() {
         match detail {
             Detail::Full => {
                 let _ = writeln!(out, "{:>4} | {line}", number + 1);
             }
-            Detail::Brief => {
+            Detail::Brief | Detail::Outline => {
                 let _ = writeln!(out, "{line}");
             }
         }
@@ -253,12 +274,16 @@ pub fn notebook_json(
     path: &str,
     revision: &str,
     notebook: &AnyNotebook,
+    detail: Detail,
     with_outputs: WithOutputs,
     window: Window,
 ) -> Value {
     let cells: Vec<Value> = window
         .cells(notebook.cells())
-        .map(|(index, cell)| cell_json(index, cell, with_outputs))
+        .map(|(index, cell)| match detail {
+            Detail::Outline => outline_cell_json(index, cell),
+            _ => cell_json(index, cell, with_outputs),
+        })
         .collect();
     json!({
         "path": path,
@@ -267,6 +292,19 @@ pub fn notebook_json(
         "cell_count": notebook.cells().len(),
         "range": [window.start, window.end],
         "cells": cells,
+    })
+}
+
+fn outline_cell_json(index: usize, cell: &Cell) -> Value {
+    let source = cell.source_text();
+    json!({
+        "index": index,
+        "cell_type": cell.cell_type,
+        "line_count": logical_line_count(&source),
+        "first_line": crate::fs::logical_lines(&source)
+            .first()
+            .map(|line| line.trim())
+            .unwrap_or(""),
     })
 }
 
@@ -307,6 +345,63 @@ fn logical_line_count(text: &str) -> usize {
     }
     let terminators = text.bytes().filter(|byte| *byte == b'\n').count();
     terminators + usize::from(!text.ends_with('\n'))
+}
+
+/// One lint diagnostic as a markdown line (shared by `ruff_check` and the
+/// `notebook_read` diagnostics view).
+pub fn diagnostic_line(diagnostic: &Diagnostic) -> String {
+    let mut line = String::new();
+    if let Some(cell) = diagnostic.cell {
+        line.push_str(&format!("cell {cell} "));
+    }
+    if let Some(location) = &diagnostic.location {
+        line.push_str(&format!("{}:{} ", location.row, location.column));
+    }
+    line.push_str(&format!(
+        "{} {}",
+        diagnostic.code.as_deref().unwrap_or("-"),
+        diagnostic.message
+    ));
+    if let Some(fix) = &diagnostic.fix {
+        line.push_str(&format!(" [fixable: {}]", fix.applicability));
+    }
+    line
+}
+
+/// One validation finding as a markdown bullet (shared by `notebook_check`
+/// and the `notebook_read` diagnostics view).
+pub fn finding_line(finding: &Finding) -> String {
+    let severity = match finding.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        Severity::Info => "info",
+    };
+    let cell = finding
+        .cell
+        .map_or(String::new(), |cell| format!(" cell {cell}"));
+    format!("- {severity}{cell} `{}`: {}", finding.code, finding.message)
+}
+
+/// The diagnostics section `notebook_read` appends when validation was
+/// requested: `findings` are structural (notebook_check's list); `lint` is
+/// `Some` only for `check+lint`.
+pub fn diagnostics_markdown(findings: &[Finding], lint: Option<&[Diagnostic]>) -> String {
+    let mut out = format!("\ndiagnostics: {} finding(s)", findings.len());
+    if let Some(lint) = lint {
+        let _ = write!(out, ", {} lint issue(s)", lint.len());
+    }
+    out.push('\n');
+    if findings.is_empty() && lint.unwrap_or(&[]).is_empty() {
+        out.push_str("no findings: the notebook is valid\n");
+        return out;
+    }
+    for finding in findings {
+        let _ = writeln!(out, "\n{}", finding_line(finding));
+    }
+    for diagnostic in lint.unwrap_or(&[]) {
+        let _ = writeln!(out, "\n- lint {}", diagnostic_line(diagnostic));
+    }
+    out
 }
 
 #[cfg(test)]

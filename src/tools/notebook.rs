@@ -1,4 +1,5 @@
-//! Notebook-level tools: reading and creating `.ipynb` files.
+//! Notebook-level tools: reading and creating notebooks (`.ipynb` and
+//! marimo `.py`).
 //!
 //! Cell-level editing lives in [`crate::tools::cell`]. Reads never mutate;
 //! `notebook_read` returns the file revision that every mutating tool
@@ -16,29 +17,59 @@ use crate::error::Error;
 use crate::fs;
 use crate::notebook::{self, Format as NotebookFormat, Notebook};
 use crate::render::{self, Detail, Format, Window, WithOutputs};
+use crate::ruff::{self, SafeFixes};
 use crate::server::Tpmcp;
 use crate::tools::{CellType, blocking, mutation_result, read_notebook, respond};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NotebookReadArgs {
-    /// Path to the .ipynb file.
+    /// Path to the notebook file (.ipynb or marimo .py).
     pub path: PathBuf,
     /// "brief" (default) truncates long cells; "full" numbers source lines
-    /// (needed for cell_set_source line ranges) and renders outputs fully.
+    /// (needed for cell_set_source line ranges) and renders outputs fully;
+    /// "outline" lists each cell's index, type, first line and line count
+    /// without bodies.
     #[serde(default)]
     pub detail: Detail,
     /// "none", "summary" (default) or "full" output rendering.
     #[serde(default)]
     pub with_outputs: WithOutputs,
-    /// First cell index to render (0-based, default 0).
+    /// Case-insensitive substring search over cell sources. Returns only
+    /// the matching cells with their index, type and matching lines;
+    /// start/limit page through the matches.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// First cell index to render (0-based, default 0); with query, the
+    /// first matching cell to render.
     #[serde(default)]
     pub start: Option<usize>,
-    /// Maximum number of cells to render (default: all).
+    /// Maximum number of cells to render (default: all); with query, the
+    /// maximum number of matching cells.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Validation to attach: "none" (default), "check" (notebook_check
+    /// structural findings), or "check+lint" (also ruff lint diagnostics).
+    /// Findings carry 0-based cell indexes. Use notebook_check alone to
+    /// validate without reading content.
+    #[serde(default)]
+    pub diagnostics: DiagnosticsLevel,
     /// Result format, "markdown" (default) or "json".
     #[serde(default)]
     pub format: Format,
+}
+
+/// Validation level attached to a `notebook_read` response. Variants carry
+/// no doc comments on purpose: the `diagnostics` param description is the
+/// single source of meaning and the schema stays a compact enum.
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
+pub enum DiagnosticsLevel {
+    #[default]
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "check")]
+    Check,
+    #[serde(rename = "check+lint")]
+    CheckLint,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -70,9 +101,12 @@ pub struct NotebookCreateArgs {
 #[tool_router(router = notebook_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
-        description = "Read a Jupyter notebook (.ipynb) as indexed, token-efficient markdown or JSON. \
-                       Returns the file revision required by all mutating tools. Never read .ipynb \
-                       files as raw JSON text."
+        description = "Read a notebook (Jupyter .ipynb or marimo .py) as indexed, token-efficient \
+                       markdown or JSON, with optional outline, content search and diagnostics \
+                       (see the detail, query and diagnostics parameters). Returns the file \
+                       revision required by all mutating tools. Never read notebooks as raw JSON \
+                       or raw Python; use this tool. On large notebooks prefer detail=outline or \
+                       query over reading every cell."
     )]
     async fn notebook_read(
         &self,
@@ -80,22 +114,86 @@ impl Tpmcp {
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
             let (snapshot, notebook) = read_notebook(&args.path)?;
+            let fs::Snapshot { content, revision } = snapshot;
             let path = args.path.display().to_string();
-            let revision = snapshot.revision;
+
+            // Optional validation runs on the same snapshot, outside any
+            // lock (reads never lock): the revision reported is the one
+            // these findings were computed from. `content` moves into ruff
+            // only for check+lint — no second read, no clone.
+            let validation = match args.diagnostics {
+                DiagnosticsLevel::None => None,
+                DiagnosticsLevel::Check => Some((notebook.check(), None)),
+                DiagnosticsLevel::CheckLint => {
+                    let outcome = ruff::check(
+                        &args.path,
+                        SafeFixes::ReportOnly,
+                        fs::Snapshot {
+                            content,
+                            revision: revision.clone(),
+                        },
+                    )?;
+                    Some((notebook.check(), Some(outcome.diagnostics)))
+                }
+            };
+
+            let found = match &args.query {
+                Some(query) if query.trim().is_empty() => {
+                    return Err(Error::invalid_input("query must not be empty"));
+                }
+                Some(query) => Some(render::search::search(
+                    notebook.cells(),
+                    query,
+                    args.start,
+                    args.limit,
+                )),
+                None => None,
+            };
             let window = Window::resolve(notebook.cells().len(), args.start, args.limit);
+
             Ok(respond(
                 args.format,
                 || {
-                    render::notebook_markdown(
-                        &path,
-                        &revision,
-                        &notebook,
-                        args.detail,
-                        args.with_outputs,
-                        window,
-                    )
+                    let mut out = match &found {
+                        Some(found) => {
+                            render::search::query_markdown(&path, &revision, &notebook, found)
+                        }
+                        None => render::notebook_markdown(
+                            &path,
+                            &revision,
+                            &notebook,
+                            args.detail,
+                            args.with_outputs,
+                            window,
+                        ),
+                    };
+                    if let Some((findings, lint)) = &validation {
+                        out.push_str(&render::diagnostics_markdown(findings, lint.as_deref()));
+                    }
+                    out
                 },
-                || render::notebook_json(&path, &revision, &notebook, args.with_outputs, window),
+                || {
+                    let mut value = match &found {
+                        Some(found) => {
+                            render::search::query_json(&path, &revision, &notebook, found)
+                        }
+                        None => render::notebook_json(
+                            &path,
+                            &revision,
+                            &notebook,
+                            args.detail,
+                            args.with_outputs,
+                            window,
+                        ),
+                    };
+                    if let Some((findings, lint)) = &validation {
+                        value["findings"] = json!(findings);
+                        if let Some(lint) = lint {
+                            value["lint"] = json!(lint);
+                        }
+                    }
+                    value
+                },
             ))
         })
         .await

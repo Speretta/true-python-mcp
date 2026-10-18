@@ -147,7 +147,8 @@ fn truncate(text: &str, detail: Detail) -> String {
             &text[..text.floor_char_boundary(FULL_OUTPUT_CHARS)],
             text.len()
         ),
-        Detail::Brief => {
+        // Outline never renders output payloads; group it with brief.
+        Detail::Brief | Detail::Outline => {
             let lines: Vec<&str> = text.lines().collect();
             let shown = lines.len().min(10);
             let mut out = lines[..shown].join("\n");

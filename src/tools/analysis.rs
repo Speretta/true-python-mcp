@@ -16,8 +16,8 @@ use serde_json::json;
 use crate::error::Error;
 use crate::fs;
 use crate::notebook::{Finding, Notebook, Severity};
-use crate::render::Format;
-use crate::ruff::{self, CheckOutcome, Diagnostic, FormatWrite, SafeFixes};
+use crate::render::{self, Format};
+use crate::ruff::{self, CheckOutcome, FormatWrite, SafeFixes};
 use crate::server::Tpmcp;
 use crate::tools::{blocking, read_notebook, respond};
 
@@ -159,7 +159,9 @@ impl Tpmcp {
                        definitions, dependency cycles, setup-cell root, syntax errors) and \
                        stale return/signature drift that marimo would regenerate. Returns \
                        findings with severity error/warning/info; no findings means the \
-                       notebook is clean. Use after edits or merges before trusting a file."
+                       notebook is clean. Use after edits or merges before trusting a file. To \
+                       get findings alongside the notebook content in one call, use \
+                       notebook_read with its diagnostics parameter."
     )]
     async fn notebook_check(
         &self,
@@ -212,29 +214,10 @@ fn check_markdown(path: &Path, outcome: &CheckOutcome) -> String {
         outcome.diagnostics.len()
     ));
     for diagnostic in &outcome.diagnostics {
-        out.push_str(&format!("\n{}", diagnostic_line(diagnostic)));
+        out.push_str(&format!("\n{}", render::diagnostic_line(diagnostic)));
     }
     out.push('\n');
     out
-}
-
-fn diagnostic_line(diagnostic: &Diagnostic) -> String {
-    let mut line = String::new();
-    if let Some(cell) = diagnostic.cell {
-        line.push_str(&format!("cell {cell} "));
-    }
-    if let Some(location) = &diagnostic.location {
-        line.push_str(&format!("{}:{} ", location.row, location.column));
-    }
-    line.push_str(&format!(
-        "{} {}",
-        diagnostic.code.as_deref().unwrap_or("-"),
-        diagnostic.message
-    ));
-    if let Some(fix) = &diagnostic.fix {
-        line.push_str(&format!(" [fixable: {}]", fix.applicability));
-    }
-    line
 }
 
 fn check_json(path: &Path, outcome: &CheckOutcome) -> serde_json::Value {

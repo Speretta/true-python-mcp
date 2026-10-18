@@ -296,6 +296,112 @@ fn marimo_tools_over_the_wire() {
     assert!(text.contains("Use colon syntax"), "{text}");
 }
 
+/// The wave-3 read parameters over the wire: outline, query, diagnostics.
+#[test]
+fn read_parameters_outline_query_diagnostics() {
+    let dir = temp_dir("readparams");
+    let path = dir.join("nb.ipynb");
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [
+            {"cell_type": "code", "source": "import pandas as pd\nx = 1\n"},
+            {"cell_type": "markdown", "source": "# Notes about pandas\n"},
+            {"cell_type": "code", "source": "unused_import = os\n"}
+        ]}),
+    );
+    assert!(!err, "{text}");
+
+    // outline: one row per cell with first line and line count, no bodies
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "detail": "outline", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["cells"].as_array().unwrap().len(), 3);
+    assert!(
+        sc["cells"][0]["source"].is_null(),
+        "outline carries no source"
+    );
+    assert_eq!(sc["cells"][0]["line_count"], 2);
+    assert_eq!(sc["cells"][0]["first_line"], "import pandas as pd");
+    let (err, text, _) = server.call("notebook_read", json!({"path": path, "detail": "outline"}));
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("### [0] code · 2 lines · import pandas as pd"),
+        "{text}"
+    );
+    assert!(!text.contains("x = 1"), "outline shows no bodies: {text}");
+
+    // query: only matching cells and lines, searched case-insensitively
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "query": "PANDAS", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["matching_cells"], 2);
+    assert_eq!(sc["cells"][0]["index"], 0);
+    assert_eq!(sc["cells"][0]["matches"][0]["line"], 1);
+    assert_eq!(
+        sc["cells"][1]["index"], 1,
+        "markdown cells are searched too"
+    );
+    let (err, text, _) = server.call("notebook_read", json!({"path": path, "query": "pandas"}));
+    assert!(!err, "{text}");
+    assert!(text.contains("matches: 2 cell(s), 2 line(s)"), "{text}");
+    assert!(text.contains("   1 | import pandas as pd"), "{text}");
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": path, "query": "zzz_missing"}),
+    );
+    assert!(!err && text.contains("no cells match"), "{text}");
+    let (err, text, _) = server.call("notebook_read", json!({"path": path, "query": "  "}));
+    assert!(err && text.contains("query must not be empty"), "{text}");
+
+    // diagnostics=check: structural findings ride along, no lint section
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "diagnostics": "check", "detail": "outline", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["findings"].as_array().unwrap().len(), 0, "{sc}");
+    assert!(sc["lint"].is_null(), "check alone carries no lint: {sc}");
+
+    // diagnostics=check+lint: ruff findings for the same snapshot
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": "tests/data/lint_sample.ipynb", "diagnostics": "check+lint", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let lint = sc["lint"].as_array().unwrap();
+    assert_eq!(lint.len(), 2, "{sc}");
+    assert_eq!(lint[0]["code"], "F401");
+    assert!(sc["revision"].as_str().is_some(), "read still chains: {sc}");
+
+    // markdown rendering of the findings section
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": "tests/data/schema_issues.ipynb", "diagnostics": "check", "detail": "outline"}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("diagnostics: 9 finding(s)"), "{text}");
+    assert!(text.contains("- error cell 1 `cell-id`:"), "{text}");
+}
+
+/// marimo notebooks read through the same tool, and the outline labels
+/// their special blocks.
+#[test]
+fn marimo_outline_labels_blocks() {
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": "tests/data/marimo/graph_setup_root.py", "detail": "outline"}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("(setup)"), "{text}");
+    assert!(text.contains("marimo"), "{text}");
+}
+
 /// notebook_check over the wire: JSON and markdown rendering, revision
 /// chaining, marimo graph findings, and error propagation.
 #[test]
