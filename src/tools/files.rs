@@ -75,10 +75,16 @@ pub struct PyEditArgs {
 #[tool_router(router = files_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
+        title = "Read Python File",
         description = "Read a Python/text file with line numbers and its revision. Optional \
                        line_start/line_end select a 1-based inclusive range. Prefer the host's \
                        native read tool when available.",
-        annotations(read_only_hint = true)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn py_read(
         &self,
@@ -107,9 +113,16 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Write Python File",
         description = "Write a Python/text file. Omit `revision` to create a new file (fails if \
                        it exists); pass the current `revision` to overwrite. Returns the new \
-                       revision. Prefer the host's native write tool when available."
+                       revision. Prefer the host's native write tool when available.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn py_write(
         &self,
@@ -151,11 +164,18 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Edit Python File",
         description = "Edit a Python/text file: replace an exact old_string with new_string \
                        (like an editor's edit tool). old_string must be unique unless \
                        replace_all is set. Requires the current revision; returns a unified \
                        diff and the new revision. Prefer the host's native edit tool when \
-                       available."
+                       available.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn py_edit(
         &self,

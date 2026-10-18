@@ -64,11 +64,18 @@ pub struct NotebookCheckArgs {
 #[tool_router(router = analysis_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
+        title = "Ruff Check",
         description = "Lint a Python file or Jupyter notebook with ruff (uses the project's \
                        ruff/pyproject config). Notebook diagnostics carry a 0-based `cell` \
                        index and a cell-relative line, so they map directly onto the cell \
                        tools. Responses report the current revision; set fix=true with that \
-                       revision to apply safe fixes in place."
+                       revision to apply safe fixes in place.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn ruff_check(
         &self,
@@ -105,12 +112,19 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Ruff Format",
         description = "Format a Python file or Jupyter notebook with ruff format. Formats in \
                        place by default (requires `revision`, returns the new revision); pass \
                        check=true for a dry run that returns a diff without writing. Every \
                        response reports the revision to use next, so a dry run can chain into \
                        the in-place call. Notebook formatting is byte-exact: only reformatted \
-                       cells change."
+                       cells change.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn ruff_format(
         &self,
@@ -153,6 +167,7 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Check Notebook",
         description = "Validate a notebook without modifying it. Jupyter: nbformat schema \
                        subset (cell types, ids, metadata, outputs, execution_count) plus git \
                        conflict markers. marimo: reactive-graph semantics (multiple \
@@ -162,7 +177,12 @@ impl Tpmcp {
                        notebook is clean. Use after edits or merges before trusting a file. To \
                        get findings alongside the notebook content in one call, use \
                        notebook_read with its diagnostics parameter.",
-        annotations(read_only_hint = true)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn notebook_check(
         &self,

@@ -156,10 +156,17 @@ pub struct CellClearOutputsArgs {
 #[tool_router(router = cell_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
+        title = "Edit Cell",
         description = "Surgically edit one notebook cell: replace an exact old_string with \
                        new_string inside the cell source (like an editor's edit tool). \
                        old_string must be unique unless replace_all is set. Returns a unified \
-                       diff and the new revision. Outputs and metadata are preserved."
+                       diff and the new revision. Outputs and metadata are preserved.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_edit(
         &self,
@@ -195,10 +202,17 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Set Cell Source",
         description = "Set a notebook cell's source: the whole cell, or just the 1-based \
                        inclusive line range start_line..=end_line (use notebook_read with \
                        detail=full to see line numbers). Returns the new cell source and \
-                       revision. Outputs and metadata are preserved."
+                       revision. Outputs and metadata are preserved.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_set_source(
         &self,
@@ -255,10 +269,16 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Insert Cell",
         description = "Insert a new cell of type cell_type (code, markdown, raw) into a \
                        notebook at a 0-based index; omit index to append at the end. source \
                        may be empty. Returns the new revision.",
-        annotations(destructive_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_insert(
         &self,
@@ -283,11 +303,17 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Delete Cell",
         description = "Delete a notebook cell by 0-based index. The cell's source, outputs and \
                        metadata are discarded and every later cell shifts down one index. \
                        Returns the new revision. When unsure, re-read the notebook first to \
                        confirm the index.",
-        annotations(destructive_hint = true)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_delete(
         &self,
@@ -310,8 +336,15 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Move Cell",
         description = "Move a notebook cell from index `from` to index `to` (0-based; `to` is \
-                       interpreted after removing the cell). Returns the new revision."
+                       interpreted after removing the cell). Returns the new revision.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_move(
         &self,
@@ -334,11 +367,18 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Set Cell Type",
         description = "Change a notebook cell's type (code, markdown, raw). Jupyter cells stay \
                        schema-valid: converting to code adds empty outputs/execution_count, \
                        converting away removes them. marimo cells convert between code and \
                        markdown: converting to markdown wraps the source in mo.md(...), \
-                       converting to code unwraps it. Returns the new revision."
+                       converting to code unwraps it. Returns the new revision.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_set_type(
         &self,
@@ -402,10 +442,16 @@ impl Tpmcp {
     }
 
     #[tool(
+        title = "Clear Cell Outputs",
         description = "Clear outputs of one code cell, or of every code cell when `cell` is \
                        omitted: outputs become [] and execution_count becomes null per the \
                        nbformat spec. Returns the new revision.",
-        annotations(destructive_hint = true)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn cell_clear_outputs(
         &self,
