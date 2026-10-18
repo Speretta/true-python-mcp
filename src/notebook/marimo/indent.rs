@@ -21,7 +21,11 @@ use ruff_text_size::Ranged;
 /// left empty (matching marimo's generator). `memory[i] == false` marks a
 /// line that lacked the fixed indent in the file (a preserved column-0
 /// string-interior or comment line); such lines are written verbatim.
-/// `None` memory (the common case) indents every non-empty line.
+/// `None` memory (the common case) indents every non-empty line. Lines
+/// without a memory entry (inserted by an edit) always end in a bare `'\n'`:
+/// inside a CRLF file a newly inserted line keeps an LF ending while its
+/// neighbors keep CRLF. marimo renormalizes line endings on its own save,
+/// so the mix is cosmetic and self-healing.
 pub(super) fn indent_lines(text: &str, indent: &str, memory: Option<&[bool]>) -> String {
     let text = text.strip_suffix('\n').unwrap_or(text);
     if text.is_empty() {
