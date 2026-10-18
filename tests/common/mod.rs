@@ -18,6 +18,32 @@ pub fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// Read one marimo fixture file verbatim (`tests/data/marimo/`).
+pub fn marimo_fixture(name: &str) -> String {
+    std::fs::read_to_string(format!("tests/data/marimo/{name}"))
+        .unwrap_or_else(|error| panic!("cannot read {name}: {error}"))
+}
+
+/// Build a synthetic marimo file from cell bodies (indented 4, `return`
+/// appended), for tests that need a notebook shape without a fixture file.
+pub fn synthetic_marimo(bodies: &[&str]) -> String {
+    let mut serialized =
+        String::from("import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n");
+    for body in bodies {
+        serialized.push_str("\n\n@app.cell\ndef _():\n");
+        for line in body.split('\n') {
+            if line.is_empty() {
+                serialized.push('\n');
+            } else {
+                serialized.push_str(&format!("    {line}\n"));
+            }
+        }
+        serialized.push_str("    return");
+    }
+    serialized.push_str("\n\n\nif __name__ == \"__main__\":\n    app.run()\n");
+    serialized
+}
+
 /// Default python of the ground-truth venv (real marimo + nbformat), overridable
 /// with `TPMCP_GROUND_TRUTH_PYTHON`. Recreate with:
 /// `uv venv /tmp/opencode/nbenv &&
