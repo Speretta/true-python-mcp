@@ -3,49 +3,135 @@
 //! so serde_json's `preserve_order` feature cannot affect it), raw UTF-8,
 //! LF, inline empty containers, one trailing newline.
 //!
+//! The writer emits straight from the model: typed cell fields and the
+//! passthrough `extra` values are merged in sorted-key order at emit time,
+//! so serialization never rebuilds a second serde_json DOM.
+//!
 //! Numbers in passthrough data go through serde_json: integers round-trip
 //! exactly, exotic float exponent forms (`1e+30`) may normalize on first
 //! write (`1e30`).
 
-use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+
+use serde_json::Value;
 
 use super::JupyterNotebook;
 use crate::notebook::{Cell, SourceText};
 
 pub fn to_canonical_string(notebook: &JupyterNotebook) -> String {
     let mut out = String::with_capacity(notebook.cells.len() * 256 + 256);
-    emit_value(&mut out, &to_value(notebook), 0);
+    let mut fields = extra_fields(&notebook.extra);
+    if !notebook.extra.contains_key("cells") {
+        fields.push(("cells", Field::Cells(&notebook.cells)));
+    }
+    emit_object(&mut out, &mut fields, 0);
     out.push('\n');
     out
 }
 
-fn to_value(notebook: &JupyterNotebook) -> Value {
-    let mut map = Map::new();
-    let cells: Vec<Value> = notebook.cells.iter().map(cell_to_value).collect();
-    map.insert("cells".into(), Value::Array(cells));
-    for (key, value) in &notebook.extra {
-        map.insert(key.clone(), value.clone());
-    }
-    Value::Object(map)
+/// One object field: either model-owned (cells/cell_type/source) or a
+/// passthrough `extra` value.
+enum Field<'a> {
+    Cells(&'a [Cell]),
+    CellType(&'a str),
+    Source(&'a SourceText),
+    Json(&'a Value),
 }
 
-fn cell_to_value(cell: &Cell) -> Value {
-    let mut map = Map::new();
-    map.insert("cell_type".into(), Value::String(cell.cell_type.clone()));
-    let source = match &cell.source {
-        SourceText::Str(text) => Value::String(text.clone()),
-        SourceText::Lines(lines) => Value::Array(
-            lines
-                .iter()
-                .map(|line| Value::String(line.clone()))
-                .collect(),
-        ),
-    };
-    map.insert("source".into(), source);
-    for (key, value) in &cell.extra {
-        map.insert(key.clone(), value.clone());
+/// The passthrough entries of an `extra` map as fields. A model key shadowed
+/// by an `extra` entry keeps the `extra` value — the same precedence the
+/// previous DOM-based writer had, where `Map::insert` of the extras replaced
+/// the model value under a colliding key.
+fn extra_fields(extra: &BTreeMap<String, Value>) -> Vec<(&str, Field<'_>)> {
+    extra
+        .iter()
+        .map(|(key, value)| (key.as_str(), Field::Json(value)))
+        .collect()
+}
+
+fn emit_cell(out: &mut String, cell: &Cell, depth: usize) {
+    let mut fields = extra_fields(&cell.extra);
+    if !cell.extra.contains_key("cell_type") {
+        fields.push(("cell_type", Field::CellType(&cell.cell_type)));
     }
-    Value::Object(map)
+    if !cell.extra.contains_key("source") {
+        fields.push(("source", Field::Source(&cell.source)));
+    }
+    emit_object(out, &mut fields, depth);
+}
+
+/// A non-empty JSON object with byte-sorted keys, laid out exactly like
+/// `emit_value` does for `Value::Object` (model objects always carry at
+/// least one typed key, so the inline `{}` form never applies here).
+fn emit_object(out: &mut String, fields: &mut [(&str, Field)], depth: usize) {
+    fields.sort_unstable_by_key(|(key, _)| *key);
+    out.push_str("{\n");
+    for (index, (key, field)) in fields.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        push_indent(out, depth + 1);
+        emit_string(out, key);
+        out.push_str(": ");
+        emit_field(out, field, depth + 1);
+    }
+    out.push('\n');
+    push_indent(out, depth);
+    out.push('}');
+}
+
+fn emit_field(out: &mut String, field: &Field, depth: usize) {
+    match field {
+        Field::Cells(cells) => emit_cells(out, cells, depth),
+        Field::CellType(cell_type) => emit_string(out, cell_type),
+        Field::Source(source) => emit_source(out, source, depth),
+        Field::Json(value) => emit_value(out, value, depth),
+    }
+}
+
+/// The `cells` array — byte-identical to `emit_value` over an array of the
+/// same cell objects.
+fn emit_cells(out: &mut String, cells: &[Cell], depth: usize) {
+    if cells.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push_str("[\n");
+    for (index, cell) in cells.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        push_indent(out, depth + 1);
+        emit_cell(out, cell, depth + 1);
+    }
+    out.push('\n');
+    push_indent(out, depth);
+    out.push(']');
+}
+
+/// `source` in the shape the document stored it: one string or an array of
+/// line strings (inline `[]` when empty), exactly like `emit_value`.
+fn emit_source(out: &mut String, source: &SourceText, depth: usize) {
+    match source {
+        SourceText::Str(text) => emit_string(out, text),
+        SourceText::Lines(lines) => {
+            if lines.is_empty() {
+                out.push_str("[]");
+                return;
+            }
+            out.push_str("[\n");
+            for (index, line) in lines.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                push_indent(out, depth + 1);
+                emit_string(out, line);
+            }
+            out.push('\n');
+            push_indent(out, depth);
+            out.push(']');
+        }
+    }
 }
 
 fn emit_value(out: &mut String, value: &Value, depth: usize) {
@@ -77,6 +163,8 @@ fn emit_value(out: &mut String, value: &Value, depth: usize) {
                 out.push_str("{}");
                 return;
             }
+            // Defensive sort: canonical bytes must not depend on serde_json's
+            // map implementation (see the module docs).
             let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
             keys.sort_unstable();
             out.push_str("{\n");
