@@ -8,6 +8,7 @@
 //! save, so a stale `return` is harmless.
 
 mod check;
+mod create;
 mod cycles;
 mod indent;
 pub(super) mod markdown;
@@ -19,10 +20,7 @@ use std::borrow::Cow;
 
 use super::{Cell, Finding, Notebook, check_index};
 use crate::error::Error;
-
-/// Version stamped into newly created marimo files. marimo never validates it
-/// and refreshes it on the next save.
-const MARIMO_VERSION: &str = "0.25.1";
+use create::{new_app_cell, strip_hide_code, to_markdown_header};
 
 pub struct MarimoNotebook {
     cells: Vec<Cell>,
@@ -98,23 +96,6 @@ pub(super) struct MdInfo {
 impl MarimoNotebook {
     pub(crate) fn parse(src: &str) -> Result<Self, String> {
         parse::parse(src)
-    }
-
-    /// A new empty marimo notebook (header + run guard, no cells).
-    pub(crate) fn create() -> Self {
-        let head = format!(
-            "import marimo\n\n__generated_with = \"{MARIMO_VERSION}\"\napp = marimo.App()\n"
-        );
-        Self {
-            cells: Vec::new(),
-            metas: Vec::new(),
-            segments: vec![
-                Segment::Lit(head),
-                Segment::Lit("\n\n\n".to_string()),
-                Segment::Lit("if __name__ == \"__main__\":\n    app.run()\n".to_string()),
-            ],
-            version: Some(MARIMO_VERSION.to_string()),
-        }
     }
 
     /// Segment positions of each cell marker, in order (index i ↔ cells[i]).
@@ -206,29 +187,6 @@ impl MarimoNotebook {
             .any(|(cell, _)| {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
-    }
-
-    /// A new markdown cell: `@app.cell(hide_code=True)` wrapping the content
-    /// in `mo.md(r""")`, with `mo` as a parameter unless setup provides it.
-    fn new_markdown_cell(&self, source: &str) -> (Cell, CellMeta) {
-        let indent = "    ".to_string();
-        let params = if self.setup_defines("mo") { "" } else { "mo" };
-        (
-            Cell::from_text("markdown", source),
-            CellMeta {
-                kind: Kind::AppCell,
-                block: String::new(),
-                header: format!("@app.cell(hide_code=True)\ndef _({params}):\n"),
-                indent,
-                indent_memory: None,
-                return_suffix: Some("    return".to_string()),
-                md: Some(MdInfo {
-                    tag: "r".to_string(),
-                    comments: String::new(),
-                }),
-                edited: true,
-            },
-        )
     }
 }
 
@@ -405,88 +363,4 @@ impl Notebook for MarimoNotebook {
         }
         out
     }
-}
-
-fn new_app_cell(source: &str) -> (Cell, CellMeta) {
-    let indent = "    ".to_string();
-    (
-        Cell::from_text("code", source),
-        CellMeta {
-            kind: Kind::AppCell,
-            block: String::new(),
-            header: "@app.cell\ndef _():\n".to_string(),
-            indent,
-            indent_memory: None,
-            return_suffix: Some("    return".to_string()),
-            md: None,
-            edited: true,
-        },
-    )
-}
-
-/// Rebuild a header for a markdown cell: ensure `hide_code=True` on the
-/// decorator and set the signature to the markdown cell's only reference
-/// (`mo`), unless the setup cell provides it.
-fn to_markdown_header(header: &str, needs_mo: bool) -> String {
-    let params = if needs_mo { "mo" } else { "" };
-    let mut out = String::new();
-    for line in header.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('@') && !trimmed.contains("hide_code") {
-            out.push_str(&add_hide_code_to_decorator(line));
-        } else if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
-            let indent = &line[..line.len() - trimmed.len()];
-            let (prefix, rest) = match trimmed.strip_prefix("async def ") {
-                Some(rest) => ("async def ", rest),
-                None => ("def ", &trimmed[4..]),
-            };
-            let name = rest.split('(').next().unwrap_or("_").trim();
-            out.push_str(&format!("{indent}{prefix}{name}({params}):"));
-        } else {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
-    out
-}
-
-/// One decorator line of a header, with `hide_code=True` appended to its
-/// argument list (the decorator gains parentheses when it had none).
-fn add_hide_code_to_decorator(line: &str) -> String {
-    match line.strip_suffix(')') {
-        Some(before_close) => format!("{before_close}, hide_code=True)"),
-        None => format!("{line}(hide_code=True)"),
-    }
-}
-
-/// Decorator fragments carrying `hide_code=True`, paired with what replaces
-/// them (keeping any remaining decorator arguments intact).
-const HIDE_CODE_FRAGMENTS: [(&str, &str); 3] = [
-    ("(hide_code=True, ", "("),
-    (", hide_code=True)", ")"),
-    ("(hide_code=True)", ""),
-];
-
-fn strip_hide_code_from_line(line: &str) -> String {
-    if !line.trim_start().starts_with('@') {
-        return line.to_string();
-    }
-    for (pattern, replacement) in HIDE_CODE_FRAGMENTS {
-        if line.contains(pattern) {
-            return line.replacen(pattern, replacement, 1);
-        }
-    }
-    line.to_string()
-}
-
-/// Remove `hide_code=True` from a header's decorator (markdown → code).
-/// The `join("\n") + "\n"` tail is load-bearing: an empty header yields
-/// exactly "\n".
-fn strip_hide_code(header: &str) -> String {
-    header
-        .lines()
-        .map(strip_hide_code_from_line)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"
 }

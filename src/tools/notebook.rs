@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::error::Error;
 use crate::fs;
-use crate::notebook::{self, Format as NotebookFormat, Notebook};
+use crate::notebook::{self, AnyNotebook, Format as NotebookFormat, Notebook};
 use crate::render::{self, Detail, Format, Window, WithOutputs};
 use crate::ruff::{self, SafeFixes};
 use crate::server::Tpmcp;
@@ -254,8 +254,12 @@ impl Tpmcp {
                         let index = notebook.cells().len();
                         notebook.insert(index, new_cell.cell_type.as_str(), &new_cell.source)?;
                     }
+                    // cell_count reports the requested cells; a scaffold cell
+                    // tpmcp adds (the `mo` import marimo markdown cells need)
+                    // is disclosed in the warnings instead.
                     let cell_count = notebook.cells().len();
-                    (notebook.serialize(), cell_count, Vec::new())
+                    let warnings = ensure_mo_definition(&mut notebook)?;
+                    (notebook.serialize(), cell_count, warnings)
                 }
             };
             let new_revision = fs::with_file_lock(&args.path, || {
@@ -369,8 +373,21 @@ fn convert_notebook(
     if dropped_outputs {
         warnings.push("outputs and execution counts are not stored in marimo files".to_string());
     }
+    // cell_count reports the converted source cells; a scaffold cell tpmcp
+    // adds (the `mo` import marimo markdown cells need) is disclosed in the
+    // warnings instead.
     let cell_count = notebook.cells().len();
+    warnings.extend(ensure_mo_definition(&mut notebook)?);
     Ok((notebook.serialize(), cell_count, warnings))
+}
+
+/// The `mo` definition every marimo markdown cell needs at runtime: returns
+/// the warning announcing the scaffold cell, empty for every other shape.
+fn ensure_mo_definition(notebook: &mut AnyNotebook) -> Result<Vec<String>, Error> {
+    match notebook {
+        AnyNotebook::Jupyter(_) => Ok(Vec::new()),
+        AnyNotebook::Marimo(marimo) => Ok(marimo.ensure_mo_definition()?.into_iter().collect()),
+    }
 }
 
 /// The first Jupyter magic (`%`) or shell (`!`) line of a cell source.
