@@ -196,17 +196,15 @@ impl Notebook for JupyterNotebook {
                 Ok(vec![index])
             }
             None => {
-                let indexes: Vec<usize> = self
-                    .cells
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, cell)| cell.is_code())
-                    .map(|(index, _)| index)
-                    .collect();
-                for index in &indexes {
-                    clear_cell(&mut self.cells[*index]);
+                // One pass: clear each code cell and record its index.
+                let mut cleared = Vec::new();
+                for (index, cell) in self.cells.iter_mut().enumerate() {
+                    if cell.is_code() {
+                        clear_cell(cell);
+                        cleared.push(index);
+                    }
                 }
-                Ok(indexes)
+                Ok(cleared)
             }
         }
     }
