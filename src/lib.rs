@@ -19,4 +19,5 @@ pub mod notebook;
 pub mod render;
 pub mod ruff;
 pub mod server;
+pub mod stack;
 pub mod tools;

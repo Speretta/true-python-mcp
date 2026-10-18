@@ -32,6 +32,55 @@ fn snap(path: &Path) -> tpmcp::fs::Snapshot {
     tpmcp::fs::read(path).unwrap()
 }
 
+/// A deeply nested but valid `.py` must not take the server down: ruff's
+/// parser guards its own recursion, but the linter walk, the formatter, and
+/// the recursive AST `Drop` glue do not — the marimo path got stacker guards
+/// this wave; this test pins the ruff path. Subprocess shape as in the
+/// marimo deep-nesting test: the child does the dangerous work in-process on
+/// an ordinary test thread (the same stack shape as a tokio worker), the
+/// parent only asserts that the child survived.
+#[test]
+fn deeply_nested_python_does_not_crash_ruff() {
+    const CHILD_ENV: &str = "TPMCP_TEST_DEEP_RUFF";
+    const TERMS_ENV: &str = "TPMCP_TEST_DEEP_TERMS";
+    if std::env::var(CHILD_ENV).is_ok() {
+        let terms: usize = std::env::var(TERMS_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(100_000)
+            .max(2);
+        let dir = temp_dir("deep-ruff");
+        let path = dir.join("deep.py");
+        let body = format!("x = {}1\n", "1+".repeat(terms - 1));
+        fs::write(&path, &body).unwrap();
+        eprintln!("stage: checking ({terms} terms)");
+        let outcome = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
+        eprintln!(
+            "stage: checked, {} diagnostics; formatting (dry run)",
+            outcome.diagnostics.len()
+        );
+        let formatted = ruff::format_file(&path, FormatWrite::DryRun, snap(&path)).unwrap();
+        eprintln!("stage: formatted ({formatted:?})");
+        let _ = fs::remove_dir_all(&dir);
+        eprintln!("deep-ruff child survived {terms} terms");
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("deeply_nested_python_does_not_crash_ruff")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .output()
+        .unwrap_or_else(|error| panic!("spawn deep-ruff child: {error}"));
+    assert!(
+        output.status.success(),
+        "deep nesting killed the ruff child (exit {:?}); stderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Ground truth (ruff 0.17.0, select=["F"]):
 ///   F401 row 1 col 8, F401 row 2 col 8, F821 row 7 col 12
 #[test]

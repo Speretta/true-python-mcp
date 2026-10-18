@@ -146,6 +146,9 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
     let Some(source_type) = python_source_type(&settings, path) else {
         return Err(not_python(path));
     };
+    // Worst-case AST recursion bound for ruff's unguarded walk/drop stages
+    // (crate::stack): every node consumes at least one source byte.
+    let source_len = snapshot.content.len();
     let source_kind = source_kind_from(snapshot.content, source_type, path)?;
     let noqa = Noqa::Enabled;
 
@@ -155,15 +158,17 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
                 result,
                 transformed,
                 fixed,
-            } = lint_fix(
-                path,
-                None,
-                noqa,
-                UnsafeFixes::Disabled,
-                &settings.linter,
-                &source_kind,
-                source_type,
-            )
+            } = crate::stack::guarded_walk(source_len, || {
+                lint_fix(
+                    path,
+                    None,
+                    noqa,
+                    UnsafeFixes::Disabled,
+                    &settings.linter,
+                    &source_kind,
+                    source_type,
+                )
+            })
             .map_err(Error::analysis)?;
             let changed = !fixed.is_empty();
             // Only materialize a write when a fix actually changed the source;
@@ -184,15 +189,17 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
             }
         }
         SafeFixes::ReportOnly => {
-            let result = lint_only(
-                path,
-                None,
-                &settings.linter,
-                noqa,
-                &source_kind,
-                source_type,
-                ParseSource::None,
-            );
+            let result = crate::stack::guarded_walk(source_len, || {
+                lint_only(
+                    path,
+                    None,
+                    &settings.linter,
+                    noqa,
+                    &source_kind,
+                    source_type,
+                    ParseSource::None,
+                )
+            });
             LintPass {
                 notebook_index: notebook_index_of(&source_kind),
                 diagnostics: result.diagnostics,
@@ -235,9 +242,10 @@ pub fn format_file(
             let options = settings
                 .formatter
                 .to_format_options(source_type, &code, Some(path));
-            let new_code = format_module_source(&code, options)
-                .map(|printed| printed.into_code())
-                .map_err(Error::analysis)?;
+            let new_code =
+                crate::stack::guarded_walk(code.len(), || format_module_source(&code, options))
+                    .map(|printed| printed.into_code())
+                    .map_err(Error::analysis)?;
             if new_code == code {
                 return Ok(FormatOutcome::Unchanged);
             }
@@ -301,9 +309,11 @@ fn format_notebook(
     for pair in offsets.windows(2) {
         let (start, end) = (pair[0], pair[1]);
         let unformatted = &source_code[TextRange::new(start, end)];
-        let formatted = format_module_source(unformatted, options.clone())
-            .map(|printed| printed.into_code())
-            .map_err(Error::analysis)?;
+        let formatted = crate::stack::guarded_walk(unformatted.len(), || {
+            format_module_source(unformatted, options.clone())
+        })
+        .map(|printed| printed.into_code())
+        .map_err(Error::analysis)?;
         if formatted == unformatted {
             continue;
         }
