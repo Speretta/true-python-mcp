@@ -122,10 +122,37 @@ fn write_via_temp(tmp: &Path, target: &Path, reported: &Path, content: &str) -> 
     preserve_mode(target, tmp);
     file.write_all(content.as_bytes()).map_err(io)?;
     file.sync_all().map_err(io)?;
+    rename_gate(target);
     recheck_unchanged(target, reported)?;
     fs::rename(tmp, target).map_err(io)?;
     Ok(())
 }
+
+/// Test-only rename pause hook: compiled into debug builds only and inert
+/// unless `TPMCP_TEST_RENAME_GATE` points at a directory. When set, the
+/// write announces itself by creating `<dir>/ready-<pid>` (content: the
+/// target path), then waits for `<dir>/go` to appear, polling every 25 ms
+/// for at most 120 s. `tests/robustness.rs` uses it to force the hard
+/// two-process interleaving: P1 pauses here AFTER passing revision verify
+/// but BEFORE the rename, the competitor's request is injected, then P1 is
+/// released. Release builds never compile this in.
+#[cfg(debug_assertions)]
+fn rename_gate(target: &Path) {
+    use std::time::{Duration, Instant};
+    let Some(dir) = std::env::var_os("TPMCP_TEST_RENAME_GATE").map(PathBuf::from) else {
+        return;
+    };
+    let ready = dir.join(format!("ready-{}", std::process::id()));
+    let _ = std::fs::write(&ready, target.display().to_string());
+    let go = dir.join("go");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !go.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn rename_gate(_target: &Path) {}
 
 /// Final external-editor check immediately before the rename.
 ///
