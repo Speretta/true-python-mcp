@@ -11,9 +11,7 @@
 use ruff_python_parser::parse_module;
 use ruff_text_size::Ranged;
 
-use super::parse::{
-    Builder, Top, app_cell, classify, marimo_extra, read_only_cell, setup_cell,
-};
+use super::parse::{Builder, Top, app_cell, classify, marimo_extra, read_only_cell, setup_cell};
 use super::{CellMeta, Kind, MarimoNotebook};
 use crate::notebook::{Cell, SourceText};
 

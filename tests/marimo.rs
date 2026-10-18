@@ -267,7 +267,9 @@ fn marimo_edit_preserves_column_zero_string_lines() {
     assert_eq!(nb.cells()[1].source_text(), cell1);
 
     // Edit one token inside the column-0 string.
-    let edited = nb.cells()[0].source_text().replacen("SELECT 1", "SELECT 2", 1);
+    let edited = nb.cells()[0]
+        .source_text()
+        .replacen("SELECT 1", "SELECT 2", 1);
     nb.set_source(0, &edited).unwrap();
 
     // Re-setting cell 1's source to itself must not move a single byte: the
@@ -322,7 +324,10 @@ for cell in nb.cells:
     );
     assert_eq!(
         marimo_codes(&edited_path),
-        vec![python_repr(&nb.cells()[0].source_text()), python_repr(cell1)]
+        vec![
+            python_repr(&nb.cells()[0].source_text()),
+            python_repr(cell1)
+        ]
     );
 }
 
@@ -818,7 +823,10 @@ fn deeply_nested_marimo_cell_does_not_crash() {
         eprintln!("stage: opened, checking");
         let findings = nb.check();
         eprintln!("stage: checked");
-        eprintln!("deep-nesting child survived {terms} terms, {} findings", findings.len());
+        eprintln!(
+            "deep-nesting child survived {terms} terms, {} findings",
+            findings.len()
+        );
         return;
     }
     let exe = std::env::current_exe().unwrap();

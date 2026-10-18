@@ -120,8 +120,8 @@ pub(super) fn remap_indent_memory(
         let interior = new_interiors.block_of_line[new_index];
         let carried = match (*old_index, interior) {
             (Some(old_index), _) => {
-                let left_a_string = old_interiors.block_of_line[old_index].is_some()
-                    && interior.is_none();
+                let left_a_string =
+                    old_interiors.block_of_line[old_index].is_some() && interior.is_none();
                 // A string line that became code must be re-indented.
                 !left_a_string && carried_origin(old_index)
             }
@@ -173,7 +173,9 @@ fn string_interiors(source: &str) -> StringInteriors {
                 }
                 None
             }
-            TokenKind::FStringEnd | TokenKind::TStringEnd => open_start.take().map(|open| (open, end)),
+            TokenKind::FStringEnd | TokenKind::TStringEnd => {
+                open_start.take().map(|open| (open, end))
+            }
             _ => None,
         };
         if let Some((start, end)) = span
