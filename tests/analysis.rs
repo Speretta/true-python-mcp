@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tpmcp::notebook::JupyterNotebook;
-use tpmcp::ruff::{self, FormatOutcome};
+use tpmcp::ruff::{self, FormatOutcome, FormatWrite, SafeFixes};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let unique = blake3::hash(tag.as_bytes()).to_hex()[..8].to_string();
@@ -26,11 +26,18 @@ fn row_col(d: &tpmcp::ruff::Diagnostic) -> (usize, usize) {
     (loc.row, loc.column)
 }
 
+/// Read `path` into the snapshot the single-read ruff API expects (CPU-F2):
+/// ruff no longer re-reads the file, so tests hand it the bytes directly.
+fn snap(path: &Path) -> tpmcp::fs::Snapshot {
+    tpmcp::fs::read(path).unwrap()
+}
+
 /// Ground truth (ruff 0.17.0, select=["F"]):
 ///   F401 row 1 col 8, F401 row 2 col 8, F821 row 7 col 12
 #[test]
 fn check_python_matches_ruff_ground_truth() {
-    let outcome = ruff::check(Path::new("tests/data/lint_sample.py"), false).unwrap();
+    let path = Path::new("tests/data/lint_sample.py");
+    let outcome = ruff::check(path, SafeFixes::ReportOnly, snap(path)).unwrap();
     assert!(!outcome.changed);
     assert!(outcome.new_revision.is_none());
 
@@ -65,7 +72,8 @@ fn check_python_matches_ruff_ground_truth() {
 /// relative to the cell.
 #[test]
 fn check_notebook_maps_cells_to_zero_based() {
-    let outcome = ruff::check(Path::new("tests/data/lint_sample.ipynb"), false).unwrap();
+    let path = Path::new("tests/data/lint_sample.ipynb");
+    let outcome = ruff::check(path, SafeFixes::ReportOnly, snap(path)).unwrap();
     assert_eq!(outcome.diagnostics.len(), 2);
 
     let f401 = outcome
@@ -92,7 +100,7 @@ fn check_fix_rewrites_python_file() {
     let path = dir.join("sample.py");
     fs::write(&path, "import os\nimport sys\n\n\nprint('hi')\n").unwrap();
 
-    let outcome = ruff::check(&path, true).unwrap();
+    let outcome = ruff::check(&path, SafeFixes::Apply, snap(&path)).unwrap();
     assert!(outcome.changed);
     let revision = outcome.new_revision.expect("fix returns a new revision");
 
@@ -111,7 +119,7 @@ fn format_rewrites_python_file() {
     let path = dir.join("sample.py");
     fs::write(&path, "x  =  1\ny=[1,2,3]\n").unwrap();
 
-    let outcome = ruff::format_file(&path, true).unwrap();
+    let outcome = ruff::format_file(&path, FormatWrite::InPlace, snap(&path)).unwrap();
     assert!(matches!(outcome, FormatOutcome::Written { .. }));
     let content = fs::read_to_string(&path).unwrap();
     assert_eq!(content, "x = 1\ny = [1, 2, 3]\n");
@@ -126,7 +134,7 @@ fn format_check_only_reports_diff() {
     let original = "x  =  1\n";
     fs::write(&path, original).unwrap();
 
-    let outcome = ruff::format_file(&path, false).unwrap();
+    let outcome = ruff::format_file(&path, FormatWrite::DryRun, snap(&path)).unwrap();
     match outcome {
         FormatOutcome::WouldReformat { diff } => {
             let diff = diff.expect("text files get a diff");
@@ -148,7 +156,7 @@ fn format_unchanged_is_noop() {
     let path = dir.join("sample.py");
     fs::write(&path, "x = 1\n").unwrap();
     assert!(matches!(
-        ruff::format_file(&path, true).unwrap(),
+        ruff::format_file(&path, FormatWrite::InPlace, snap(&path)).unwrap(),
         FormatOutcome::Unchanged
     ));
     fs::remove_dir_all(&dir).unwrap();
@@ -181,7 +189,7 @@ fn format_notebook_stays_byte_exact() {
     .unwrap();
     fs::write(&path, nb.to_string_canonical()).unwrap();
 
-    let outcome = ruff::format_file(&path, true).unwrap();
+    let outcome = ruff::format_file(&path, FormatWrite::InPlace, snap(&path)).unwrap();
     assert!(matches!(outcome, FormatOutcome::Written { .. }));
 
     let content = fs::read_to_string(&path).unwrap();
@@ -194,5 +202,53 @@ fn format_notebook_stays_byte_exact() {
     // Structure preserved.
     assert_eq!(reparsed.cells[0].cell_type, "code");
     assert!(reparsed.cells[0].extra.contains_key("outputs"));
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// F14: ruff_check on a non-Python path is a caller error, not a green "no
+/// issues found" — and it matches ruff_format's invalid_input message/shape.
+#[test]
+fn check_rejects_non_python_path() {
+    let dir = temp_dir("non-python");
+    let path = dir.join("notes.md");
+    fs::write(&path, "# not python\n").unwrap();
+
+    let error = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap_err();
+    assert_eq!(error.kind(), "invalid_input");
+    assert!(
+        error.to_string().contains("not a Python file or notebook"),
+        "{error}"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// CPU-F1: the settings cache is validated by `(mtime, length)` of the
+/// governing config, so editing that config is picked up on the next call
+/// instead of serving a stale build.
+#[test]
+fn settings_cache_invalidates_on_config_change() {
+    let dir = temp_dir("settings-cache");
+    let config = dir.join("ruff.toml");
+    let path = dir.join("sample.py");
+    fs::write(&path, "import os\n\n\nprint(undefined_name)\n").unwrap();
+
+    // Config selecting only F401: the undefined name is not reported.
+    fs::write(&config, "[lint]\nselect = [\"F401\"]\n").unwrap();
+    let first = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
+    let first_codes: Vec<&str> = first.diagnostics.iter().map(code).collect();
+    assert!(first_codes.contains(&"F401"), "{first_codes:?}");
+    assert!(!first_codes.contains(&"F821"), "only F401: {first_codes:?}");
+
+    // Same config path, different length -> the validity token differs, so the
+    // cache must rebuild with the widened rule selection.
+    fs::write(&config, "[lint]\nselect = [\"F401\", \"F821\"]\n").unwrap();
+    let second = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
+    let second_codes: Vec<&str> = second.diagnostics.iter().map(code).collect();
+    assert!(second_codes.contains(&"F401"), "{second_codes:?}");
+    assert!(
+        second_codes.contains(&"F821"),
+        "F821 added: {second_codes:?}"
+    );
+
     fs::remove_dir_all(&dir).unwrap();
 }

@@ -17,7 +17,7 @@ use crate::error::Error;
 use crate::fs;
 use crate::notebook::{Finding, Notebook, Severity};
 use crate::render::Format;
-use crate::ruff::{self, CheckOutcome, Diagnostic};
+use crate::ruff::{self, CheckOutcome, Diagnostic, FormatWrite, SafeFixes};
 use crate::server::Tpmcp;
 use crate::tools::{read_notebook, respond};
 
@@ -79,14 +79,19 @@ impl Tpmcp {
                 Error::invalid_input("ruff_check with fix=true requires `revision`")
             })?;
             fs::with_file_lock(&args.path, || {
-                fs::read_verified(&args.path, &revision)?;
-                ruff::check(&args.path, true)
+                // Single read (CPU-F2): verify the caller's revision and lint
+                // the exact same bytes — strictly tighter than verify-then-
+                // reread, since the file cannot change between the two reads.
+                let snapshot = fs::read_verified(&args.path, &revision)?;
+                ruff::check(&args.path, SafeFixes::Apply, snapshot)
             })?
         } else {
-            let mut outcome = ruff::check(&args.path, false)?;
-            // Read-only result: report the current revision so a follow-up
-            // fix=true call can chain onto it.
-            outcome.new_revision = Some(fs::read(&args.path)?.revision);
+            // Single read: lint these bytes and report their revision, so a
+            // follow-up fix=true call chains onto the snapshot we linted.
+            let snapshot = fs::read(&args.path)?;
+            let current = snapshot.revision.clone();
+            let mut outcome = ruff::check(&args.path, SafeFixes::ReportOnly, snapshot)?;
+            outcome.new_revision = Some(current);
             outcome
         };
         Ok(respond(
@@ -108,8 +113,13 @@ impl Tpmcp {
         &self,
         Parameters(args): Parameters<RuffFormatArgs>,
     ) -> Result<CallToolResult, Error> {
-        let outcome = if args.check {
-            ruff::format_file(&args.path, false)?
+        // Single read (CPU-F2): read the file once, format those bytes, and
+        // report the revision of that same snapshot for read-only outcomes.
+        let (outcome, current_revision) = if args.check {
+            let snapshot = fs::read(&args.path)?;
+            let current = snapshot.revision.clone();
+            let outcome = ruff::format_file(&args.path, FormatWrite::DryRun, snapshot)?;
+            (outcome, Some(current))
         } else {
             let revision = args.revision.ok_or_else(|| {
                 Error::invalid_input(
@@ -117,15 +127,17 @@ impl Tpmcp {
                 )
             })?;
             fs::with_file_lock(&args.path, || {
-                fs::read_verified(&args.path, &revision)?;
-                ruff::format_file(&args.path, true)
+                let snapshot = fs::read_verified(&args.path, &revision)?;
+                let current = snapshot.revision.clone();
+                let outcome = ruff::format_file(&args.path, FormatWrite::InPlace, snapshot)?;
+                // An in-place write carries its own new revision; otherwise
+                // report the revision of the bytes we formatted.
+                let current = match &outcome {
+                    ruff::FormatOutcome::Written { .. } => None,
+                    _ => Some(current),
+                };
+                Ok((outcome, current))
             })?
-        };
-        // Read-only outcomes report the current revision so the in-place
-        // call can chain onto it.
-        let current_revision = match &outcome {
-            ruff::FormatOutcome::Written { .. } => None,
-            _ => fs::read(&args.path).ok().map(|snapshot| snapshot.revision),
         };
         Ok(respond(
             args.format,

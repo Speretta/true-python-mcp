@@ -68,6 +68,7 @@ pub struct Diagnostic {
 }
 
 /// Result of [`check`].
+#[derive(Debug)]
 pub struct CheckOutcome {
     pub diagnostics: Vec<Diagnostic>,
     /// True when `fix` rewrote the file on disk.
@@ -94,92 +95,165 @@ pub enum FormatOutcome {
     Written { new_revision: String },
 }
 
-/// Lint `path`, optionally applying safe fixes in place.
-pub fn check(path: &Path, fix: bool) -> Result<CheckOutcome, Error> {
+/// Whether [`check`] applies safe fixes in place or only reports them.
+///
+/// Replaces the old `fix: bool` trap at the module boundary so call sites read
+/// as intent (Style-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafeFixes {
+    /// Apply safe fixes and rewrite the file.
+    Apply,
+    /// Report diagnostics only; never touch the file.
+    ReportOnly,
+}
+
+/// Whether [`format_file`] writes the formatted output in place.
+///
+/// Replaces the old `write: bool` trap at the module boundary (Style-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatWrite {
+    /// Rewrite the file with the formatted output.
+    InPlace,
+    /// Report what would change without writing.
+    DryRun,
+}
+
+/// One lint pass: ruff's diagnostics plus what fixing did to the file.
+///
+/// Named replacement for the old heterogeneous 4-tuple spine of [`check`]
+/// (Style-10). `notebook_index` is the only thing the linted source is needed
+/// for downstream (mapping offsets back to cells), so we carry that small
+/// value instead of an owned `SourceKind` — which also lets the unchanged path
+/// avoid a deep clone (Memory-3).
+struct LintPass {
+    diagnostics: Vec<RuffDiagnostic>,
+    notebook_index: Option<NotebookIndex>,
+    changed: bool,
+    new_revision: Option<String>,
+}
+
+/// Lint the already-read `snapshot` of `path`, optionally applying safe fixes.
+///
+/// Single-read contract (CPU-F2): the caller reads `path` exactly once via
+/// [`crate::fs`] and hands us those bytes. For [`SafeFixes::Apply`] the caller
+/// has already revision-verified them, so the verified snapshot and the linted
+/// snapshot are the *same* bytes — strictly tighter than the old
+/// verify-then-reread flow, where the file could change between the two reads.
+pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<CheckOutcome, Error> {
     let settings = resolve_settings(path)?;
+    // F14: a non-Python path is a caller error, not "no issues found". Match
+    // ruff_format's message/shape so the two tools never disagree.
     let Some(source_type) = python_source_type(&settings, path) else {
-        return Ok(empty_check());
+        return Err(not_python(path));
     };
-    let source_kind = load_source_kind(path, source_type)?;
+    let source_kind = source_kind_from(snapshot.content, source_type, path)?;
     let noqa = Noqa::Enabled;
 
-    let (diagnostics, owned_kind, changed, new_revision) = if fix {
-        let FixerResult {
-            result,
-            transformed,
-            fixed,
-        } = lint_fix(
-            path,
-            None,
-            noqa,
-            UnsafeFixes::Disabled,
-            &settings.linter,
-            &source_kind,
-            source_type,
-        )
-        .map_err(Error::analysis)?;
-        let changed = !fixed.is_empty();
-        let owned = transformed.into_owned();
-        let new_revision = if changed {
-            Some(write_source_kind(path, &owned)?)
-        } else {
-            None
-        };
-        (result.diagnostics, owned, changed, new_revision)
-    } else {
-        let result = lint_only(
-            path,
-            None,
-            &settings.linter,
-            noqa,
-            &source_kind,
-            source_type,
-            ParseSource::None,
-        );
-        (result.diagnostics, source_kind, false, None)
+    let pass = match fixes {
+        SafeFixes::Apply => {
+            let FixerResult {
+                result,
+                transformed,
+                fixed,
+            } = lint_fix(
+                path,
+                None,
+                noqa,
+                UnsafeFixes::Disabled,
+                &settings.linter,
+                &source_kind,
+                source_type,
+            )
+            .map_err(Error::analysis)?;
+            let changed = !fixed.is_empty();
+            // Only materialize a write when a fix actually changed the source;
+            // when unchanged `transformed` still borrows `source_kind`, so we
+            // neither write nor deep-clone the whole SourceKind (Memory-3).
+            let new_revision = if changed {
+                Some(write_source_kind(path, &transformed)?)
+            } else {
+                None
+            };
+            LintPass {
+                // Post-fix source when changed, borrowed original otherwise —
+                // either way `transformed` is the bytes the diagnostics map to.
+                notebook_index: notebook_index_of(&transformed),
+                diagnostics: result.diagnostics,
+                changed,
+                new_revision,
+            }
+        }
+        SafeFixes::ReportOnly => {
+            let result = lint_only(
+                path,
+                None,
+                &settings.linter,
+                noqa,
+                &source_kind,
+                source_type,
+                ParseSource::None,
+            );
+            LintPass {
+                notebook_index: notebook_index_of(&source_kind),
+                diagnostics: result.diagnostics,
+                changed: false,
+                new_revision: None,
+            }
+        }
     };
 
     let mut notebook_indexes = FxHashMap::default();
-    if let SourceKind::IpyNotebook(notebook) = owned_kind {
-        notebook_indexes.insert(path.to_string_lossy().to_string(), notebook.into_index());
+    if let Some(index) = pass.notebook_index {
+        notebook_indexes.insert(path.to_string_lossy().to_string(), index);
     }
-    let diagnostics = map_diagnostics(&diagnostics, &notebook_indexes)?;
+    let diagnostics = map_diagnostics(&pass.diagnostics, &notebook_indexes)?;
     Ok(CheckOutcome {
         diagnostics,
-        changed,
-        new_revision,
+        changed: pass.changed,
+        new_revision: pass.new_revision,
     })
 }
 
-/// Format `path`. When `write` is false, report what would change instead of
-/// touching the file.
-pub fn format_file(path: &Path, write: bool) -> Result<FormatOutcome, Error> {
+/// Format the already-read `snapshot` of `path`. See [`check`] for the
+/// single-read contract. [`FormatWrite::DryRun`] reports what would change (a
+/// unified diff for text files) without touching the file.
+pub fn format_file(
+    path: &Path,
+    write: FormatWrite,
+    snapshot: fs::Snapshot,
+) -> Result<FormatOutcome, Error> {
     let settings = resolve_settings(path)?;
     let Some(source_type) = python_source_type(&settings, path) else {
-        return Err(Error::invalid_input(format!(
-            "not a Python file or notebook: {}",
-            path.display()
-        )));
+        return Err(not_python(path));
     };
-    let source_kind = load_source_kind(path, source_type)?;
-    let formatted = match &source_kind {
+    let source_kind = source_kind_from(snapshot.content, source_type, path)?;
+
+    // Consume `source_kind` so the notebook branch can hand ownership to
+    // `format_notebook`, which mutates it in place (no deep clone — Memory-4).
+    let formatted = match source_kind {
         SourceKind::Python { code, is_stub } => {
             let options = settings
                 .formatter
-                .to_format_options(source_type, code, Some(path));
-            let formatted = format_module_source(code, options)
+                .to_format_options(source_type, &code, Some(path));
+            let new_code = format_module_source(&code, options)
                 .map(|printed| printed.into_code())
                 .map_err(Error::analysis)?;
-            if formatted == *code {
-                None
-            } else {
-                Some(SourceKind::Python {
-                    code: formatted,
-                    is_stub: *is_stub,
-                })
+            if new_code == code {
+                return Ok(FormatOutcome::Unchanged);
+            }
+            if matches!(write, FormatWrite::DryRun) {
+                let diff = crate::render::unified_diff(&code, &new_code);
+                return Ok(FormatOutcome::WouldReformat { diff: Some(diff) });
+            }
+            SourceKind::Python {
+                code: new_code,
+                is_stub,
             }
         }
-        SourceKind::IpyNotebook(notebook) => format_notebook(notebook, &settings, path)?,
+        SourceKind::IpyNotebook(notebook) => match format_notebook(*notebook, &settings, path)? {
+            Some(formatted) => SourceKind::IpyNotebook(Box::new(formatted)),
+            None => return Ok(FormatOutcome::Unchanged),
+        },
         SourceKind::Markdown(_) => {
             return Err(Error::invalid_input(format!(
                 "cannot format markdown: {}",
@@ -188,29 +262,29 @@ pub fn format_file(path: &Path, write: bool) -> Result<FormatOutcome, Error> {
         }
     };
 
-    let Some(formatted) = formatted else {
-        return Ok(FormatOutcome::Unchanged);
-    };
-    if write {
-        let new_revision = write_source_kind(path, &formatted)?;
-        return Ok(FormatOutcome::Written { new_revision });
-    }
-    let diff = match (&source_kind, &formatted) {
-        (SourceKind::Python { code: old, .. }, SourceKind::Python { code: new, .. }) => {
-            Some(crate::render::unified_diff(old, new))
+    match write {
+        FormatWrite::InPlace => {
+            let new_revision = write_source_kind(path, &formatted)?;
+            Ok(FormatOutcome::Written { new_revision })
         }
-        _ => None,
-    };
-    Ok(FormatOutcome::WouldReformat { diff })
+        // Only a changed notebook reaches here on a dry run (a changed Python
+        // file returned its diff above); notebooks have no plain-text diff.
+        FormatWrite::DryRun => Ok(FormatOutcome::WouldReformat { diff: None }),
+    }
 }
 
 /// Format every Python cell of a notebook, mirroring ruff's own cell loop so
 /// magics and escapes are handled correctly.
+///
+/// Takes the notebook *by value* (Memory-4): `update()` needs `&mut`, and
+/// owning the notebook lets us mutate it in place instead of deep-cloning the
+/// whole `RuffNotebook` (source + raw JSON DOM + offsets) just to get a
+/// mutable handle.
 fn format_notebook(
-    notebook: &RuffNotebook,
+    mut notebook: RuffNotebook,
     settings: &Settings,
     path: &Path,
-) -> Result<Option<SourceKind>, Error> {
+) -> Result<Option<RuffNotebook>, Error> {
     if !notebook.is_python_notebook() {
         return Ok(None);
     }
@@ -243,10 +317,11 @@ fn format_notebook(
     let (Some(mut buffer), Some(last)) = (output, last) else {
         return Ok(None);
     };
+    // Last use of the `source_code` borrow; after this line NLL frees it, so
+    // `notebook.update` (which needs `&mut notebook`) mutates in place.
     buffer.push_str(&source_code[usize::from(last)..]);
-    let mut formatted = notebook.clone();
-    formatted.update(&source_map, buffer);
-    Ok(Some(SourceKind::IpyNotebook(Box::new(formatted))))
+    notebook.update(&source_map, buffer);
+    Ok(Some(notebook))
 }
 
 /// Write a (possibly fixed/formatted) source back to disk. Notebooks are
@@ -274,20 +349,36 @@ fn python_source_type(settings: &Settings, path: &Path) -> Option<PySourceType> 
     }
 }
 
-fn load_source_kind(path: &Path, source_type: PySourceType) -> Result<SourceKind, Error> {
-    SourceKind::from_path(path, SourceType::Python(source_type))
-        .map_err(|error| Error::analysis(format!("cannot read {}: {error}", path.display())))?
+/// Build ruff's [`SourceKind`] from bytes already read by [`crate::fs`], so
+/// ruff never re-reads (or, for `.ipynb`, re-parses from disk) the file
+/// (CPU-F2). `content` is moved in: for `.py` it becomes the source verbatim,
+/// for `.ipynb` it is parsed once by `Notebook::from_source_code`.
+fn source_kind_from(
+    content: String,
+    source_type: PySourceType,
+    path: &Path,
+) -> Result<SourceKind, Error> {
+    SourceKind::from_source_code(content, SourceType::Python(source_type))
+        .map_err(|error| Error::analysis(format!("cannot parse {}: {error}", path.display())))?
         .ok_or_else(|| {
             Error::invalid_input(format!("empty or unsupported file: {}", path.display()))
         })
 }
 
-fn empty_check() -> CheckOutcome {
-    CheckOutcome {
-        diagnostics: Vec::new(),
-        changed: false,
-        new_revision: None,
+/// The small [`NotebookIndex`] used to map ruff offsets back to `cell`/`row`,
+/// cloned out of a borrow so we never need to own the whole `SourceKind`
+/// (Memory-3). `None` for non-notebook sources.
+fn notebook_index_of(kind: &SourceKind) -> Option<NotebookIndex> {
+    match kind {
+        SourceKind::IpyNotebook(notebook) => Some(notebook.index().clone()),
+        _ => None,
     }
+}
+
+/// F14: ruff only lints Python; point the caller at the right tool instead of
+/// silently reporting "no issues". Matches [`format_file`]'s message/shape.
+fn not_python(path: &Path) -> Error {
+    Error::invalid_input(format!("not a Python file or notebook: {}", path.display()))
 }
 
 /// Render ruff diagnostics to JSON (mapping notebook offsets to cells) and
