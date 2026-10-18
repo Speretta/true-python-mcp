@@ -1,0 +1,6 @@
+# The Windows CI runner checks out with core.autocrlf=true. These fixtures
+# are byte-exact inputs: the roundtrip and canonical-form suites compare raw
+# bytes, so git must never rewrite their line endings on checkout.
+tests/data/** -text
+examples/demo/** -text
+bench/fixture/** -text
