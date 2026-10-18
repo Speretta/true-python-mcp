@@ -195,19 +195,27 @@ fn write_cell_markdown(
 /// One outline row: index, type, line count, first source line (truncated to
 /// [`OUTLINE_FIRST_LINE_BYTES`]). The navigational view of a notebook.
 fn write_cell_outline(out: &mut String, index: usize, cell: &Cell) {
-    const OUTLINE_FIRST_LINE_BYTES: usize = 80;
     let source = cell.source_text();
     let line_count = logical_line_count(&source);
-    let first = crate::fs::logical_lines(&source)
-        .first()
-        .map(|line| line.trim())
-        .unwrap_or("");
-    let first = &first[..first.floor_char_boundary(OUTLINE_FIRST_LINE_BYTES)];
+    let first = outline_first_line(&source);
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
     if let Some(kind) = kind_label(cell) {
         let _ = write!(out, " ({kind})");
     }
     let _ = writeln!(out, " · {line_count} lines · {first}");
+}
+
+/// Outline rows cap the first line so one huge line cannot defeat the
+/// navigational view; truncation backs off to a char boundary.
+const OUTLINE_FIRST_LINE_BYTES: usize = 80;
+
+/// The trimmed first source line, capped at [`OUTLINE_FIRST_LINE_BYTES`].
+fn outline_first_line(source: &str) -> &str {
+    let first = crate::fs::logical_lines(source)
+        .first()
+        .map(|line| line.trim())
+        .unwrap_or("");
+    &first[..first.floor_char_boundary(OUTLINE_FIRST_LINE_BYTES)]
 }
 
 /// The marimo block label shown next to the cell type when the cell is not a
@@ -304,10 +312,7 @@ fn outline_cell_json(index: usize, cell: &Cell) -> Value {
         "cell_type": cell.cell_type,
         "kind": kind_label(cell),
         "line_count": logical_line_count(&source),
-        "first_line": crate::fs::logical_lines(&source)
-            .first()
-            .map(|line| line.trim())
-            .unwrap_or(""),
+        "first_line": outline_first_line(&source),
     })
 }
 
