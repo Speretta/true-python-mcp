@@ -25,7 +25,7 @@ jobs:
       # Node 24 runtime.
       - uses: actions/checkout@v5
       - name: Cache the cargo dirs and the build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Cache the cargo dirs and the MSRV build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -91,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Cache the cargo dirs and the build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
