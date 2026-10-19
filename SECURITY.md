@@ -23,6 +23,14 @@ releases get no backports.
 | latest release | yes |
 | older releases | no; upgrade to the latest release |
 
+## Dependencies
+
+CI scans the dependency graph with [cargo-audit](https://rustsec.org) on
+every push. Reviewed exceptions — advisories that do not apply to tpmcp's
+usage, or that are transitive through the pinned ruff train — are documented
+in `.cargo/audit.toml`; a new advisory fails the scan until fixed or
+reviewed.
+
 ## Scope
 
 tpmcp edits files with the full rights of the user who started it. That

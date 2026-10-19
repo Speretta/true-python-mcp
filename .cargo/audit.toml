@@ -1,0 +1,18 @@
+# Dependency advisory policy (cargo-audit). Every ignore here is a
+# deliberate, reviewed decision; the file is committed so CI stays green
+# without hiding anything, and cargo-audit still fails on any NEW advisory.
+
+[advisories]
+ignore = [
+    # zip 8.6.0, three extraction-time advisories. tpmcp never calls
+    # ZipArchive/ZipStreamReader::extract — it is a notebook editor, and zip
+    # arrives only as a transitive dependency of the pinned ruff train
+    # (ruff_db -> zip). The fix is a major bump (zip >= 9.0.0) that must come
+    # from the train itself; the weekly ruff-train bump will clear these.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    # paste 1.0.15 is unmaintained; it is a build-time proc-macro helper,
+    # transitive via libcst -> ruff_linter (the pinned train again).
+    "RUSTSEC-2024-0436",
+]
