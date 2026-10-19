@@ -55,6 +55,12 @@ jobs:
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # Date-derived seed: same-day reruns replay identical cases (no
+      # check-vs-release seed lottery), coverage rotates daily. The nightly
+      # job stays unseeded for true random discovery; found cases persist as
+      # regression seeds and replay deterministically everywhere.
+      - name: Seed the property suite deterministically for the day
+        run: echo "PROPTEST_RNG_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
       - run: cargo nextest run
       - run: cargo build --release
 
@@ -121,4 +127,7 @@ jobs:
       - name: Install cargo-nextest
         shell: bash
         run: curl -LsSf https://get.nexte.st/latest/windows-tar | tar zxf - -C "$HOME/.cargo/bin"
+      - name: Seed the property suite deterministically for the day
+        shell: bash
+        run: echo "PROPTEST_RNG_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
       - run: cargo nextest run

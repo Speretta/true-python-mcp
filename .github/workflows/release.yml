@@ -52,6 +52,8 @@ jobs:
           uv pip install --python /tmp/nbenv/bin/python nbformat marimo
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
+      - name: Seed the property suite deterministically for the day
+        run: echo "PROPTEST_RNG_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
       - run: cargo nextest run
 
   create-release:
