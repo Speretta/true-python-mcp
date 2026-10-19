@@ -245,6 +245,135 @@ fn broken_file_matches_marimo_status() {
     assert_eq!(notebook.format_label(), "marimo 0.25.1");
 }
 
+/// The scanner and the structured parser must agree about intact cells: a
+/// region holding extra top-level statements next to the cell block (a
+/// column-0 `return`, as left behind by a bad merge or a stray dedent —
+/// grammatically legal at module level, so the file opens structured) keeps
+/// its cell body-only when an UNRELATED edit makes the file untokenizable
+/// and reopens it through the region scanner. Mechanism test for the
+/// proptest seed in tests/property.proptest-regressions.
+#[test]
+fn scan_mode_keeps_intact_cells_with_trailing_statements() {
+    let src = concat!(
+        "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n",
+        "@app.cell(hide_code=True)\ndef _(mo):\n    mo.accordion({\"Tip\": \"x\"})\n",
+        "return\n\n\n",
+        "@app.cell\ndef _():\n    y = 1\n    return\n\n\n",
+        "if __name__ == \"__main__\":\n    app.run()\n",
+    );
+    // While the file parses as a whole, the structured parser handles it: the
+    // def block is the cell, the stray column-0 return is a literal segment.
+    let mut notebook = open(src).unwrap();
+    assert_eq!(notebook.cells().len(), 2);
+    assert_eq!(
+        notebook.cells()[0].source_text(),
+        "mo.accordion({\"Tip\": \"x\"})"
+    );
+    assert_eq!(notebook.serialize(), src);
+
+    // Editing the OTHER cell to an unterminated string makes the file
+    // untokenizable; reopening degrades to the region scanner.
+    notebook.set_source(1, "\"").unwrap();
+    let serialized = notebook.serialize();
+    let reopened = open(&serialized).unwrap();
+    let cells = reopened.cells();
+    assert_eq!(cells.len(), 2, "cell count survives the degradation");
+    assert_eq!(
+        cells[0].source_text(),
+        "mo.accordion({\"Tip\": \"x\"})",
+        "the untouched cell keeps its body-only source in scan mode"
+    );
+    assert_ne!(cells[0].marimo_kind(), Some("broken"));
+    // The degraded file is stable: re-serializing is the identity, and the
+    // stray return survives as a literal segment.
+    assert_eq!(reopened.serialize(), serialized);
+    assert!(serialized.contains(")\nreturn\n"), "{serialized}");
+}
+
+/// The scanner must not split a decorator stack: a junk decorator line
+/// (`@app.class_definit% ...`, grammatically a modulo expression) belongs to
+/// the class definition that follows it, exactly as the structured parser
+/// reads it. When an unrelated edit degrades the file into scan mode, the
+/// merged region must yield the same cells — the intact one before it and
+/// the class cell with its full block. Mechanism test for the second
+/// proptest seed in tests/property.proptest-regressions.
+#[test]
+fn scan_mode_rejoins_decorator_stacks_split_across_regions() {
+    let src = concat!(
+        "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n",
+        "@app.cell\ndef _():\n    note = 1\n    return (note,)\n\n\n",
+        "@app.class_definit%    ...\n\n\n",
+        "@app.class_definition\nclass Helper:\n    pass\n\n\n",
+        "@app.cell\ndef _(note):\n    print(note)\n    return\n\n\n",
+        "if __name__ == \"__main__\":\n    app.run()\n",
+    );
+    // The whole file parses (the junk decorator is a grammatical expression,
+    // stacked on the class), so this opens through the structured parser.
+    let mut notebook = open(src).unwrap();
+    assert_eq!(notebook.cells().len(), 3);
+    assert_eq!(notebook.cells()[0].source_text(), "note = 1");
+    assert_eq!(notebook.cells()[1].marimo_kind(), Some("class"));
+    let class_before = notebook.cells()[1].source_text().into_owned();
+    assert!(
+        class_before.starts_with("@app.class_definit%"),
+        "the class block starts at its first decorator: {class_before}"
+    );
+    assert_eq!(notebook.serialize(), src);
+
+    // Breaking the LAST cell (unterminated string) degrades the file into
+    // scan mode; the cells before it must survive unchanged.
+    notebook.set_source(2, "\"").unwrap();
+    let serialized = notebook.serialize();
+    let reopened = open(&serialized).unwrap();
+    let cells = reopened.cells();
+    assert_eq!(cells.len(), 3, "cell count survives the degradation");
+    assert_eq!(cells[0].source_text(), "note = 1");
+    assert_ne!(cells[0].marimo_kind(), Some("broken"));
+    assert_eq!(cells[1].marimo_kind(), Some("class"));
+    assert_eq!(cells[1].source_text(), class_before);
+    assert_eq!(cells[2].marimo_kind(), Some("broken"));
+    assert_eq!(reopened.serialize(), serialized);
+}
+
+/// The dangling-decorator shift must not depend on the FOLLOWING region
+/// parsing: an edit that breaks one cell degrades the file into scan mode,
+/// and a junk decorator line (`@app.c`, which classify sees first, shadowing
+/// the real `@app.cell` behind it) must travel with the definition it
+/// decorates — even when the broken cell is the one right before it. Without
+/// the shift, the scanner sees the def with only its second decorator and a
+/// phantom extra cell appears. Mechanism test for the third proptest seed in
+/// tests/property.proptest-regressions.
+#[test]
+fn scan_mode_keeps_junk_decorators_with_the_decorated_def() {
+    let src = concat!(
+        "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n",
+        "@app.cell\ndef _():\n    x = 1\n    return (x,)\n\n\n",
+        "@app.c#    return\n\n\n",
+        "@app.cell\ndef _(x):\n    y = x + 1\n    return (y,)\n\n\n",
+        "if __name__ == \"__main__\":\n    app.run()\n",
+    );
+    // Structured open: the second def carries decorators [@app.c, @app.cell];
+    // classify takes the FIRST app.* decorator ("c"), so it is a literal
+    // segment, not a cell — one cell total.
+    let mut notebook = open(src).unwrap();
+    assert_eq!(notebook.cells().len(), 1);
+    assert_eq!(notebook.cells()[0].source_text(), "x = 1");
+    assert_eq!(notebook.serialize(), src);
+
+    // Breaking the only cell degrades the file into scan mode; the junk
+    // decorator must not flip the literal def into a phantom cell.
+    notebook.set_source(0, "\u{0}").unwrap();
+    let serialized = notebook.serialize();
+    let reopened = open(&serialized).unwrap();
+    assert_eq!(
+        reopened.cells().len(),
+        1,
+        "no phantom cell from the split decorator stack"
+    );
+    assert_eq!(reopened.cells()[0].marimo_kind(), Some("broken"));
+    assert_eq!(reopened.serialize(), serialized);
+}
+
 /// Python `repr()` of a string, limited to what the fixture sources contain
 /// (single-quoted form; they contain no `'`, no `\` and no control chars
 /// beyond newlines).

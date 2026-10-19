@@ -45,6 +45,18 @@ pub(super) fn guarded_drop<T>(parsed: Parsed<T>, source_len: usize) {
 
 fn parse_structured(src: &str, parsed: &Parsed<ModModule>) -> Result<MarimoNotebook, String> {
     let mut builder = Builder::default();
+    walk_statements(&mut builder, src, parsed);
+    builder.finish()
+}
+
+/// The shared statement walk: every top-level statement becomes a cell (when
+/// it classifies as a cell block) or a literal segment, and the bytes
+/// between statements are kept verbatim. [`parse_structured`] runs it over
+/// the whole file; the scanner fallback runs it over each region that parses
+/// on its own, so both parsers make identical decisions for identical bytes
+/// — a file degrading into the scanner must not change the cells an edit did
+/// not touch (tests/property.rs, property 3).
+pub(super) fn walk_statements(builder: &mut Builder, src: &str, parsed: &Parsed<ModModule>) {
     let mut pos = 0usize;
 
     for stmt in parsed.syntax().body.iter() {
@@ -76,7 +88,6 @@ fn parse_structured(src: &str, parsed: &Parsed<ModModule>) -> Result<MarimoNoteb
     if pos < src.len() {
         builder.push_literal(src[pos..].to_string());
     }
-    builder.finish()
 }
 
 /// The accumulator both marimo walkers fill — the structured parse and the

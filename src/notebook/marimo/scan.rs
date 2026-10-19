@@ -3,15 +3,27 @@
 //! When the whole file fails to parse, split it into regions at the column-0
 //! boundaries marimo itself uses (`@app.`, `with app.setup`,
 //! `app._unparsable_cell`, `if __name__ ==`) and parse each region on its own.
-//! Regions that parse become normal cells; regions that do not become
-//! read-only "broken" cells, so one bad cell never locks the whole notebook.
-//! This mirrors marimo's `scanner.py` recovery that keeps `marimo edit --watch`
-//! alive through syntax errors.
+//! Regions that parse are walked statement-by-statement by the SAME walker
+//! the structured parser uses, so both parsers make identical decisions for
+//! identical bytes; regions that do not become read-only "broken" cells, so
+//! one bad cell never locks the whole notebook. The boundary split mirrors
+//! marimo's `scanner.py` recovery that keeps `marimo edit --watch` alive
+//! through syntax errors, with two coherence rules of our own:
+//!
+//! - a boundary preceded by dangling column-0 decorator lines moves back to
+//!   the start of that run, because the decorators grammatically belong to
+//!   the definition starting the next region and `classify` reads the whole
+//!   stack, and
+//! - a parsed region keeps every non-cell statement as a literal segment,
+//!   exactly like the whole-file parse does.
+//!
+//! A file only degrades into this scanner when some region is unparseable,
+//! so any divergence from the structured parser would silently change the
+//! cells no edit touched (property 3 in tests/property.rs pins this).
 
 use ruff_python_parser::parse_module;
-use ruff_text_size::Ranged;
 
-use super::parse::{Builder, Top, app_cell, classify, marimo_extra, read_only_cell, setup_cell};
+use super::parse::{Builder, guarded_drop, marimo_extra, walk_statements};
 use super::{CellMeta, Kind, MarimoNotebook};
 use crate::notebook::Cell;
 
@@ -27,26 +39,13 @@ pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
     for (start, end, region) in split_regions(src) {
         let text = &src[start..end];
         match region {
-            Region::Literal => {
-                if let Ok(parsed) = parse_module(text) {
-                    for stmt in parsed.syntax().body.iter() {
-                        builder.inspect_literal(stmt);
-                    }
-                    super::parse::guarded_drop(parsed, text.len());
+            Region::Literal => push_literal_region(&mut builder, text),
+            Region::Cell => match parse_module(text) {
+                Ok(parsed) => {
+                    walk_statements(&mut builder, text, &parsed);
+                    guarded_drop(parsed, text.len());
                 }
-                builder.push_literal(text.to_string());
-            }
-            Region::Cell => match parse_cell_region(text) {
-                Some((cell, meta, leading, trailing)) => {
-                    if !leading.is_empty() {
-                        builder.push_literal(leading);
-                    }
-                    builder.push_cell(cell, meta);
-                    if !trailing.is_empty() {
-                        builder.push_literal(trailing);
-                    }
-                }
-                None => {
+                Err(_) => {
                     let (cell, meta, trailing) = broken_cell(text);
                     builder.push_cell(cell, meta);
                     if !trailing.is_empty() {
@@ -59,38 +58,17 @@ pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
     builder.finish()
 }
 
-/// Parse one cell region; returns the cell plus any leading/trailing literal
-/// bytes around the statement (so the region reconstructs byte-for-byte).
-fn parse_cell_region(text: &str) -> Option<(Cell, CellMeta, String, String)> {
-    let parsed = parse_module(text).ok()?;
-    let result = region_cell(text, &parsed);
-    super::parse::guarded_drop(parsed, text.len());
-    result
-}
-
-fn region_cell(
-    text: &str,
-    parsed: &ruff_python_parser::Parsed<ruff_python_ast::ModModule>,
-) -> Option<(Cell, CellMeta, String, String)> {
-    let body = &parsed.syntax().body;
-    if body.len() != 1 {
-        return None;
+/// Push a region as a literal: its statements are inspected for header and
+/// version tracking when it parses, and its bytes are kept verbatim either
+/// way.
+fn push_literal_region(builder: &mut Builder, text: &str) {
+    if let Ok(parsed) = parse_module(text) {
+        for stmt in parsed.syntax().body.iter() {
+            builder.inspect_literal(stmt);
+        }
+        guarded_drop(parsed, text.len());
     }
-    let stmt = &body[0];
-    let start = stmt.range().start().to_usize();
-    let end = stmt.range().end().to_usize();
-    let (cell, meta) = match classify(stmt) {
-        Top::AppCell(func) => app_cell(text, func, start, end),
-        Top::Setup => setup_cell(text, stmt, start, end),
-        Top::ReadOnly => read_only_cell(text, stmt, start, end),
-        Top::Literal => return None,
-    };
-    Some((
-        cell,
-        meta,
-        text[..start].to_string(),
-        text[end..].to_string(),
-    ))
+    builder.push_literal(text.to_string());
 }
 
 /// A region that failed to parse: kept verbatim (byte-exact) and shown
@@ -131,6 +109,7 @@ fn split_regions(src: &str) -> Vec<(usize, usize, Region)> {
         }
         offset += line.len();
     }
+    let marks = rejoin_split_decorator_stacks(&marks, src);
     let mut regions = Vec::new();
     let mut cursor = 0usize;
     for (index, &(start, region)) in marks.iter().enumerate() {
@@ -145,6 +124,57 @@ fn split_regions(src: &str) -> Vec<(usize, usize, Region)> {
         regions.push((cursor, src.len(), Region::Literal));
     }
     regions
+}
+
+/// Decorator stacks split across a region boundary: a trailing run of
+/// column-0 decorator lines (comment and blank lines transparent) at the end
+/// of one region grammatically belongs to the def or class that starts the
+/// next region — the structured parser reads the whole stack as ONE statement
+/// and `classify` looks at every decorator in it, so the scanner must see the
+/// same bytes in one region. Move the boundary back to the start of the run.
+///
+/// The shift is unconditional (no parse gate): whether the FOLLOWING region
+/// parses must not change the segmentation of the previous one, or an edit
+/// that breaks one cell would flip its neighbors between parsed and broken
+/// (tests/property.rs, property 3).
+fn rejoin_split_decorator_stacks(marks: &[(usize, Region)], src: &str) -> Vec<(usize, Region)> {
+    let mut adjusted: Vec<(usize, Region)> = Vec::with_capacity(marks.len());
+    for (position, &(start, region)) in marks.iter().enumerate() {
+        let shifted = position.checked_sub(1).and_then(|previous| {
+            let region_start = marks[previous].0;
+            dangling_decorator_start(&src[region_start..start]).map(|offset| region_start + offset)
+        });
+        adjusted.push((shifted.unwrap_or(start), region));
+    }
+    adjusted
+}
+
+/// The offset of the first line of the dangling decorator run at the end of
+/// `text`: trailing column-0 `@` lines, skipping blank and comment-only
+/// lines between them, stopping at the first content line. `None` when the
+/// text does not end in a decorator.
+fn dangling_decorator_start(text: &str) -> Option<usize> {
+    let content_end = text.trim_end_matches(['\n', '\r', ' ', '\t']).len();
+    let mut found = None;
+    for (line_start, line) in lines_with_offsets(&text[..content_end]).into_iter().rev() {
+        if line.starts_with('@') {
+            found = Some(line_start);
+        } else if !line.is_empty() && !line.starts_with('#') {
+            break;
+        }
+    }
+    found
+}
+
+/// The lines of `text` (terminators stripped) paired with their byte offsets.
+fn lines_with_offsets(text: &str) -> Vec<(usize, &str)> {
+    let mut lines = Vec::new();
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        lines.push((offset, line.trim_end_matches(['\n', '\r'])));
+        offset += line.len();
+    }
+    lines
 }
 
 /// Column-0 boundary detection, mirroring marimo's scanner recovery regex.
