@@ -32,7 +32,7 @@ jobs:
       TPMCP_REQUIRE_GROUND_TRUTH: "1"
       TPMCP_LOCK_DIR: /tmp/tpmcp-ci-locks
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Cache the cargo dirs and the build tree
         uses: actions/cache@v4
         with:
@@ -58,7 +58,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Create the GitHub release with notes from CHANGELOG.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,7 +110,7 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install the cross toolchain (Linux only)
         if: runner.os == 'Linux'
