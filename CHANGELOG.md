@@ -3,6 +3,66 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.1.4] - 2026-10-19
+
+### Added
+
+- add cell_set_metadata for Jupyter cell metadata
+- convert notebooks with notebook_create from_path
+- add outline, query and diagnostics to notebook_read
+
+### Fixed
+
+- reject explicit line ranges on empty files
+- scaffold mo when a mutation introduces marimo markdown
+- parse JSON floats exactly so writes stop drifting them
+- align the cell execution_count check with the nbformat policy
+- keep cell separators when deleting broken marimo cells
+- build marimo files byte-identical to marimo's own serializer
+- cap the JSON outline first line like the markdown one
+- run the two-process rename-gate test in debug builds only
+- render the search, outline and export views honestly
+- report unavailable lint instead of failing notebook_read
+- report everything a conversion leaves behind
+- define mo in created and converted marimo files with markdown cells
+
+### Changed
+
+- sync the README with the shipped surface
+- rebase before the bench bot pushes
+- add the ruff train runbook and the message-evidence policy
+- mark the library API unstable in the quickstart
+- prepare the crate for crates.io
+- split the ruff diagnostics mapping into a submodule
+- add issue templates
+- add dependabot for cargo and actions
+- add a security policy
+- test on windows, check the msrv, pin and cache
+- gate the release binaries on the test suite
+- pin byte-exact fixtures against EOL rewriting
+- add proptest property harness for the parse/serialize core
+- complete the tool annotation matrix with titles and four hints
+- add examples 06 and 07 with their demo fixtures
+- pin the notebook_read parameter edges on the wire
+- sweep the conversion corpus and run the artifacts under real marimo
+- complete the annotations and titles of the two notebook tools
+- render the notebook Format enum compactly in schemas
+- describe tool side effects and teach the new parameters
+- simplify the prose across the markdown surface
+- capture per-process thread counts in the sampler
+- switch the release profile to fat LTO and one codegen unit
+- note the mixed-EOL behavior of inserted marimo lines
+- adopt the house style rules
+- name diagnostic bindings as domain nouns
+- split the marimo suite into core, markdown and graph files
+- typed notebook errors, borrowed sources, lazy extras
+- unify the wire harness and temp dirs in tests/common
+- keep test lock files out of the real cache dir
+- trim tokio features and drop the unused ruff_source_file dep
+- switch to a current-thread runtime
+- run every tool body on a blocking thread
+- refresh comparison measurements [skip ci]
+
 ## [0.1.3] - 2026-10-18
 
 ### Fixed
