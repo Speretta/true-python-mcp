@@ -41,10 +41,12 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       # Pinned to the versions the ground-truth claims were verified against
       # (nbformat 5.11.1, marimo 0.25.1); bump deliberately, together with
-      # the docs that cite them.
+      # the docs that cite them. Python is pinned too: ubuntu-latest started
+      # migrating to Ubuntu 26 on 2026-10-19, and the ground-truth venv must
+      # not float with the runner image's default python.
       - name: Install the ground-truth venv (nbformat + marimo)
         run: |
-          uv venv /tmp/nbenv
+          uv venv --python 3.12 /tmp/nbenv
           uv pip install --python /tmp/nbenv/bin/python nbformat==5.11.1 marimo==0.25.1
       # Pinned official nextest binary via curl; no third-party GitHub
       # Actions beyond checkout and cache (house rule).
@@ -97,12 +99,18 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - name: Install uv and the pinned ground-truth venv
+      - name: Install uv
         shell: bash
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          uv venv "$RUNNER_TEMP/nbenv"
+      # Separate step on purpose: GITHUB_PATH only takes effect with the
+      # NEXT step, so calling uv inside the install step dies with 127
+      # (proven by the first windows run of 2026-10-19).
+      - name: Install the pinned ground-truth venv
+        shell: bash
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/nbenv"
           uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat==5.11.1 marimo==0.25.1
       - name: Point the ground-truth env at the venv and a job-local lock dir
         shell: bash
