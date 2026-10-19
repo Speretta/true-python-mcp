@@ -164,6 +164,34 @@ git config core.hooksPath .githooks
 Release process and ground-truth test setup: [CONTRIBUTING.md](CONTRIBUTING.md).
 What is inside each release: [CHANGELOG.md](CHANGELOG.md).
 
+## Continuous integration
+
+Every push and pull request runs `.github/workflows/ci.yml` with four jobs:
+
+- `check` runs fmt, clippy (`-D warnings`) and the full test suite against a
+  live ground-truth venv (latest nbformat and marimo), then a release build.
+- `windows` runs the same suite on Windows; two release targets ship there.
+- `msrv` runs `cargo check` with the declared minimum Rust (1.97).
+- `audit` scans dependencies with `cargo-audit` against the RustSec database.
+
+Three more workflows:
+
+- `.github/workflows/release.yml` fires on a version tag; the test suite must
+  pass before any binary is built or published.
+- `.github/workflows/nightly.yml` stresses the property suite nightly (65536
+  cases, debug and release) and commits any new counterexample seed.
+- `.github/workflows/bench.yml` is dispatched manually to refresh the
+  comparison measurements in this README.
+
+The property tests are three-layered. A deterministic matrix
+(`tests/adversarial.rs`) enumerates the known degenerate shapes. CI replays
+the property tests with a date-derived seed. The nightly run discovers new
+shapes at random; every find is persisted as a regression seed and replayed
+deterministically everywhere.
+
+The shared cargo cache and the reviewed `cargo-audit` exceptions live in
+`.github/actions/` and `.cargo/audit.toml`.
+
 ## License
 
 Licensed under either of
