@@ -530,6 +530,12 @@ fn converted_files_match_marimos_own_serializer() {
     };
     let official = run_python(&python, MARIMO_CONVERT, &[source.to_str().unwrap()]);
     let mine = std::fs::read_to_string(&target).unwrap();
+    // `marimo convert` writes through Python text mode, which emits CRLF on
+    // Windows; tpmcp always emits LF (the canonical marimo on-disk ending).
+    // The oracle's claim is about layout, not host line endings, so compare
+    // after normalizing CRLF to LF.
+    let mine = mine.replace("\r\n", "\n");
+    let official = official.replace("\r\n", "\n");
     assert_eq!(mine.trim_end_matches('\n'), official.trim_end_matches('\n'));
 }
 
