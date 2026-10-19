@@ -166,13 +166,12 @@ What is inside each release: [CHANGELOG.md](CHANGELOG.md).
 
 ## Continuous integration
 
-Every push and pull request runs `.github/workflows/ci.yml` with four jobs:
+Every push and pull request runs `.github/workflows/ci.yml` with three jobs:
 
 - `check` runs fmt, clippy (`-D warnings`) and the full test suite against a
   live ground-truth venv (latest nbformat and marimo), then a release build.
 - `windows` runs the same suite on Windows; two release targets ship there.
 - `msrv` runs `cargo check` with the declared minimum Rust (1.97).
-- `audit` scans dependencies with `cargo-audit` against the RustSec database.
 
 Three more workflows:
 
@@ -189,8 +188,11 @@ the property tests with a date-derived seed. The nightly run discovers new
 shapes at random; every find is persisted as a regression seed and replayed
 deterministically everywhere.
 
-The shared cargo cache and the reviewed `cargo-audit` exceptions live in
-`.github/actions/` and `.cargo/audit.toml`.
+The shared cargo cache lives in `.github/actions/`. A pre-push git hook
+(`git config core.hooksPath .githooks`) blocks the push when a direct
+dependency is outdated (`cargo outdated`, the manual ruff/ty train excepted)
+or a new advisory appears (`cargo audit`, reviewed exceptions in
+`.cargo/audit.toml`); bypass deliberately with `git push --no-verify`.
 
 ## License
 

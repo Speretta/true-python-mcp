@@ -56,19 +56,6 @@ jobs:
       - run: cargo nextest run
       - run: cargo build --release
 
-  # Dependency advisory scan (cargo-audit) against the RustSec database:
-  # catches known-vulnerable transitive deps that dependabot's version
-  # bumps do not cover. Prebuilt musl binary, pinned like nextest; the
-  # reviewed exceptions live in .cargo/audit.toml.
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install cargo-audit
-        run: |
-          curl -LsSf https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz | tar zxf - --strip-components=1 -C "$HOME/.cargo/bin"
-      - run: cargo audit
-
   # Cargo.toml declares rust-version; this job is the only place that
   # compiles with it. Check only: clippy and the suite ride the stable job.
   msrv:

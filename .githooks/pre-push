@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Pre-push gate: block when a direct dependency is outdated or a new
+# (unreviewed) advisory exists. Bypass deliberately with `git push
+# --no-verify`. Both checkers must be installed (`cargo install
+# cargo-outdated cargo-audit`); a missing checker blocks too, so the gate
+# cannot be skipped silently.
+#
+# The ruff_/ty_ crates ride the manual weekly lockstep (CONTRIBUTING,
+# "Upgrading the ruff train"), so their names are ignored here — their
+# freshness is the runbook's job, not "outdated".
+
+fail=0
+
+if command -v cargo-outdated >/dev/null 2>&1; then
+    echo "pre-push: checking for outdated direct dependencies..."
+    table=$(cargo outdated --root-deps-only 2>/dev/null || true)
+    outdated=$(printf '%s\n' "$table" | awk 'NR > 2 {print $1}' | grep -vE '^(ruff_|ty_)' || true)
+    if [ -n "$outdated" ]; then
+        echo "Outdated direct dependencies (the manual ruff/ty train is ignored):" >&2
+        printf '%s\n' "$table" | awk 'NR > 2' | grep -vE '^(ruff_|ty_)' >&2
+        echo "Resolve them, or bypass deliberately with: git push --no-verify" >&2
+        fail=1
+    fi
+else
+    echo "pre-push: cargo-outdated is not installed; install it with: cargo install cargo-outdated" >&2
+    fail=1
+fi
+
+if command -v cargo-audit >/dev/null 2>&1; then
+    echo "pre-push: scanning for known vulnerabilities..."
+    if ! cargo audit; then
+        echo "Vulnerability advisories found (see above). Review them in .cargo/audit.toml, or bypass with: git push --no-verify" >&2
+        fail=1
+    fi
+else
+    echo "pre-push: cargo-audit is not installed; install it with: cargo install cargo-audit" >&2
+    fail=1
+fi
+
+exit "$fail"

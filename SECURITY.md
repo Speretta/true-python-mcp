@@ -25,11 +25,13 @@ releases get no backports.
 
 ## Dependencies
 
-CI scans the dependency graph with [cargo-audit](https://rustsec.org) on
-every push. Reviewed exceptions — advisories that do not apply to tpmcp's
-usage, or that are transitive through the pinned ruff train — are documented
-in `.cargo/audit.toml`; a new advisory fails the scan until fixed or
-reviewed.
+The pre-push git hook (`git config core.hooksPath .githooks`) scans the
+dependency graph with [cargo-audit](https://rustsec.org) before every push,
+and `cargo outdated` blocks on outdated direct dependencies. Reviewed
+exceptions — advisories that do not apply to tpmcp's usage, or that are
+transitive through the pinned ruff train — are documented in
+`.cargo/audit.toml`; a new advisory blocks the push until fixed or reviewed
+(`git push --no-verify` bypasses deliberately).
 
 ## Scope
 

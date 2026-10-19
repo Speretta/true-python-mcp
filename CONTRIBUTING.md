@@ -21,6 +21,17 @@ cargo clippy --all-targets    # must stay warning-free
 cargo fmt                     # code style
 ```
 
+## Git hooks
+
+`git config core.hooksPath .githooks` enables them once per clone:
+
+- `commit-msg` rejects non-[Conventional Commits] commit subjects.
+- `pre-push` blocks the push when a direct dependency is outdated
+  (`cargo outdated`, the manual ruff/ty train excepted) or a new
+  `cargo-audit` advisory appears; bypass deliberately with
+  `git push --no-verify`. Both checkers must be installed
+  (`cargo install cargo-outdated cargo-audit`).
+
 Two rules are enforced by tooling:
 
 - Production code must not panic. Clippy denies `unwrap`, `expect`, and
