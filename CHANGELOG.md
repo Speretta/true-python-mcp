@@ -13,6 +13,7 @@ release.
 
 ### Fixed
 
+- keep scanner-fallback cells identical to the structured parse
 - reject explicit line ranges on empty files
 - scaffold mo when a mutation introduces marimo markdown
 - parse JSON floats exactly so writes stop drifting them
@@ -28,6 +29,8 @@ release.
 
 ### Changed
 
+- stress the property suite nightly at 65536 cases
+- split the windows uv step and pin the ground-truth python
 - sync the README with the shipped surface
 - rebase before the bench bot pushes
 - add the ruff train runbook and the message-evidence policy
