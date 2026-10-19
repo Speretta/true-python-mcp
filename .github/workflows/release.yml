@@ -49,9 +49,9 @@ jobs:
       - name: Install the ground-truth venv (nbformat + marimo)
         run: |
           uv venv --python 3.12 /tmp/nbenv
-          uv pip install --python /tmp/nbenv/bin/python nbformat==5.11.1 marimo==0.25.1
+          uv pip install --python /tmp/nbenv/bin/python nbformat marimo
       - name: Install cargo-nextest
-        run: curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
+        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
       - run: cargo nextest run
 
   create-release:

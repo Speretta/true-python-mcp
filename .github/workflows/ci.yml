@@ -39,19 +39,20 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      # Pinned to the versions the ground-truth claims were verified against
-      # (nbformat 5.11.1, marimo 0.25.1); bump deliberately, together with
-      # the docs that cite them. Python is pinned too: ubuntu-latest started
-      # migrating to Ubuntu 26 on 2026-10-19, and the ground-truth venv must
-      # not float with the runner image's default python.
+      # Ground-truth tracks the LATEST nbformat and marimo on every run:
+      # the byte-exact serializer oracle and the graph findings are
+      # continuously re-verified against the current releases, and a
+      # release that changes behavior turns CI red the same day — the
+      # intended early warning, not noise. The ground-truth python stays
+      # pinned at 3.12 so the runner image migration cannot float it.
       - name: Install the ground-truth venv (nbformat + marimo)
         run: |
           uv venv --python 3.12 /tmp/nbenv
-          uv pip install --python /tmp/nbenv/bin/python nbformat==5.11.1 marimo==0.25.1
-      # Pinned official nextest binary via curl; no third-party GitHub
-      # Actions beyond checkout and cache (house rule).
+          uv pip install --python /tmp/nbenv/bin/python nbformat marimo
+      # Official nextest binary via curl; no third-party GitHub Actions
+      # beyond checkout and cache (house rule).
       - name: Install cargo-nextest
-        run: curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
+        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo nextest run
@@ -111,7 +112,7 @@ jobs:
         shell: bash
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/nbenv"
-          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat==5.11.1 marimo==0.25.1
+          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat marimo
       - name: Point the ground-truth env at the venv and a job-local lock dir
         shell: bash
         run: |
@@ -119,5 +120,5 @@ jobs:
           echo "TPMCP_LOCK_DIR=$RUNNER_TEMP/tpmcp-locks" >> "$GITHUB_ENV"
       - name: Install cargo-nextest
         shell: bash
-        run: curl -LsSf https://get.nexte.st/0.9.148/windows-tar.gz | tar zxf - -C "$HOME/.cargo/bin"
+        run: curl -LsSf https://get.nexte.st/latest/windows-tar | tar zxf - -C "$HOME/.cargo/bin"
       - run: cargo nextest run

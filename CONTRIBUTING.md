@@ -3,11 +3,11 @@
 ## Prerequisites
 
 - Rust 1.97 or newer (`rustup` recommended)
-- The [cargo-nextest](https://nexte.st) test runner (pinned; plain
+- The [cargo-nextest](https://nexte.st) test runner (latest; plain
   `cargo test` also works):
 
   ```sh
-  curl -LsSf https://get.nexte.st/0.9.148/linux | tar zxf - -C "$HOME/.cargo/bin"
+  curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
   ```
 
 - Optional: a Python venv with `nbformat` and `marimo` for the live
