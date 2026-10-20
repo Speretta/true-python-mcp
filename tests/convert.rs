@@ -496,6 +496,30 @@ completed = subprocess.run(
 sys.stdout.write(completed.stdout)
 "#;
 
+/// Normalize a marimo file for the byte-exactness oracle: drop the trailing
+/// newline (`marimo convert`'s print adds one) and replace the value of the
+/// inert `__generated_with` line — but only in the header, before the first
+/// cell. The line itself stays so its position is still checked, and a user
+/// string inside a code cell that happens to start the same way is untouched.
+fn normalize_for_oracle(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_header = true;
+    for (i, line) in text.trim_end_matches('\n').lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if in_header && line.starts_with("__generated_with = \"") {
+            out.push_str("__generated_with = \"<version>\"");
+        } else {
+            out.push_str(line);
+            if line.starts_with("@app.cell") {
+                in_header = false;
+            }
+        }
+    }
+    out
+}
+
 /// EC-7 oracle: for a clean code+markdown source, the converted file is
 /// byte-identical to `marimo convert`'s output (modulo the trailing newline
 /// the CLI's print adds): header spacing, the blank line before `return`
@@ -533,25 +557,11 @@ fn converted_files_match_marimos_own_serializer() {
     };
     let official = run_python(&python, MARIMO_CONVERT, &[source.to_str().unwrap()]);
     let mine = std::fs::read_to_string(&target).unwrap();
-    // `marimo convert` writes through Python text mode, which emits CRLF on
-    // Windows; tpmcp always emits LF (the canonical marimo on-disk ending).
-    // The oracle's claim is about layout, not host line endings, so compare
-    // after normalizing CRLF to LF.
-    //
-    // The `__generated_with` line is inert metadata: marimo records but never
-    // validates it and refreshes it on save, and tpmcp stamps its own constant
-    // (MARIMO_VERSION), so that line legitimately differs from whatever
-    // marimo convert emits. Exclude it so a marimo release that only bumps
-    // the version cannot red-herring this oracle.
-    let normalize = |text: &str| {
-        text.replace("\r\n", "\n")
-            .trim_end_matches('\n')
-            .lines()
-            .filter(|line| !line.starts_with("__generated_with = \""))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    assert_eq!(normalize(&mine), normalize(&official));
+    // `run_python` already normalizes CRLF to LF (host line endings are not
+    // part of the layout claim). The `__generated_with` value is inert
+    // metadata (marimo never validates it), so tpmcp's constant legitimately
+    // differs from whatever marimo convert emits; normalize only its value.
+    assert_eq!(normalize_for_oracle(&mine), normalize_for_oracle(&official));
 }
 
 /// A notebook whose magic cell converts verbatim and reads back broken.
