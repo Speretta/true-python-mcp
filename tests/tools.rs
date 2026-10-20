@@ -568,6 +568,90 @@ fn read_parameters_outline_query_diagnostics() {
     assert!(text.contains("- error cell 1 `cell-id`:"), "{text}");
 }
 
+/// `with_outputs` renders cell outputs only when requested: `full` returns
+/// the raw payload array (JSON) and the payload text (markdown), `summary`
+/// collapses them to a one-line string, and `none` omits them entirely. A
+/// read stays byte-safe: the on-disk notebook is never rewritten.
+#[test]
+fn notebook_read_with_outputs() {
+    let dir = temp_dir("read-outputs");
+    let path = dir.join("outputs.ipynb");
+    let source = r##"{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "a1",
+   "metadata": {},
+   "outputs": [
+    {"output_type": "stream", "name": "stdout", "text": ["hello from stdout\n"]},
+    {"output_type": "execute_result", "execution_count": 1, "metadata": {},
+     "data": {"text/plain": "42"}}
+   ],
+   "source": ["print('hello')\n"]
+  }
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}"##;
+    std::fs::write(&path, source).unwrap();
+    let mut server = Server::start(&[]);
+
+    // full JSON: the raw outputs array is present on the code cell.
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "with_outputs": "full", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let outputs = sc["cells"][0]["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), 2, "{sc}");
+    assert_eq!(outputs[0]["output_type"], "stream");
+    assert_eq!(outputs[0]["name"], "stdout");
+    assert_eq!(outputs[1]["output_type"], "execute_result");
+    assert_eq!(outputs[1]["data"]["text/plain"], "42");
+
+    // full markdown renders the payload text.
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": path, "with_outputs": "full"}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("outputs(2):"), "{text}");
+    assert!(text.contains("stream(stdout):"), "{text}");
+    assert!(text.contains("hello from stdout"), "{text}");
+    assert!(text.contains("42"), "{text}");
+
+    // summary JSON collapses to a one-line string, not the raw array.
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "with_outputs": "summary", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(
+        sc["cells"][0]["outputs"],
+        "stream(stdout), execute_result[text/plain]"
+    );
+
+    // none omits outputs entirely: no JSON "outputs" key, no markdown section.
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "with_outputs": "none", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert!(sc["cells"][0].get("outputs").is_none(), "{sc}");
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": path, "with_outputs": "none"}),
+    );
+    assert!(!err, "{text}");
+    assert!(!text.contains("outputs("), "{text}");
+    assert!(!text.contains("hello from stdout"), "{text}");
+
+    // Reads never mutate: the on-disk notebook is byte-identical.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+}
+
 /// marimo notebooks read through the same tool, and the outline labels
 /// their special blocks.
 #[test]
