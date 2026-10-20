@@ -112,6 +112,55 @@ fn cell_set_metadata_over_the_wire() {
     assert!(text.contains("Jupyter notebooks only"), "{text}");
 }
 
+/// cell_set_type raw <-> code: converting a raw cell to code keeps its
+/// source verbatim and adds the schema-required empty outputs/execution_count;
+/// converting back to raw removes them again. (The marimo code <-> markdown
+/// branch is covered in tests/marimo_markdown.rs; this is the Jupyter raw
+/// path.)
+#[test]
+fn cell_set_type_raw_to_code_and_back() {
+    let dir = temp_dir("settype");
+    let path = dir.join("nb.ipynb");
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [{"cell_type": "raw", "source": "x = 1\n"}]}),
+    );
+    assert!(!err, "{text}");
+    let revision = revision_of(&text);
+
+    // raw -> code: the source becomes the code source, with empty
+    // outputs/execution_count per nbformat.
+    let (err, text, sc) = server.call(
+        "cell_set_type",
+        json!({"path": path, "cell": 0, "cell_type": "code",
+               "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["cell"], 0);
+    assert_eq!(sc["cell_type"], "code");
+    let revision = sc["revision"].as_str().unwrap().to_string();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let parsed: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed["cells"][0]["cell_type"], "code");
+    assert_eq!(parsed["cells"][0]["source"], json!(["x = 1\n"]));
+    assert_eq!(parsed["cells"][0]["outputs"], json!([]));
+    assert_eq!(parsed["cells"][0]["execution_count"], Value::Null);
+
+    // code -> raw: the source stays, outputs and execution_count are removed.
+    let (err, text, _) = server.call(
+        "cell_set_type",
+        json!({"path": path, "cell": 0, "cell_type": "raw", "revision": revision}),
+    );
+    assert!(!err, "{text}");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let parsed: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed["cells"][0]["cell_type"], "raw");
+    assert_eq!(parsed["cells"][0]["source"], json!(["x = 1\n"]));
+    assert!(parsed["cells"][0].get("outputs").is_none(), "{raw}");
+    assert!(parsed["cells"][0].get("execution_count").is_none(), "{raw}");
+}
+
 /// EC-4 end to end: the cell-level `execution_count` follows nbformat's
 /// integer-or-null policy, so notebook_check no longer calls a file valid
 /// that nbformat rejects (float spellings, negatives) or that the next
