@@ -169,6 +169,23 @@ fn stdlib_operator_mismatch_is_mapped() {
     assert_eq!(row_col(&diagnostics[0]), (1, 10));
 }
 
+/// Ground truth (ty 0.0.18): a first-party import resolves across files — the
+/// `add` signature lives in defs.py, so the `add(1, "two")` call in
+/// uses_defs.py is checked against it and reports invalid-argument-type. This
+/// pins that the embedded checker follows imports, not just the single file.
+#[test]
+fn cross_file_import_resolves_types() {
+    let diagnostics = ty::check_path(Path::new("tests/data/ty/uses_defs.py")).unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(code(&diagnostics[0]), "invalid-argument-type");
+    assert_eq!(row_col(&diagnostics[0]), (3, 8));
+    assert!(
+        diagnostics[0].message.contains("`add`"),
+        "{:?}",
+        diagnostics[0].message
+    );
+}
+
 /// Clean, untyped and stdlib-import files produce no diagnostics (no
 /// false-positive / implicit-any / unresolved-import noise).
 #[test]
@@ -204,6 +221,7 @@ fn check_matches_ty_ground_truth() {
         ("stub.pyi", &["unresolved-reference"]),
         ("imports.py", &[]),
         ("stdlib_mismatch.py", &["unsupported-operator"]),
+        ("uses_defs.py", &["invalid-argument-type"]),
         ("cross_cell.ipynb", &["invalid-argument-type"]),
         ("magic_cell.ipynb", &["invalid-assignment"]),
     ];
