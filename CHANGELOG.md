@@ -3,6 +3,55 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.2.0] - 2026-10-20
+
+The embedded `ty_check` type checker roughly doubles the binary (17.9 MiB →
+36.9 MiB, +115%): Astral's ty and its semantic index are compiled in.
+
+### Added
+
+- map .ipynb diagnostics to cells
+- add the ty_check tool for .py/.pyi files
+
+### Fixed
+
+- guard the ty database drop against deep-AST recursion
+- reject non-python paths in ty_check
+- refuse oversize sources in ty_check
+- type-check notebooks in memory, not via a temp file
+- parse the sampler THREADS column and clarify the cgroup headline
+- normalize only the header version in the oracle
+- make the pre-push gate fail-closed and match the house idiom
+- normalize ground-truth CRLF to LF in run_python
+
+### Changed
+
+- pin ty_check over the wire
+- add a ty_check example walkthrough
+- add proptest property harness for the ty checker
+- pin ty_check against deep-AST recursion
+- install the pinned ty binary for the ground-truth oracle
+- pin ty_check fixtures against the real ty CLI
+- capitalize the notebook tool titles
+- name the type-check entry points and tighten visibility
+- list ty_check in the tools table
+- add the ty type-checker dependency train
+- re-verify persisted nightly seeds on the bot commit
+- gate releases on the Windows test suite too
+- note that an empty marimo file reports has_errors
+- point the ruff-train runbook at the hook, not dependabot
+- bump the ruff train to 0.17.1 / 0.0.18
+- bump rmcp to 3.6.0
+- decouple the marimo version stamp from byte-exactness
+- gate pushes locally instead of dependabot and CI
+- bump tokio to 1.54.0
+- compare convert output modulo host line endings
+- fold the shared cargo cache into one composite action
+- scan dependencies for known advisories with cargo-audit
+- seed the property suite per UTC day
+- enumerate a deterministic adversarial matrix
+- track the latest nextest and float the ground-truth venv
+
 ## [0.1.4] - 2026-10-19
 
 ### Added

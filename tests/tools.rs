@@ -190,7 +190,11 @@ fn ty_check_over_the_wire() {
         .collect();
     assert_eq!(
         codes,
-        vec!["invalid-assignment", "invalid-return-type", "invalid-argument-type"]
+        vec![
+            "invalid-assignment",
+            "invalid-return-type",
+            "invalid-argument-type"
+        ]
     );
 
     // notebook diagnostics carry a 0-based cell index
