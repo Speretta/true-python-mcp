@@ -342,6 +342,9 @@ pub fn check_path(path: &Path) -> Result<Vec<Diagnostic>, Error> {
 /// diagnostics in tpmcp's stable shape. Notebooks are checked cell-by-cell with
 /// cell-relative positions; plain files are checked directly.
 pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic>, Error> {
+    if !is_python_path(path) {
+        return Err(not_python(path));
+    }
     if path.extension().is_some_and(|ext| ext == "ipynb") {
         return check_notebook(path, snapshot);
     }
@@ -397,7 +400,21 @@ fn check_notebook(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic
     })
 }
 
-// ---- diagnostic mapping ----
+// ---- input guards ----
+
+/// A non-Python path is a caller error, not a green "no issues found". Matches
+/// ruff's message/shape so the two checkers never disagree about what they
+/// accept.
+fn not_python(path: &Path) -> Error {
+    Error::invalid_input(format!("not a Python file or notebook: {}", path.display()))
+}
+
+fn is_python_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("py") | Some("pyi") | Some("ipynb")
+    )
+}
 
 /// A source over [`MAX_SOURCE_SIZE`] is refused before any recursion, so a
 /// pathological input becomes a clean caller error instead of a stack abort.
@@ -409,6 +426,8 @@ fn oversized(path: &Path, size: usize) -> Error {
         MAX_SOURCE_SIZE / (1024 * 1024),
     ))
 }
+
+// ---- diagnostic mapping ----
 
 /// Rewrites a diagnostic's concatenated-source positions to the notebook cell:
 /// sets the 0-based `cell` index and makes `location`/`end_location`
