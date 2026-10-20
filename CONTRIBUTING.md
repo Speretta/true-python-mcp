@@ -151,7 +151,10 @@ exactly this reason.
    (`TPMCP_REQUIRE_GROUND_TRUTH=1`); `tests/analysis.rs` was captured
    against the real CLI, so install the matching one
    (`uv tool install ruff==0.X.Y`) whenever you need to compare behavior
-   by hand.
+   by hand. For `ty`, install the matching binary (`uv tool install
+   ty==0.0.18`) to re-verify by hand; the ty oracle is pinned to the
+   crate-matching 0.0.18, never latest (the PyPI `ty` decoupled from the
+   `ty_*` crates).
 4. Record the release binary size delta in the commit message; the fat-LTO
    x86_64 baseline is 17,711,816 bytes (measured 2026-10-18).
 
@@ -162,7 +165,7 @@ packages. They need a venv:
 
 ```sh
 uv venv /tmp/opencode/nbenv
-uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo
+uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo ty==0.0.18
 ```
 
 - Missing venv: those tests print a note and skip.
@@ -170,6 +173,10 @@ uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo
   CI sets this and installs its own venv, so the live checks always run there.
 - `TPMCP_GROUND_TRUTH_PYTHON=/path/to/python`: use a different interpreter
   (CI uses `/tmp/nbenv/bin/python`).
+- `TPMCP_GROUND_TRUTH_TY=/path/to/ty`: use a different `ty` binary (CI uses
+  `/tmp/nbenv/bin/ty`); the live `check_matches_ty_ground_truth` skips when
+  absent and fails under `TPMCP_REQUIRE_GROUND_TRUTH=1`, like the python
+  oracle.
 - `TPMCP_LOCK_DIR=/absolute/path`: keep the cross-process lock files here
   instead of the user cache dir. CI sets this so runs are hermetic; setting
   it locally stops repeated suites from accumulating lock files in
@@ -178,6 +185,8 @@ uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo
 ## Test data
 
 - `tests/data/*.ipynb` — hand-made Jupyter fixtures.
+- `tests/data/ty/` — hand-written, stdlib-only fixtures for the `ty` oracle
+  (codes+positions captured from `ty 0.0.18`, `--python-version 3.11`).
 - `tests/data/marimo/tutorials/` — files copied verbatim from the marimo
   project (Apache-2.0, see the `NOTICE` there). Do not edit them; add new
   files instead.

@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TPMCP_GROUND_TRUTH_PYTHON: /tmp/nbenv/bin/python
+      TPMCP_GROUND_TRUTH_TY: /tmp/nbenv/bin/ty
       TPMCP_REQUIRE_GROUND_TRUTH: "1"
       TPMCP_LOCK_DIR: /tmp/tpmcp-ci-locks
     steps:
@@ -39,10 +40,10 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Install the ground-truth venv (nbformat + marimo)
+      - name: Install the ground-truth venv (nbformat + marimo + ty)
         run: |
           uv venv --python 3.12 /tmp/nbenv
-          uv pip install --python /tmp/nbenv/bin/python nbformat marimo
+          uv pip install --python /tmp/nbenv/bin/python nbformat marimo ty==0.0.18
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
       - name: Seed the property suite deterministically for the day
@@ -71,11 +72,12 @@ jobs:
         shell: bash
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/nbenv"
-          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat marimo
+          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat marimo ty==0.0.18
       - name: Point the ground-truth env at the venv and a job-local lock dir
         shell: bash
         run: |
           echo "TPMCP_GROUND_TRUTH_PYTHON=$RUNNER_TEMP/nbenv/Scripts/python.exe" >> "$GITHUB_ENV"
+          echo "TPMCP_GROUND_TRUTH_TY=$RUNNER_TEMP/nbenv/Scripts/ty.exe" >> "$GITHUB_ENV"
           echo "TPMCP_LOCK_DIR=$RUNNER_TEMP/tpmcp-locks" >> "$GITHUB_ENV"
       - name: Install cargo-nextest
         shell: bash

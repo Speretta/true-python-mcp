@@ -14,6 +14,7 @@ concurrency:
 
 env:
   TPMCP_GROUND_TRUTH_PYTHON: /tmp/nbenv/bin/python
+  TPMCP_GROUND_TRUTH_TY: /tmp/nbenv/bin/ty
   TPMCP_REQUIRE_GROUND_TRUTH: "1"
   TPMCP_LOCK_DIR: /tmp/tpmcp-ci-locks
 
@@ -37,10 +38,12 @@ jobs:
       # release that changes behavior turns CI red the same day — the
       # intended early warning, not noise. The ground-truth python stays
       # pinned at 3.12 so the runner image migration cannot float it.
-      - name: Install the ground-truth venv (nbformat + marimo)
+      # The ty oracle is pinned to the crate-matching binary, not latest: the
+      # PyPI ty decoupled from the ty_* crates and raced past 0.0.18.
+      - name: Install the ground-truth venv (nbformat + marimo + ty)
         run: |
           uv venv --python 3.12 /tmp/nbenv
-          uv pip install --python /tmp/nbenv/bin/python nbformat marimo
+          uv pip install --python /tmp/nbenv/bin/python nbformat marimo ty==0.0.18
       # Official nextest binary via curl; no third-party GitHub Actions
       # beyond checkout and cache (house rule).
       - name: Install cargo-nextest
@@ -96,11 +99,12 @@ jobs:
         shell: bash
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/nbenv"
-          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat marimo
+          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat marimo ty==0.0.18
       - name: Point the ground-truth env at the venv and a job-local lock dir
         shell: bash
         run: |
           echo "TPMCP_GROUND_TRUTH_PYTHON=$RUNNER_TEMP/nbenv/Scripts/python.exe" >> "$GITHUB_ENV"
+          echo "TPMCP_GROUND_TRUTH_TY=$RUNNER_TEMP/nbenv/Scripts/ty.exe" >> "$GITHUB_ENV"
           echo "TPMCP_LOCK_DIR=$RUNNER_TEMP/tpmcp-locks" >> "$GITHUB_ENV"
       - name: Install cargo-nextest
         shell: bash
