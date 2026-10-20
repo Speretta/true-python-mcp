@@ -79,5 +79,11 @@ pub fn run_python(py: &str, script: &str, args: &[&str]) -> String {
         "python check failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).expect("utf-8 output")
+    // Python stdout is text mode: on Windows it translates \n to \r\n. tpmcp
+    // always emits LF, so normalize once here rather than at every comparison
+    // site (byte-exactness asserts against this output otherwise fail on
+    // Windows).
+    String::from_utf8(output.stdout)
+        .expect("utf-8 output")
+        .replace("\r\n", "\n")
 }
