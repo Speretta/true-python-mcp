@@ -13,9 +13,13 @@ use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::{Diagnostic as TyDiagnostic, Severity, UnifiedFile};
 use ruff_db::files::{File, Files, system_path_to_file};
 use ruff_db::source::source_text;
-use ruff_db::system::{OsSystem, System, SystemPath, SystemPathBuf};
+use ruff_db::system::walk_directory::WalkDirectoryBuilder;
+use ruff_db::system::{
+    DirectoryEntry, Metadata, OsSystem, System, SystemPath, SystemPathBuf, SystemVirtualPath,
+    SystemVirtualPathBuf, WhichResult, WritableSystem,
+};
 use ruff_db::vendored::VendoredFileSystem;
-use ruff_notebook::{Notebook as RuffNotebook, NotebookIndex};
+use ruff_notebook::{Notebook, NotebookError, NotebookIndex};
 use ruff_python_ast::PythonVersion;
 use ruff_source_file::{LineColumn, LineIndex, OneIndexed};
 use ty_module_resolver::{Db as ModuleResolverDb, FallibleStrategy, SearchPathSettings};
@@ -31,7 +35,119 @@ use ty_python_semantic::{
 };
 
 use crate::error::Error;
+use crate::fs;
 use crate::ruff::{Diagnostic, LineCol};
+
+/// The virtual path of a notebook's concatenated cell source. A plain `.py`
+/// name keeps the source type `Python` (a `.ipynb` virtual path would be
+/// re-read as a notebook), and it need not live under a search root: absolute
+/// imports already resolve against the notebook's parent directory, which is
+/// the search root.
+const NOTEBOOK_VIRTUAL_PATH: &str = "__tpmcp_ty_notebook__.py";
+
+/// One in-memory `.py` source the database serves through its [`System`],
+/// standing in for the temp file the old notebook path wrote to disk.
+#[derive(Debug, Clone)]
+struct VirtualSource {
+    path: SystemVirtualPathBuf,
+    content: Arc<str>,
+}
+
+/// [`OsSystem`] plus a single in-memory virtual file, so a notebook's
+/// concatenated cell source is type-checked without materializing a temp `.py`
+/// next to it (a read-only tool must not write into the caller's tree).
+#[derive(Debug, Clone)]
+struct TySystem {
+    inner: OsSystem,
+    virtual_source: Option<Arc<VirtualSource>>,
+}
+
+impl System for TySystem {
+    fn path_metadata(&self, path: &SystemPath) -> std::io::Result<Metadata> {
+        self.inner.path_metadata(path)
+    }
+
+    fn canonicalize_path(&self, path: &SystemPath) -> std::io::Result<SystemPathBuf> {
+        self.inner.canonicalize_path(path)
+    }
+
+    fn is_same_file(&self, first: &SystemPath, second: &SystemPath) -> std::io::Result<bool> {
+        self.inner.is_same_file(first, second)
+    }
+
+    fn which(&self, binary_name: &str) -> WhichResult {
+        self.inner.which(binary_name)
+    }
+
+    fn read_to_string(&self, path: &SystemPath) -> std::io::Result<String> {
+        self.inner.read_to_string(path)
+    }
+
+    fn read_to_notebook(&self, path: &SystemPath) -> std::result::Result<Notebook, NotebookError> {
+        self.inner.read_to_notebook(path)
+    }
+
+    fn read_virtual_path_to_string(&self, path: &SystemVirtualPath) -> std::io::Result<String> {
+        match &self.virtual_source {
+            Some(source) if source.path.as_path() == path => Ok(source.content.to_string()),
+            _ => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        }
+    }
+
+    fn read_virtual_path_to_notebook(
+        &self,
+        _path: &SystemVirtualPath,
+    ) -> std::result::Result<Notebook, NotebookError> {
+        Err(NotebookError::from(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )))
+    }
+
+    fn current_directory(&self) -> &SystemPath {
+        self.inner.current_directory()
+    }
+
+    fn user_config_directory(&self) -> Option<SystemPathBuf> {
+        self.inner.user_config_directory()
+    }
+
+    fn cache_dir(&self) -> Option<SystemPathBuf> {
+        self.inner.cache_dir()
+    }
+
+    fn read_directory(
+        &self,
+        path: &SystemPath,
+    ) -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<DirectoryEntry>> + '_>> {
+        self.inner.read_directory(path)
+    }
+
+    fn walk_directory(&self, path: &SystemPath) -> WalkDirectoryBuilder {
+        self.inner.walk_directory(path)
+    }
+
+    // Delegated, not defaulted, because site-packages discovery reads env vars
+    // (VIRTUAL_ENV, CONDA_*); a silent NotPresent here would disable discovery.
+    fn env_var(&self, name: &str) -> std::result::Result<String, std::env::VarError> {
+        self.inner.env_var(name)
+    }
+
+    fn as_writable(&self) -> Option<&dyn WritableSystem> {
+        self.inner.as_writable()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn dyn_clone(&self) -> Box<dyn System> {
+        Box::new(self.clone())
+    }
+}
 
 /// Hand-assembled salsa database (stands in for the unpublished ty_project Db).
 #[salsa::db]
@@ -39,7 +155,7 @@ use crate::ruff::{Diagnostic, LineCol};
 pub struct TyDb {
     storage: salsa::Storage<Self>,
     files: Files,
-    system: OsSystem,
+    system: TySystem,
     vendored: VendoredFileSystem,
     program_settings: Arc<ProgramSettings>,
     rule_selection: Arc<RuleSelection>,
@@ -71,9 +187,12 @@ impl TyDb {
     /// vendored typeshed stdlib, and the site-packages of the python
     /// environment discovered next to it (so third-party types like `numpy`
     /// resolve instead of reporting `unresolved-import`).
-    pub fn new(src_root: &SystemPath) -> Result<Self, Error> {
+    fn new(src_root: &SystemPath, virtual_source: Option<VirtualSource>) -> Result<Self, Error> {
         let vendored = ty_vendored::file_system().clone();
-        let system = OsSystem::new(src_root.to_path_buf());
+        let system = TySystem {
+            inner: OsSystem::new(src_root.to_path_buf()),
+            virtual_source: virtual_source.map(Arc::new),
+        };
         let mut search_path_settings = SearchPathSettings::new(vec![src_root.to_path_buf()]);
         if let Some(environment) =
             ty_site_packages::PythonEnvironment::discover(Some(src_root), &system).map_err(
@@ -202,29 +321,42 @@ pub fn to_system_path(path: &Path) -> Option<SystemPathBuf> {
     SystemPath::from_std_path(&absolute).map(SystemPath::to_path_buf)
 }
 
-/// Type-checks `path` (`.py`/`.pyi`/`.ipynb`) by building a database rooted at
-/// its parent directory. Notebooks are checked cell-by-cell with cell-relative
-/// positions; plain files are checked directly.
+/// Type-checks `path` (`.py`/`.pyi`/`.ipynb`) by reading it once through
+/// [`crate::fs`] and handing those bytes to [`check_snapshot`]. Callers that
+/// have already read the file should call [`check_snapshot`] directly so the
+/// bytes are not read twice.
 pub fn check_path(path: &Path) -> Result<Vec<Diagnostic>, Error> {
+    let snapshot = fs::read(path)?;
+    check_snapshot(path, &snapshot)
+}
+
+/// Type-checks the already-read `snapshot` of `path` and returns the
+/// diagnostics in tpmcp's stable shape. Notebooks are checked cell-by-cell with
+/// cell-relative positions; plain files are checked directly.
+pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic>, Error> {
     if path.extension().is_some_and(|ext| ext == "ipynb") {
-        return check_notebook(path);
+        return check_notebook(path, snapshot);
     }
     let src_root = path.parent().unwrap_or_else(|| Path::new("."));
     let src_root_sys = to_system_path(src_root).ok_or_else(|| {
         Error::invalid_input(format!("path is not representable: {}", src_root.display()))
     })?;
-    let db = TyDb::new(src_root_sys.as_path())?;
-    check(&db, path)
+    let db = TyDb::new(src_root_sys.as_path(), None)?;
+    let system_path = to_system_path(path).ok_or_else(|| {
+        Error::invalid_input(format!("path is not representable: {}", path.display()))
+    })?;
+    let file = system_path_to_file(&db, &system_path)
+        .map_err(|error| Error::analysis(format!("cannot read {system_path}: {error}")))?;
+    check(&db, file)
 }
 
-/// Type-checks a `.ipynb` notebook: parse it into ruff's `Notebook` (which
-/// yields the concatenated cell source and its offset index), materialize that
-/// source next to the notebook so ty's `OsSystem` can read it and its own
-/// package imports resolve, then map every concatenated-source position back
-/// to a `cell` index and a cell-relative row.
-fn check_notebook(path: &Path) -> Result<Vec<Diagnostic>, Error> {
-    let content = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    let notebook = RuffNotebook::from_source_code(&content)
+/// Type-checks a `.ipynb` notebook from the caller's snapshot: parse it into
+/// ruff's `Notebook` (concatenated cell source + offset index), serve that
+/// source to ty as one virtual `.py` file, then map every concatenated-source
+/// position back to a `cell` index and a cell-relative row. No temp file, no
+/// write into the caller's tree, no second read.
+fn check_notebook(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic>, Error> {
+    let notebook = Notebook::from_source_code(&snapshot.content)
         .map_err(|error| Error::parse(path, format!("{error}")))?;
     let source = notebook.source_code().to_string();
     let index = notebook.index().clone();
@@ -233,19 +365,22 @@ fn check_notebook(path: &Path) -> Result<Vec<Diagnostic>, Error> {
     let src_root_sys = to_system_path(src_root).ok_or_else(|| {
         Error::invalid_input(format!("path is not representable: {}", src_root.display()))
     })?;
-    let temp = src_root.join(format!(".tpmcp_ty_check_{}.py", std::process::id()));
-    std::fs::write(&temp, &source).map_err(|error| Error::io(&temp, error))?;
-    let result = (|| {
-        let db = TyDb::new(src_root_sys.as_path())?;
-        check(&db, &temp).map(|diagnostics| {
-            diagnostics
-                .into_iter()
-                .map(|diagnostic| map_to_cell(diagnostic, &index))
-                .collect()
-        })
-    })();
-    let _ = std::fs::remove_file(&temp);
-    result
+
+    let virtual_path = SystemVirtualPathBuf::from(NOTEBOOK_VIRTUAL_PATH.to_string());
+    let db = TyDb::new(
+        src_root_sys.as_path(),
+        Some(VirtualSource {
+            path: virtual_path.clone(),
+            content: Arc::from(source),
+        }),
+    )?;
+    let file = db.files().virtual_file(&db, virtual_path.as_path()).file();
+    check(&db, file).map(|diagnostics| {
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| map_to_cell(diagnostic, &index))
+            .collect()
+    })
 }
 
 /// Rewrites a diagnostic's concatenated-source positions to the notebook cell:
@@ -275,21 +410,14 @@ fn translate(index: &NotebookIndex, location: LineCol) -> LineCol {
     }
 }
 
-/// Type-checks one on-disk file against an already-built database and returns
+/// Type-checks one interned file against an already-built database and returns
 /// the diagnostics in tpmcp's stable shape.
-pub fn check(db: &TyDb, path: &Path) -> Result<Vec<Diagnostic>, Error> {
-    let Some(system_path) = to_system_path(path) else {
-        return Err(Error::invalid_input(format!(
-            "path is not representable: {}",
-            path.display()
-        )));
-    };
-    let file = system_path_to_file(db, &system_path)
-        .map_err(|error| Error::analysis(format!("cannot read {system_path}: {error}")))?;
+pub fn check(db: &TyDb, file: File) -> Result<Vec<Diagnostic>, Error> {
     // The type check recurses through the semantic index and inference on the
     // small worker stack; grow it like the ruff linter/format walks do.
     let source = source_text(db, file);
-    let diagnostics = crate::stack::guarded_walk(source.len(), || db.check_file(file));
+    let diagnostics =
+        crate::stack::guarded_walk(source.len(), || <TyDb as SemanticDb>::check_file(db, file));
     Ok(diagnostics
         .iter()
         .map(|diagnostic| map_diagnostic(db, diagnostic))

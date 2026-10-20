@@ -50,10 +50,11 @@ impl Tpmcp {
         Parameters(args): Parameters<TyCheckArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
-            // Read once for the revision; the checker reads the same bytes
-            // through its own system view (a microsecond-stale boundary).
+            // Single read (CPU-F2): one snapshot supplies both the reported
+            // revision and the bytes the checker parses, so a notebook's
+            // diagnostics are computed from exactly these bytes.
             let snapshot = fs::read(&args.path)?;
-            let diagnostics = ty::check_path(&args.path)?;
+            let diagnostics = ty::check_snapshot(&args.path, &snapshot)?;
             Ok(respond(
                 args.format,
                 || ty_markdown(&args.path, &snapshot.revision, &diagnostics),
