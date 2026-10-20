@@ -231,3 +231,130 @@ fn check_matches_ty_ground_truth() {
         assert_eq!(our_codes, expected, "{file}: frozen counts drifted");
     }
 }
+
+// ---- hardening + containment pins (mirror tests/analysis.rs) ----
+
+/// A deeply nested but valid `.py` must not take the server down: ty's
+/// semantic-index builder (ty_python_core) recurses unguarded — unlike ruff's
+/// parser, which grows its own stack via stacker — so a ~9k-term expression
+/// aborts the whole process (SIGSEGV, not a catchable panic) during inference.
+/// The check runs under crate::stack::guarded_walk; this pins that guard with
+/// the same subprocess shape as the ruff and marimo deep-nesting tests: the
+/// child does the dangerous work in-process on an ordinary libtest thread (the
+/// same shape as a tokio worker), the parent only asserts the child survived.
+///
+/// The default is 12k terms, not ruff's 100k: ty's frames are far fatter than
+/// the linter visitor's, and the guarded_walk only contains the semantic-index
+/// and inference recursion. The parsed AST's recursive Drop glue then runs
+/// unguarded when the salsa db goes out of scope (the F5-class hazard
+/// src/stack.rs documents) and still overflows at ~17k terms in debug — the
+/// drop guard the marimo (0fe18f2) and ruff (ea9188e) paths already carry, but
+/// ty's db lacks. 12k sits above the ~9k abort the guard fixes and below that
+/// unguarded-drop ceiling; guarding the drop would let this test run at 100k
+/// like ruff's.
+#[test]
+fn deeply_nested_python_does_not_crash_ty() {
+    const CHILD_ENV: &str = "TPMCP_TEST_DEEP_TY";
+    const TERMS_ENV: &str = "TPMCP_TEST_DEEP_TERMS";
+    if std::env::var(CHILD_ENV).is_ok() {
+        let terms: usize = std::env::var(TERMS_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(12_000)
+            .max(2);
+        let dir = temp_dir("deep-ty");
+        let path = dir.join("deep.py");
+        let body = format!("x = {}1\n", "1+".repeat(terms - 1));
+        std::fs::write(&path, &body).unwrap();
+        eprintln!("stage: checking ({terms} terms)");
+        let diagnostics = ty::check_path(&path).unwrap();
+        eprintln!("stage: checked, {} diagnostics", diagnostics.len());
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("deep-ty child survived {terms} terms");
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("deeply_nested_python_does_not_crash_ty")
+        .arg("--nocapture")
+        .env(CHILD_ENV, "1")
+        .output()
+        .unwrap_or_else(|error| panic!("spawn deep-ty child: {error}"));
+    assert!(
+        output.status.success(),
+        "deep nesting killed the ty child (exit {:?}); stderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// ty_check is read-only: checking never mutates the file — byte-exact no-op
+/// for .py, .pyi and .ipynb — and the notebook path materializes no temp file
+/// (the in-memory virtual source never touches the caller's tree).
+#[test]
+fn ty_check_is_byte_exact_noop() {
+    let notebook = serde_json::to_string(&json!({
+        "cells": [{"cell_type": "code", "execution_count": null, "id": "a",
+                   "metadata": {}, "outputs": [], "source": ["y: int = \"oops\"\n"]}],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5
+    }))
+    .unwrap();
+    let cases: [(&str, &str); 3] = [
+        ("plain.py", "x: int = 1\n"),
+        ("stub.pyi", "def f() -> int: ...\n"),
+        ("nb.ipynb", &notebook),
+    ];
+    for (name, content) in cases {
+        let dir = temp_dir("ty-noop");
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let _ = ty::check_path(&path);
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(before, after, "{name} changed by a read-only check");
+        let leaked: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".tpmcp_ty_check_"))
+            .collect();
+        assert!(leaked.is_empty(), "notebook temp file leaked: {leaked:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Empty and invalid-syntax inputs resolve cleanly: an empty file reports no
+/// diagnostics and a syntax error reports diagnostics (not an Err, not a
+/// crash).
+#[test]
+fn empty_and_invalid_syntax_are_clean() {
+    let dir = temp_dir("ty-edge");
+    let empty = dir.join("empty.py");
+    std::fs::write(&empty, "").unwrap();
+    assert_eq!(ty::check_path(&empty).unwrap().len(), 0);
+    let bad = dir.join("bad.py");
+    std::fs::write(&bad, "def f(:\n").unwrap();
+    // invalid-syntax diagnostics, not a crash and not an Err.
+    assert!(!ty::check_path(&bad).unwrap().is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A non-Python path is a caller error, not a green "no issues found" —
+/// matching ruff's message/shape so the two checkers never disagree.
+#[test]
+fn non_python_path_is_invalid_input() {
+    let dir = temp_dir("ty-nonpy");
+    let path = dir.join("notes.md");
+    std::fs::write(&path, "# not python\n").unwrap();
+    let error = ty::check_path(&path).unwrap_err();
+    assert_eq!(error.kind(), "invalid_input");
+    assert!(
+        error.to_string().contains("not a Python file or notebook"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// A cache-invalidation tripwire (re-check after an external edit reports fresh
+// diagnostics) is intentionally absent: ty builds a fresh Db per call, so it
+// would be a no-op today. It belongs with the Db cache when that lands.
