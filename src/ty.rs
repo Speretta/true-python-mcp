@@ -15,8 +15,9 @@ use ruff_db::files::{File, Files, system_path_to_file};
 use ruff_db::source::source_text;
 use ruff_db::system::{OsSystem, System, SystemPath, SystemPathBuf};
 use ruff_db::vendored::VendoredFileSystem;
+use ruff_notebook::{Notebook as RuffNotebook, NotebookIndex};
 use ruff_python_ast::PythonVersion;
-use ruff_source_file::LineIndex;
+use ruff_source_file::{LineColumn, LineIndex, OneIndexed};
 use ty_module_resolver::{Db as ModuleResolverDb, FallibleStrategy, SearchPathSettings};
 use ty_python_core::Db as PythonCoreDb;
 use ty_python_core::ProgramFile;
@@ -201,16 +202,77 @@ pub fn to_system_path(path: &Path) -> Option<SystemPathBuf> {
     SystemPath::from_std_path(&absolute).map(SystemPath::to_path_buf)
 }
 
-/// Type-checks `path` by building a database rooted at its parent directory
-/// (the import root for the file's own package). Returns the diagnostics in
-/// tpmcp's stable shape.
+/// Type-checks `path` (`.py`/`.pyi`/`.ipynb`) by building a database rooted at
+/// its parent directory. Notebooks are checked cell-by-cell with cell-relative
+/// positions; plain files are checked directly.
 pub fn check_path(path: &Path) -> Result<Vec<Diagnostic>, Error> {
+    if path.extension().is_some_and(|ext| ext == "ipynb") {
+        return check_notebook(path);
+    }
     let src_root = path.parent().unwrap_or_else(|| Path::new("."));
     let src_root_sys = to_system_path(src_root).ok_or_else(|| {
         Error::invalid_input(format!("path is not representable: {}", src_root.display()))
     })?;
     let db = TyDb::new(src_root_sys.as_path())?;
     check(&db, path)
+}
+
+/// Type-checks a `.ipynb` notebook: parse it into ruff's `Notebook` (which
+/// yields the concatenated cell source and its offset index), materialize that
+/// source next to the notebook so ty's `OsSystem` can read it and its own
+/// package imports resolve, then map every concatenated-source position back
+/// to a `cell` index and a cell-relative row.
+fn check_notebook(path: &Path) -> Result<Vec<Diagnostic>, Error> {
+    let content = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+    let notebook = RuffNotebook::from_source_code(&content)
+        .map_err(|error| Error::parse(path, format!("{error}")))?;
+    let source = notebook.source_code().to_string();
+    let index = notebook.index().clone();
+
+    let src_root = path.parent().unwrap_or_else(|| Path::new("."));
+    let src_root_sys = to_system_path(src_root).ok_or_else(|| {
+        Error::invalid_input(format!("path is not representable: {}", src_root.display()))
+    })?;
+    let temp = src_root.join(format!(".tpmcp_ty_check_{}.py", std::process::id()));
+    std::fs::write(&temp, &source).map_err(|error| Error::io(&temp, error))?;
+    let result = (|| {
+        let db = TyDb::new(src_root_sys.as_path())?;
+        check(&db, &temp).map(|diagnostics| {
+            diagnostics
+                .into_iter()
+                .map(|diagnostic| map_to_cell(diagnostic, &index))
+                .collect()
+        })
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+/// Rewrites a diagnostic's concatenated-source positions to the notebook cell:
+/// sets the 0-based `cell` index and makes `location`/`end_location`
+/// cell-relative.
+fn map_to_cell(mut diagnostic: Diagnostic, index: &NotebookIndex) -> Diagnostic {
+    if let Some(location) = diagnostic.location {
+        diagnostic.cell = index
+            .cell(OneIndexed::new(location.row).unwrap_or(OneIndexed::MIN))
+            .map(|cell| cell.get() - 1);
+        diagnostic.location = Some(translate(index, location));
+    }
+    if let Some(end_location) = diagnostic.end_location {
+        diagnostic.end_location = Some(translate(index, end_location));
+    }
+    diagnostic
+}
+
+fn translate(index: &NotebookIndex, location: LineCol) -> LineCol {
+    let translated = index.translate_line_column(&LineColumn {
+        line: OneIndexed::new(location.row).unwrap_or(OneIndexed::MIN),
+        column: OneIndexed::new(location.column).unwrap_or(OneIndexed::MIN),
+    });
+    LineCol {
+        row: translated.line.get(),
+        column: translated.column.get(),
+    }
 }
 
 /// Type-checks one on-disk file against an already-built database and returns
