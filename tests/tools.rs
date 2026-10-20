@@ -252,6 +252,56 @@ fn ruff_revision_chains_into_fix_and_format() {
     );
 }
 
+/// ruff_check fix=true and ruff_format on a notebook at the wire layer: a
+/// plain check reports the revision and both diagnostics, the fix chains onto
+/// that revision (F401 removed, F821 stays, 0-based cell retained), and a
+/// format dry run reports the notebook's revision without a text diff.
+#[test]
+fn ruff_notebook_fix_and_format_over_the_wire() {
+    let dir = temp_dir("ruff-nb");
+    let path = dir.join("lint_sample.ipynb");
+    std::fs::copy("tests/data/lint_sample.ipynb", &path).unwrap();
+    // Mirror the fixture's governing config (select=["F"]) so the temp copy
+    // lints identically to the in-tree notebook.
+    std::fs::copy("tests/data/ruff.toml", dir.join("ruff.toml")).unwrap();
+
+    let mut server = Server::start(&[]);
+
+    // Plain check: two diagnostics (F401 + F821) and a chaining revision.
+    let (err, _, sc) = server.call("ruff_check", json!({"path": path, "format": "json"}));
+    assert!(!err, "{sc}");
+    assert_eq!(sc["diagnostic_count"], 2);
+    let revision = sc["revision"].as_str().unwrap().to_string();
+
+    // fix=true applies the safe F401 fix; the F821 stays, still cell-mapped.
+    let (err, text, sc) = server.call(
+        "ruff_check",
+        json!({"path": path, "fix": true, "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["changed"], true);
+    assert_ne!(sc["revision"].as_str().unwrap(), revision);
+    assert_eq!(sc["diagnostic_count"], 1);
+    assert_eq!(sc["diagnostics"][0]["code"], "F821");
+    assert_eq!(sc["diagnostics"][0]["cell"], 2);
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(!fixed.contains("import os"), "F401 was fixed: {fixed}");
+
+    // ruff_format dry run on the notebook: revision present, no text diff.
+    let (err, _, sc) = server.call(
+        "ruff_format",
+        json!({"path": path, "check": true, "format": "json"}),
+    );
+    assert!(!err, "{sc}");
+    assert!(sc["revision"].is_string(), "{sc}");
+    let status = sc["status"].as_str().unwrap();
+    assert!(status == "unchanged" || status == "would_reformat", "{sc}");
+    assert!(
+        sc["diff"].is_null(),
+        "notebooks carry no plain-text diff: {sc}"
+    );
+}
+
 #[test]
 fn py_file_tools_over_the_wire() {
     let dir = temp_dir("pytools");
