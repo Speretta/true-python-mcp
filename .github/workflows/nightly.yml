@@ -41,7 +41,10 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add tests/property.proptest-regressions
-            git commit -m "test: persist new property regression seeds [skip ci]"
+            # No [skip ci]: the persisted seeds must be re-verified by CI on
+            # this very commit, so a real bug surfaces immediately instead of
+            # on the next unrelated push.
+            git commit -m "test: persist new property regression seeds"
             git pull --rebase
             git push
           fi
