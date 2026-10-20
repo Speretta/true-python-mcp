@@ -113,7 +113,7 @@ pub struct NotebookCreateArgs {
 #[tool_router(router = notebook_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
-        title = "Read notebook",
+        title = "Read Notebook",
         description = "Read a notebook (Jupyter .ipynb or marimo .py) as indexed, token-efficient \
                        markdown or JSON, with optional outline, content search and diagnostics \
                        (see the detail, query and diagnostics parameters). Returns the file \
@@ -153,7 +153,7 @@ impl Tpmcp {
     }
 
     #[tool(
-        title = "Create or convert notebook",
+        title = "Create or Convert Notebook",
         description = "Create a new notebook file, or convert an existing one via from_path \
                        (.ipynb to marimo .py, or either to markdown). The extension picks the \
                        format (.ipynb Jupyter nbformat 4.5, .py marimo, .md markdown export); \
