@@ -65,6 +65,8 @@ impl Tpmcp {
     }
 }
 
+// ---- rendering ----
+
 fn ty_markdown(path: &Path, revision: &str, diagnostics: &[Diagnostic]) -> String {
     let mut out = String::new();
     out.push_str(&format!("ty check: {}\n", path.display()));

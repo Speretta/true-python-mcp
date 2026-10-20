@@ -1,4 +1,4 @@
-//! The `ty` integration: Astral's type checker compiled in (no interpreter,
+//! The ty integration: Astral's type checker compiled in (no interpreter,
 //! no subprocess), exposed as a read-only whole-file verdict. The salsa `Db`
 //! is hand-assembled here because the `ty_project` crate that would bundle it
 //! is unpublished; this mirrors `ty_python_semantic`'s own `TestDb` pattern
@@ -315,8 +315,9 @@ impl SemanticDb for TyDb {
 #[salsa::db]
 impl salsa::Database for TyDb {}
 
-/// Converts a std path into ty's `SystemPathBuf`.
-pub fn to_system_path(path: &Path) -> Option<SystemPathBuf> {
+/// std `Path` and ty's `SystemPath` are two address spaces; this is the single
+/// conversion between them, failing when the path is not representable.
+fn to_system_path(path: &Path) -> Option<SystemPathBuf> {
     let absolute = std::path::absolute(path).ok()?;
     SystemPath::from_std_path(&absolute).map(SystemPath::to_path_buf)
 }
@@ -347,7 +348,7 @@ pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagno
     })?;
     let file = system_path_to_file(&db, &system_path)
         .map_err(|error| Error::analysis(format!("cannot read {system_path}: {error}")))?;
-    check(&db, file)
+    check_file(&db, file)
 }
 
 /// Type-checks a `.ipynb` notebook from the caller's snapshot: parse it into
@@ -375,13 +376,15 @@ fn check_notebook(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic
         }),
     )?;
     let file = db.files().virtual_file(&db, virtual_path.as_path()).file();
-    check(&db, file).map(|diagnostics| {
+    check_file(&db, file).map(|diagnostics| {
         diagnostics
             .into_iter()
             .map(|diagnostic| map_to_cell(diagnostic, &index))
             .collect()
     })
 }
+
+// ---- diagnostic mapping ----
 
 /// Rewrites a diagnostic's concatenated-source positions to the notebook cell:
 /// sets the 0-based `cell` index and makes `location`/`end_location`
@@ -391,15 +394,15 @@ fn map_to_cell(mut diagnostic: Diagnostic, index: &NotebookIndex) -> Diagnostic 
         diagnostic.cell = index
             .cell(OneIndexed::new(location.row).unwrap_or(OneIndexed::MIN))
             .map(|cell| cell.get() - 1);
-        diagnostic.location = Some(translate(index, location));
+        diagnostic.location = Some(translate_line_column(index, location));
     }
     if let Some(end_location) = diagnostic.end_location {
-        diagnostic.end_location = Some(translate(index, end_location));
+        diagnostic.end_location = Some(translate_line_column(index, end_location));
     }
     diagnostic
 }
 
-fn translate(index: &NotebookIndex, location: LineCol) -> LineCol {
+fn translate_line_column(index: &NotebookIndex, location: LineCol) -> LineCol {
     let translated = index.translate_line_column(&LineColumn {
         line: OneIndexed::new(location.row).unwrap_or(OneIndexed::MIN),
         column: OneIndexed::new(location.column).unwrap_or(OneIndexed::MIN),
@@ -412,7 +415,7 @@ fn translate(index: &NotebookIndex, location: LineCol) -> LineCol {
 
 /// Type-checks one interned file against an already-built database and returns
 /// the diagnostics in tpmcp's stable shape.
-pub fn check(db: &TyDb, file: File) -> Result<Vec<Diagnostic>, Error> {
+fn check_file(db: &TyDb, file: File) -> Result<Vec<Diagnostic>, Error> {
     // The type check recurses through the semantic index and inference on the
     // small worker stack; grow it like the ruff linter/format walks do.
     let source = source_text(db, file);
