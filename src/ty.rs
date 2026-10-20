@@ -342,6 +342,17 @@ pub fn check_path(path: &Path) -> Result<Vec<Diagnostic>, Error> {
 /// diagnostics in tpmcp's stable shape. Notebooks are checked cell-by-cell with
 /// cell-relative positions; plain files are checked directly.
 pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic>, Error> {
+    // The parsed AST's recursive Drop glue runs when the salsa database drops
+    // at the end of the check — unguarded, like ruff's walk was before its
+    // guard. Grow the stack for the WHOLE check (including that drop), not just
+    // the walk inside check_file; `check_file` grows a larger segment for the
+    // semantic-index/inference recursion.
+    crate::stack::guarded(snapshot.content.len(), || {
+        check_snapshot_inner(path, snapshot)
+    })
+}
+
+fn check_snapshot_inner(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic>, Error> {
     if !is_python_path(path) {
         return Err(not_python(path));
     }

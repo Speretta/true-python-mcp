@@ -243,15 +243,11 @@ fn check_matches_ty_ground_truth() {
 /// child does the dangerous work in-process on an ordinary libtest thread (the
 /// same shape as a tokio worker), the parent only asserts the child survived.
 ///
-/// The default is 12k terms, not ruff's 100k: ty's frames are far fatter than
-/// the linter visitor's, and the guarded_walk only contains the semantic-index
-/// and inference recursion. The parsed AST's recursive Drop glue then runs
-/// unguarded when the salsa db goes out of scope (the F5-class hazard
-/// src/stack.rs documents) and still overflows at ~17k terms in debug — the
-/// drop guard the marimo (0fe18f2) and ruff (ea9188e) paths already carry, but
-/// ty's db lacks. 12k sits above the ~9k abort the guard fixes and below that
-/// unguarded-drop ceiling; guarding the drop would let this test run at 100k
-/// like ruff's.
+/// The default is 100k terms, matching ruff's test: `check_snapshot` grows the
+/// stack for the whole check including the salsa db's recursive AST drop (the
+/// F5-class hazard src/stack.rs documents), and `check_file` grows a larger
+/// segment for the semantic-index/inference recursion — so a deeply nested yet
+/// valid expression survives instead of aborting.
 #[test]
 fn deeply_nested_python_does_not_crash_ty() {
     const CHILD_ENV: &str = "TPMCP_TEST_DEEP_TY";
@@ -260,7 +256,7 @@ fn deeply_nested_python_does_not_crash_ty() {
         let terms: usize = std::env::var(TERMS_ENV)
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(12_000)
+            .unwrap_or(100_000)
             .max(2);
         let dir = temp_dir("deep-ty");
         let path = dir.join("deep.py");
