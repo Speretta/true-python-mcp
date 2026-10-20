@@ -286,6 +286,96 @@ fn py_file_tools_over_the_wire() {
     assert!(err && text.contains("revision conflict"), "{text}");
 }
 
+/// The revision/range/replace_all branches the happy-path trio test does not
+/// touch: overwrite-with-revision (and its stale conflict), JSON + line-range
+/// reads, and py_edit replace_all + non-uniqueness.
+#[test]
+fn py_file_tools_revision_ranges_and_replace_all() {
+    let dir = temp_dir("pytools-branches");
+    let path = dir.join("a.py");
+    let mut server = Server::start(&["--file-tools"]);
+
+    // py_write create -> revision.
+    let (err, text, _) = server.call(
+        "py_write",
+        json!({"path": path, "content": "x = 1\ny = 2\nx = 1\n"}),
+    );
+    assert!(!err, "{text}");
+    let rev = revision_of(&text);
+
+    // py_read JSON: the full-file shape (revision, line_count, range, content).
+    let (err, text, sc) = server.call("py_read", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    assert_eq!(sc["revision"].as_str().unwrap(), rev);
+    assert_eq!(sc["line_count"], 3);
+    assert_eq!(sc["range"], json!([1, 3]));
+    assert_eq!(sc["content"], "x = 1\ny = 2\nx = 1");
+
+    // py_read markdown line range renders only the selected line.
+    let (err, text, _) = server.call(
+        "py_read",
+        json!({"path": path, "line_start": 2, "line_end": 2}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("    2 | y = 2"), "{text}");
+    assert!(!text.contains("1 | x = 1"), "{text}");
+    assert!(!text.contains("3 | x = 1"), "{text}");
+
+    // py_read JSON line range reflects the slice.
+    let (err, _, sc) = server.call(
+        "py_read",
+        json!({"path": path, "line_start": 1, "line_end": 2, "format": "json"}),
+    );
+    assert!(!err, "{sc}");
+    assert_eq!(sc["range"], json!([1, 2]));
+    assert_eq!(sc["content"], "x = 1\ny = 2");
+
+    // py_write overwrite: a revision is required and returns a fresh one.
+    let (err, text, _) = server.call(
+        "py_write",
+        json!({"path": path, "content": "a = 1\n", "revision": rev}),
+    );
+    assert!(!err, "{text}");
+    let rev2 = revision_of(&text);
+    assert_ne!(rev, rev2);
+
+    // py_write overwrite with a stale revision is a conflict.
+    let (err, text, sc) = server.call(
+        "py_write",
+        json!({"path": path, "content": "clobber\n", "revision": rev}),
+    );
+    assert!(err, "stale revision must be rejected");
+    assert!(text.contains("revision conflict"), "{text}");
+    assert_eq!(sc["error"], "conflict");
+
+    // py_edit replace_all rewrites every occurrence.
+    let (err, text, _) = server.call(
+        "py_write",
+        json!({"path": path, "content": "x = 1\nx = 1\nx = 1\n", "revision": rev2}),
+    );
+    assert!(!err, "{text}");
+    let rev3 = revision_of(&text);
+    let (err, text, _) = server.call(
+        "py_edit",
+        json!({"path": path, "old_string": "x = 1", "new_string": "x = 2",
+               "replace_all": true, "revision": rev3}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "x = 2\nx = 2\nx = 2\n"
+    );
+
+    // py_edit without replace_all on a non-unique match is a caller error.
+    let rev4 = revision_of(&text);
+    let (err, text, _) = server.call(
+        "py_edit",
+        json!({"path": path, "old_string": "x = 2", "new_string": "x = 3", "revision": rev4}),
+    );
+    assert!(err, "non-unique match must be rejected");
+    assert!(text.contains("occurs 3 times in file"), "{text}");
+}
+
 /// marimo notebooks work through the same tools: create by extension, read,
 /// and surgically edit with byte-exact preservation of the rest.
 #[test]
