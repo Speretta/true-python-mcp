@@ -1,40 +1,61 @@
 #!/usr/bin/env bash
 # Pre-push gate: block when a direct dependency is outdated or a new
 # (unreviewed) advisory exists. Bypass deliberately with `git push
-# --no-verify`. Both checkers must be installed (`cargo install
-# cargo-outdated cargo-audit`); a missing checker blocks too, so the gate
-# cannot be skipped silently.
+# --no-verify`. A missing checker blocks, and a checker that errors blocks
+# too (fail-closed), so the gate cannot be skipped silently.
 #
-# The ruff_/ty_ crates ride the manual weekly lockstep (CONTRIBUTING,
-# "Upgrading the ruff train"), so their names are ignored here — their
-# freshness is the runbook's job, not "outdated".
+# The ruff_/ty_ crates ride the manual lockstep (CONTRIBUTING, "Upgrading
+# the ruff train"), so their names are ignored here — their freshness is
+# that runbook's job, not "outdated".
+#
+# Parsing uses only bash builtins (a while loop and a case pattern) — no
+# awk/grep subprocesses — so it is fast and no locale can change what it
+# accepts (commit-msg/release.sh use the same idiom).
+set -euo pipefail
+export LC_ALL=C
 
 fail=0
 
-if command -v cargo-outdated >/dev/null 2>&1; then
-    echo "pre-push: checking for outdated direct dependencies..."
-    table=$(cargo outdated --root-deps-only 2>/dev/null || true)
-    outdated=$(printf '%s\n' "$table" | awk 'NR > 2 {print $1}' | grep -vE '^(ruff_|ty_)' || true)
-    if [ -n "$outdated" ]; then
-        echo "Outdated direct dependencies (the manual ruff/ty train is ignored):" >&2
-        printf '%s\n' "$table" | awk 'NR > 2' | grep -vE '^(ruff_|ty_)' >&2
-        echo "Resolve them, or bypass deliberately with: git push --no-verify" >&2
-        fail=1
-    fi
-else
+if ! command -v cargo-outdated >/dev/null 2>&1; then
     echo "pre-push: cargo-outdated is not installed; install it with: cargo install cargo-outdated" >&2
     fail=1
+else
+    echo "pre-push: checking for outdated direct dependencies..."
+    if ! outdated_table=$(cargo outdated --root-deps-only 2>&1); then
+        printf '%s\n' "$outdated_table" >&2
+        echo "pre-push: cargo outdated errored (above); fix it rather than skip it" >&2
+        fail=1
+    else
+        # Rows after the two header lines whose name column is not a ruff_/ty_
+        # lockstep crate are the outdated direct dependencies.
+        outdated_rows=
+        line_number=0
+        while IFS= read -r line; do
+            line_number=$((line_number + 1))
+            [ "$line_number" -gt 2 ] || continue
+            read -r crate_name _ <<<"$line"
+            case "$crate_name" in
+                ruff_* | ty_* | '') continue ;;
+            esac
+            outdated_rows="${outdated_rows:+$outdated_rows$'\n'}$line"
+        done <<<"$outdated_table"
+        if [ -n "$outdated_rows" ]; then
+            printf 'Outdated direct dependencies (the manual ruff/ty train is ignored):\n%s\n' "$outdated_rows" >&2
+            echo "Resolve them, or bypass deliberately with: git push --no-verify" >&2
+            fail=1
+        fi
+    fi
 fi
 
-if command -v cargo-audit >/dev/null 2>&1; then
+if ! command -v cargo-audit >/dev/null 2>&1; then
+    echo "pre-push: cargo-audit is not installed; install it with: cargo install cargo-audit" >&2
+    fail=1
+else
     echo "pre-push: scanning for known vulnerabilities..."
     if ! cargo audit; then
         echo "Vulnerability advisories found (see above). Review them in .cargo/audit.toml, or bypass with: git push --no-verify" >&2
         fail=1
     fi
-else
-    echo "pre-push: cargo-audit is not installed; install it with: cargo install cargo-audit" >&2
-    fail=1
 fi
 
 exit "$fail"
