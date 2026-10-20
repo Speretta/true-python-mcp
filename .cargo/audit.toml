@@ -8,7 +8,8 @@ ignore = [
     # ZipArchive/ZipStreamReader::extract — it is a notebook editor, and zip
     # arrives only as a transitive dependency of the pinned ruff train
     # (ruff_db -> zip). The fix is a major bump (zip >= 9.0.0) that must come
-    # from the train itself; the weekly ruff-train bump will clear these.
+    # from the train itself; ruff 0.17.1 still pins zip 8.6.0, so these stay
+    # until a train release adopts zip >= 9.0.0.
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
