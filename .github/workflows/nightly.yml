@@ -36,6 +36,10 @@ jobs:
       - name: Stress the properties (release)
         run: cargo nextest run --release -E 'binary(property)'
       - name: Commit any new regression seeds
+        # Run even when the stress failed: a new seed is written only when a
+        # property FAILS, so this step must not be skipped on failure — that is
+        # exactly when there is something to persist.
+        if: always()
         run: |
           if ! git diff --quiet tests/property.proptest-regressions; then
             git config user.name "github-actions[bot]"
