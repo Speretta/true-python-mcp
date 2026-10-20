@@ -45,6 +45,13 @@ use crate::ruff::{Diagnostic, LineCol};
 /// the search root.
 const NOTEBOOK_VIRTUAL_PATH: &str = "__tpmcp_ty_notebook__.py";
 
+/// Sources larger than this are refused before the checker recurses: the type
+/// check walks the semantic index on the small worker stack, and a pathological
+/// single-cell notebook or file can abort the process no stack guard can make
+/// cheap. ruff's read cap is 32 MiB; ty gets a tighter bound because a full
+/// inference pass is far more expensive than lint.
+const MAX_SOURCE_SIZE: usize = 2 * 1024 * 1024;
+
 /// One in-memory `.py` source the database serves through its [`System`],
 /// standing in for the temp file the old notebook path wrote to disk.
 #[derive(Debug, Clone)]
@@ -338,6 +345,9 @@ pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagno
     if path.extension().is_some_and(|ext| ext == "ipynb") {
         return check_notebook(path, snapshot);
     }
+    if snapshot.content.len() > MAX_SOURCE_SIZE {
+        return Err(oversized(path, snapshot.content.len()));
+    }
     let src_root = path.parent().unwrap_or_else(|| Path::new("."));
     let src_root_sys = to_system_path(src_root).ok_or_else(|| {
         Error::invalid_input(format!("path is not representable: {}", src_root.display()))
@@ -360,6 +370,9 @@ fn check_notebook(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic
     let notebook = Notebook::from_source_code(&snapshot.content)
         .map_err(|error| Error::parse(path, format!("{error}")))?;
     let source = notebook.source_code().to_string();
+    if source.len() > MAX_SOURCE_SIZE {
+        return Err(oversized(path, source.len()));
+    }
     let index = notebook.index().clone();
 
     let src_root = path.parent().unwrap_or_else(|| Path::new("."));
@@ -385,6 +398,17 @@ fn check_notebook(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagnostic
 }
 
 // ---- diagnostic mapping ----
+
+/// A source over [`MAX_SOURCE_SIZE`] is refused before any recursion, so a
+/// pathological input becomes a clean caller error instead of a stack abort.
+fn oversized(path: &Path, size: usize) -> Error {
+    Error::invalid_input(format!(
+        "{} is {} bytes, over the {} MiB type-check limit",
+        path.display(),
+        size,
+        MAX_SOURCE_SIZE / (1024 * 1024),
+    ))
+}
 
 /// Rewrites a diagnostic's concatenated-source positions to the notebook cell:
 /// sets the 0-based `cell` index and makes `location`/`end_location`
