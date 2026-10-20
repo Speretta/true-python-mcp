@@ -24,7 +24,8 @@ env:
 
 jobs:
   # The gate: the same suite CI runs on main, on the tagged commit, with the
-  # mandatory ground-truth venv. Everything else needs this job.
+  # mandatory ground-truth venv. The Windows gate (below) must pass too;
+  # everything else needs both.
   test:
     runs-on: ubuntu-latest
     env:
@@ -48,8 +49,44 @@ jobs:
         run: echo "PROPTEST_RNG_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
       - run: cargo nextest run
 
+  # The release ships two Windows targets, so the gate must also run the suite
+  # there: a Windows-only failure (line endings, path handling) would pass the
+  # Linux gate and ship broken binaries. Mirrors ci.yml's windows job.
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      TPMCP_REQUIRE_GROUND_TRUTH: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/cargo-cache
+      - name: Install uv
+        shell: bash
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # Separate step on purpose: GITHUB_PATH only takes effect with the NEXT
+      # step (the first windows run died with 127 otherwise).
+      - name: Install the ground-truth venv
+        shell: bash
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/nbenv"
+          uv pip install --python "$RUNNER_TEMP/nbenv/Scripts/python.exe" nbformat marimo
+      - name: Point the ground-truth env at the venv and a job-local lock dir
+        shell: bash
+        run: |
+          echo "TPMCP_GROUND_TRUTH_PYTHON=$RUNNER_TEMP/nbenv/Scripts/python.exe" >> "$GITHUB_ENV"
+          echo "TPMCP_LOCK_DIR=$RUNNER_TEMP/tpmcp-locks" >> "$GITHUB_ENV"
+      - name: Install cargo-nextest
+        shell: bash
+        run: curl -LsSf https://get.nexte.st/latest/windows-tar | tar zxf - -C "$HOME/.cargo/bin"
+      - name: Seed the property suite deterministically for the day
+        shell: bash
+        run: echo "PROPTEST_RNG_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
+      - run: cargo nextest run
+
   create-release:
-    needs: test
+    needs: [test, test-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
