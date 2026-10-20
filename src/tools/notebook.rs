@@ -160,7 +160,9 @@ impl Tpmcp {
                        notebook_format overrides Jupyter/marimo. Fails if the file already \
                        exists; use the cell tools to modify existing notebooks. Conversions \
                        never drop content silently: cells that cannot convert exactly are kept \
-                       and reported as per-cell warnings.",
+                       and reported as per-cell warnings. A fresh marimo .py with no cells is a \
+                       0-cell file, which marimo flags as having errors until a cell is added; \
+                       prefer providing at least one initial cell.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
