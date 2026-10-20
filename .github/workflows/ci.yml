@@ -6,8 +6,9 @@ on:
   pull_request:
 
 # Successive pushes to the same ref cancel the older run. Tag pushes never
-# reach this workflow; the release pipeline has its own test gate and its
-# own never-cancelling concurrency group (release.yml).
+# reach this workflow; the release pipeline waits on this workflow's result
+# (release.yml's wait-for-ci) under its own never-cancelling concurrency
+# group.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -58,6 +59,17 @@ jobs:
         run: echo "PROPTEST_RNG_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
       - run: cargo nextest run
       - run: cargo build --release
+
+  # cargo audit otherwise runs only in the pre-push hook (opt-in, bypassable);
+  # running it here closes the web-UI/--no-verify gap and lets the release's
+  # wait-for-ci gate on it too (a new advisory blocks a release).
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - run: cargo audit
 
   # Cargo.toml declares rust-version; this job is the only place that
   # compiles with it. Check only: clippy and the suite ride the stable job.
