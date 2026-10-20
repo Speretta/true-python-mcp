@@ -521,8 +521,11 @@ fn converted_files_match_marimos_own_serializer() {
     assert!(!err, "{text}");
     assert_eq!(
         std::fs::read_to_string(&empty).unwrap(),
-        "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n\
-         if __name__ == \"__main__\":\n    app.run()\n"
+        format!(
+            "import marimo\n\n__generated_with = \"{}\"\napp = marimo.App()\n\n\n\
+             if __name__ == \"__main__\":\n    app.run()\n",
+            tpmcp::notebook::MARIMO_VERSION
+        )
     );
 
     let Some(python) = ground_truth_python() else {
@@ -534,9 +537,21 @@ fn converted_files_match_marimos_own_serializer() {
     // Windows; tpmcp always emits LF (the canonical marimo on-disk ending).
     // The oracle's claim is about layout, not host line endings, so compare
     // after normalizing CRLF to LF.
-    let mine = mine.replace("\r\n", "\n");
-    let official = official.replace("\r\n", "\n");
-    assert_eq!(mine.trim_end_matches('\n'), official.trim_end_matches('\n'));
+    //
+    // The `__generated_with` line is inert metadata: marimo records but never
+    // validates it and refreshes it on save, and tpmcp stamps its own constant
+    // (MARIMO_VERSION), so that line legitimately differs from whatever
+    // marimo convert emits. Exclude it so a marimo release that only bumps
+    // the version cannot red-herring this oracle.
+    let normalize = |text: &str| {
+        text.replace("\r\n", "\n")
+            .trim_end_matches('\n')
+            .lines()
+            .filter(|line| !line.starts_with("__generated_with = \""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(normalize(&mine), normalize(&official));
 }
 
 /// A notebook whose magic cell converts verbatim and reads back broken.

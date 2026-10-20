@@ -14,7 +14,7 @@ mod marimo;
 
 pub use any::AnyNotebook;
 pub use jupyter::JupyterNotebook;
-pub use marimo::MarimoNotebook;
+pub use marimo::{MARIMO_VERSION, MarimoNotebook};
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

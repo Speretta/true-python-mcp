@@ -16,9 +16,10 @@ use super::{CellMeta, Kind, MarimoNotebook, MdInfo, Segment, parse::guarded_drop
 use crate::error::Error;
 use crate::notebook::{Cell, Notebook};
 
-/// Version stamped into newly created marimo files. marimo never validates it
-/// and refreshes it on its next save.
-const MARIMO_VERSION: &str = "0.25.1";
+/// Version stamped into newly created marimo files. Inert metadata: marimo
+/// never validates it and refreshes it on its next save, so a stale value
+/// cannot affect compatibility. Bump only for cosmetic freshness.
+pub const MARIMO_VERSION: &str = "0.25.2";
 
 /// The import markdown cells need: every `mo.md(...)` cell takes `mo` as a
 /// graph reference, and marimo's own converter adds this cell when a file

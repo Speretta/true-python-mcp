@@ -20,6 +20,7 @@ use std::borrow::Cow;
 
 use super::{Cell, Finding, Notebook, check_index};
 use crate::error::Error;
+pub use create::MARIMO_VERSION;
 use create::{new_app_cell, strip_hide_code, to_markdown_header};
 
 pub struct MarimoNotebook {

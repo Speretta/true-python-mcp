@@ -26,6 +26,7 @@ It does two jobs:
 
 - One binary; no runtime dependencies, no kernel, no background process
 - Jupyter `.ipynb` and marimo `.py`, detected automatically
+- Marimo files tpmcp creates load on marimo 0.2.0 and newer (measured through 0.25.2)
 - Byte-exact edits: your diff shows only what you changed
 - Revision guard: stale writes are refused, not silently applied
 - ruff lint and format for any `.py`, not just notebooks
