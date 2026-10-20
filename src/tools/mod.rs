@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod cell;
 pub mod files;
 pub mod notebook;
+pub mod ty;
 
 use std::path::Path;
 

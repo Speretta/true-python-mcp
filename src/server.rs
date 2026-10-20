@@ -22,7 +22,10 @@ impl Tpmcp {
     /// which are off by default because coding hosts already ship native file
     /// tools.
     pub fn new(file_tools: bool) -> Self {
-        let mut router = Tpmcp::notebook_router() + Tpmcp::cell_router() + Tpmcp::analysis_router();
+        let mut router = Tpmcp::notebook_router()
+            + Tpmcp::cell_router()
+            + Tpmcp::analysis_router()
+            + Tpmcp::ty_router();
         if file_tools {
             router += Tpmcp::files_router();
         }

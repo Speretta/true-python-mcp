@@ -31,6 +31,7 @@ const DEFAULT_TOOLS: &[&str] = &[
     "notebook_read",
     "ruff_check",
     "ruff_format",
+    "ty_check",
 ];
 
 #[test]
