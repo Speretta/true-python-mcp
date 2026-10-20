@@ -13,8 +13,15 @@ the final git diff.
 | [04-revision-conflict.md](04-revision-conflict.md) | basic | The file is edited elsewhere mid-session: tpmcp refuses the stale write, the AI re-reads and retries. |
 | [05-find-and-fix-a-cycle.md](05-find-and-fix-a-cycle.md) | complex | `notebook_check` finds a dependency cycle in a marimo app; the AI fixes one cell and verifies the result. |
 | [06-convert-a-notebook-to-marimo.md](06-convert-a-notebook-to-marimo.md) | complex | Convert a Jupyter notebook with a magic, a raw cell and plot outputs into a marimo app: every warning reported, broken cells repaired, plus a `.md` export. |
-| [07-find-and-verify-in-a-big-notebook.md](07-find-and-verify-in-a-big-notebook.md) | basic | Outline and query navigation in a 40-cell notebook, a stale-revision conflict mid query→edit chain, and verification with diagnostics riding on a read. |
+| [07-find-and-verify-in-a-big-notebook.md](07-find-and-verify-in-a-big-notebook.md) | complex | Outline and query navigation in a 40-cell notebook, a stale-revision conflict mid query→edit chain, and verification with diagnostics riding on a read. |
 | [08-ty-check.md](08-ty-check.md) | simple | ty on a plain `.py` file and a notebook: the same type error, the notebook diagnostic carrying a 0-based cell index and a cell-relative line. |
+| [09-format-a-notebook.md](09-format-a-notebook.md) | basic | ruff on a Jupyter `.ipynb`: cell-mapped findings, the safe fix, and `ruff_format` (dry run, then in place) reformatting one cell byte-exactly. |
+| [10-create-a-notebook-from-scratch.md](10-create-a-notebook-from-scratch.md) | simple | A fresh notebook built from `cells` (no `from_path`), then the create-only `file already exists` refusal. |
+| [11-clean-and-restructure-a-notebook.md](11-clean-and-restructure-a-notebook.md) | complex | Tidy a notebook before committing: clear outputs, tag a cell, retype a code cell to markdown, and move it — four cell tools in one flow. |
+
+The generic `--file-tools` trio (`py_read`, `py_write`, `py_edit`) is off by
+default and deliberately not exemplified here: coding hosts ship their own
+native file tools, so these stay behind a flag.
 
 ## The input files
 
