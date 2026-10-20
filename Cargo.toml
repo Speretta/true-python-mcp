@@ -19,7 +19,7 @@ blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 fd-lock = "4"
 rmcp = { version = "3.5", features = ["transport-io"] }
-ruff_db = "=0.0.18"
+ruff_db = { version = "=0.0.18", features = ["os"] }
 ruff_diagnostics = "=0.0.18"
 ruff_linter = "=0.17.1"
 ruff_notebook = "=0.0.18"
@@ -27,9 +27,11 @@ ruff_python_ast = "=0.0.18"
 ruff_python_formatter = "=0.0.18"
 ruff_python_parser = "=0.0.18"
 ruff_python_stdlib = "=0.0.18"
+ruff_source_file = "=0.0.18"
 ruff_text_size = "=0.0.18"
 ruff_workspace = "=0.0.18"
 rustc-hash = "2"
+salsa = "0.28.5"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
@@ -39,6 +41,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ty_module_resolver = "=0.0.18"
+ty_python_core = "=0.0.18"
+ty_python_semantic = "=0.0.18"
+ty_site_packages = "=0.0.18"
+ty_vendored = "=0.0.18"
 
 [dev-dependencies]
 proptest = "1"
