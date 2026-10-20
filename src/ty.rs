@@ -6,8 +6,9 @@
 //! typeshed stdlib + the site-packages of the environment discovered next to
 //! the checked file.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::{Diagnostic as TyDiagnostic, Severity, UnifiedFile};
@@ -200,37 +201,13 @@ impl TyDb {
             inner: OsSystem::new(src_root.to_path_buf()),
             virtual_source: virtual_source.map(Arc::new),
         };
-        let mut search_path_settings = SearchPathSettings::new(vec![src_root.to_path_buf()]);
-        if let Some(environment) =
-            ty_site_packages::PythonEnvironment::discover(Some(src_root), &system).map_err(
-                |error| Error::analysis(format!("environment discovery failed: {error}")),
-            )?
-        {
-            search_path_settings.site_packages_paths = environment
-                .site_packages_paths(&system)
-                .map_err(|error| {
-                    Error::analysis(format!("site-packages discovery failed: {error}"))
-                })?
-                .into_vec();
-        }
-        let search_paths = search_path_settings
-            .to_search_paths(&system, &vendored, &FallibleStrategy)
-            .map_err(|error| Error::analysis(format!("invalid search paths: {error}")))?;
-        let program_settings = ProgramSettings {
-            python_version: PythonVersionWithSource {
-                version: PythonVersion::default(),
-                source: PythonVersionSource::default(),
-            },
-            python_platform: PythonPlatform::default(),
-            search_paths,
-            python_environment: Ok(None),
-        };
+        let program_settings = discover_settings(src_root)?;
         let db = Self {
             storage: salsa::Storage::new(None),
             files: Files::default(),
             system,
             vendored,
-            program_settings: Arc::new(program_settings),
+            program_settings,
             rule_selection: Arc::new(RuleSelection::from_registry(default_lint_registry())),
             analysis_settings: Arc::new(AnalysisSettings::default()),
         };
@@ -239,6 +216,74 @@ impl TyDb {
             .try_register_static_roots(&db);
         Ok(db)
     }
+}
+
+// ---- discovery + settings cache ----
+
+/// Process-wide cache of the discovery result, keyed by the checked file's
+/// parent directory (the source root). Discovery — the environment lookup,
+/// the site-packages walk, and search-path resolution — is the expensive half
+/// of [`TyDb::new`]. Its product is plain `Send + Sync` data, so it is safe to
+/// share; the database itself is *not* (salsa's `Storage` is per-thread state
+/// and must never be shared across checks).
+fn settings_cache() -> &'static Mutex<HashMap<PathBuf, Arc<ProgramSettings>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<ProgramSettings>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Resolve the [`ProgramSettings`] for a file rooted at `src_root`, caching the
+/// result per source root so repeat checks of files in the same directory skip
+/// the filesystem walk. The cache holds settings only — never the salsa
+/// database — so a stale entry is harmless: each check still builds a fresh
+/// [`TyDb`] that reads the checked file's current bytes.
+fn discover_settings(src_root: &SystemPath) -> Result<Arc<ProgramSettings>, Error> {
+    let key = src_root.as_std_path().to_path_buf();
+    // A poisoned lock still guards a valid map: the only mutation is a single
+    // insert under the lock, which cannot leave the map inconsistent.
+    if let Some(settings) = settings_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+    {
+        return Ok(settings.clone());
+    }
+
+    // A throwaway walk system with no virtual source: discovery never reads a
+    // notebook's in-memory cell source, so a per-root cache entry is never
+    // bound to any one check's virtual file.
+    let system = TySystem {
+        inner: OsSystem::new(src_root.to_path_buf()),
+        virtual_source: None,
+    };
+    let vendored = ty_vendored::file_system().clone();
+    let mut search_path_settings = SearchPathSettings::new(vec![src_root.to_path_buf()]);
+    if let Some(environment) =
+        ty_site_packages::PythonEnvironment::discover(Some(src_root), &system)
+            .map_err(|error| Error::analysis(format!("environment discovery failed: {error}")))?
+    {
+        search_path_settings.site_packages_paths = environment
+            .site_packages_paths(&system)
+            .map_err(|error| Error::analysis(format!("site-packages discovery failed: {error}")))?
+            .into_vec();
+    }
+    let search_paths = search_path_settings
+        .to_search_paths(&system, &vendored, &FallibleStrategy)
+        .map_err(|error| Error::analysis(format!("invalid search paths: {error}")))?;
+    let settings = Arc::new(ProgramSettings {
+        python_version: PythonVersionWithSource {
+            version: PythonVersion::default(),
+            source: PythonVersionSource::default(),
+        },
+        python_platform: PythonPlatform::default(),
+        search_paths,
+        python_environment: Ok(None),
+    });
+
+    settings_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key, settings.clone());
+    Ok(settings)
 }
 
 #[salsa::db]

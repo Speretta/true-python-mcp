@@ -398,6 +398,23 @@ fn non_python_path_is_invalid_input() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-// A cache-invalidation tripwire (re-check after an external edit reports fresh
-// diagnostics) is intentionally absent: ty builds a fresh Db per call, so it
-// would be a no-op today. It belongs with the Db cache when that lands.
+/// Cache-invalidation tripwire: the settings cache shares the discovery result
+/// but never the file bytes. Write a clean assignment, check (this populates
+/// the per-root discovery cache), overwrite with a type error, then re-check —
+/// the second check reuses the cached [`ProgramSettings`] yet must still read
+/// the file's fresh bytes and report `invalid-assignment`.
+#[test]
+fn cached_settings_still_read_fresh_bytes() {
+    let dir = temp_dir("ty-cache-fresh");
+    let path = dir.join("fresh.py");
+    std::fs::write(&path, "x: int = 1\n").unwrap();
+    assert!(ty::check_path(&path).unwrap().is_empty());
+    std::fs::write(&path, "x: int = \"oops\"\n").unwrap();
+    let diagnostics = ty::check_path(&path).unwrap();
+    assert_eq!(
+        codes(&diagnostics),
+        vec!["invalid-assignment".to_string()],
+        "a cached-settings check must read the file's fresh bytes"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
