@@ -14,6 +14,7 @@ the final git diff.
 | [05-find-and-fix-a-cycle.md](05-find-and-fix-a-cycle.md) | complex | `notebook_check` finds a dependency cycle in a marimo app; the AI fixes one cell and verifies the result. |
 | [06-convert-a-notebook-to-marimo.md](06-convert-a-notebook-to-marimo.md) | complex | Convert a Jupyter notebook with a magic, a raw cell and plot outputs into a marimo app: every warning reported, broken cells repaired, plus a `.md` export. |
 | [07-find-and-verify-in-a-big-notebook.md](07-find-and-verify-in-a-big-notebook.md) | basic | Outline and query navigation in a 40-cell notebook, a stale-revision conflict mid query→edit chain, and verification with diagnostics riding on a read. |
+| [08-ty-check.md](08-ty-check.md) | simple | ty on a plain `.py` file and a notebook: the same type error, the notebook diagnostic carrying a 0-based cell index and a cell-relative line. |
 
 ## The input files
 
