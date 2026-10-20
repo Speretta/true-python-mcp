@@ -262,3 +262,59 @@ fn markdown_mutations_scaffold_mo_in_marimo() {
         "{sc}"
     );
 }
+
+/// cell_move error paths and cell_clear_outputs shapes over the wire: an
+/// out-of-range `from`/`to` is a caller error (no write), and clearing a
+/// single cell reports its index in `cleared_cells`, as does clearing all of
+/// a notebook whose cells already have no outputs.
+#[test]
+fn cell_move_errors_and_clear_outputs_shape() {
+    let dir = temp_dir("cellmove");
+    let path = dir.join("nb.ipynb");
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [
+            {"cell_type": "code", "source": "a = 1\n"},
+            {"cell_type": "code", "source": "b = 2\n"},
+            {"cell_type": "code", "source": "c = 3\n"}
+        ]}),
+    );
+    assert!(!err, "{text}");
+    let revision = revision_of(&text);
+
+    // An out-of-range `from` is a caller error, not a write.
+    let (err, text, _) = server.call(
+        "cell_move",
+        json!({"path": path, "from": 3, "to": 0, "revision": revision}),
+    );
+    assert!(err, "out-of-range from must be rejected");
+    assert!(text.contains("cell index 3 out of bounds"), "{text}");
+
+    // `to == len` (the destination is interpreted after removal) is out of
+    // bounds too.
+    let (err, text, _) = server.call(
+        "cell_move",
+        json!({"path": path, "from": 0, "to": 3, "revision": revision}),
+    );
+    assert!(err, "out-of-range to must be rejected");
+    assert!(text.contains("destination index 3 out of bounds"), "{text}");
+
+    // cell_clear_outputs single-cell path reports the cleared index in JSON.
+    let (err, text, sc) = server.call(
+        "cell_clear_outputs",
+        json!({"path": path, "cell": 1, "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["cleared_cells"], json!([1]));
+    let revision = sc["revision"].as_str().unwrap().to_string();
+
+    // Clearing a notebook whose cells already have no outputs is a no-op that
+    // still reports every code cell's index.
+    let (err, text, sc) = server.call(
+        "cell_clear_outputs",
+        json!({"path": path, "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["cleared_cells"], json!([0, 1, 2]));
+}
