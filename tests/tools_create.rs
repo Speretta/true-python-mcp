@@ -151,3 +151,41 @@ fn convert_with_from_path() {
     let (err, text, _) = server.call("notebook_create", json!({"path": dir.join("z.md")}));
     assert!(err && text.contains("requires from_path"), "{text}");
 }
+
+/// `notebook_format` overrides the format the extension would select: a `.py`
+/// path created with `notebook_format: "jupyter"` is written as nbformat JSON,
+/// and a `.ipynb` path with `notebook_format: "marimo"` is written as a
+/// marimo file.
+#[test]
+fn notebook_format_overrides_extension() {
+    let dir = temp_dir("format-override");
+    let mut server = Server::start(&[]);
+
+    // .py extension, jupyter override -> nbformat JSON on disk.
+    let as_py = dir.join("jupyter.py");
+    let (err, text, sc) = server.call(
+        "notebook_create",
+        json!({"path": as_py, "notebook_format": "jupyter",
+               "cells": [{"cell_type": "code", "source": "x = 1\n"}], "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["cell_count"], 1);
+    let raw = std::fs::read_to_string(&as_py).unwrap();
+    let parsed: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed["nbformat"], 4);
+    assert_eq!(parsed["cells"][0]["cell_type"], "code");
+
+    // .ipynb extension, marimo override -> a marimo file on disk.
+    let as_ipynb = dir.join("marimo.ipynb");
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": as_ipynb, "notebook_format": "marimo",
+               "cells": [{"cell_type": "code", "source": "y = 2\n"}]}),
+    );
+    assert!(!err, "{text}");
+    let raw = std::fs::read_to_string(&as_ipynb).unwrap();
+    assert!(!raw.trim_start().starts_with('{'), "not JSON: {raw}");
+    assert!(raw.contains("import marimo"), "{raw}");
+    assert!(raw.contains("@app.cell"), "{raw}");
+    assert!(raw.contains("app.run()"), "{raw}");
+}
