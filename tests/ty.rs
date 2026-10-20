@@ -148,6 +148,35 @@ fn magic_cell_is_skipped_like_ruff() {
     assert_eq!(row_col(diagnostic), (1, 10));
 }
 
+/// A marimo `.py` is checked as plain Python (documented in the tool
+/// description): the scaffolding and cell bodies form one module, so a cell's
+/// type error is reported as a plain-file diagnostic with no `cell` index —
+/// and nothing crashes on the marimo decorators/scaffolding.
+#[test]
+fn marimo_py_is_checked_as_plain_python() {
+    let dir = temp_dir("ty-marimo");
+    let path = dir.join("app.py");
+    let content = common::synthetic_marimo(&["x: int = \"oops\""]);
+    std::fs::write(&path, &content).unwrap();
+
+    let diagnostics = ty::check_path(&path).unwrap();
+    let assignment = diagnostics
+        .iter()
+        .find(|d| code(d) == "invalid-assignment")
+        .expect("the marimo cell's type error is reported");
+    // A plain file carries no cell index, even though the error sits inside a
+    // marimo cell body.
+    assert!(diagnostics.iter().all(|d| d.cell.is_none()));
+    // The error is located on the cell body's own line.
+    let row = content
+        .lines()
+        .position(|line| line.contains("x: int = \"oops\""))
+        .map(|i| i + 1)
+        .unwrap();
+    assert_eq!(row_col(assignment).0, row);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Ground truth (ty 0.0.18): a `.pyi` with an undefined name in an annotation
 /// reports unresolved-reference. (A `.pyi` "wrong" annotation is green — a
 /// stub's own annotations are trusted — so this is the stub error to pin.)
