@@ -174,7 +174,7 @@ The table collects the structural facts: category, who maintains each project, u
 
 Prerequisites and process shapes are from the projects' READMEs and docs as quoted in the paragraphs below, and from the process lists our runs captured. Adoption figures are GitHub stars and PyPI downloads as of 2026-10-15 (re-checked 2026-10-16 for the three new stacks, where noted).
 
-**tpmcp** exposes 12 notebook tools (plus 3 plain-Python file tools with `--file-tools`) answering in markdown or JSON. Every read returns a revision code; every write must send it back, and a stale write is refused with the new revision. Edits return the diff of what changed, and ruff lint/format is compiled in. The full `cell_edit` response from our run1 audit (musl release build, 2026-10-15):
+**tpmcp** exposes 13 notebook tools (plus 3 plain-Python file tools with `--file-tools`) answering in markdown or JSON. Every read returns a revision code; every write must send it back, and a stale write is refused with the new revision. Edits return the diff of what changed, and ruff lint/format is compiled in. The full `cell_edit` response from our run1 audit (musl release build, 2026-10-15):
 
 ````text
 edited cell 4

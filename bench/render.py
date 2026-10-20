@@ -214,12 +214,13 @@ def read_procs(run_dir, phase):
         return []
     rows = []
     for line in p.read_text().splitlines()[1:]:
-        parts = line.split(" ", 3)
-        if len(parts) < 4:
+        # PID PPID RSS_KB THREADS CMD (cmd may contain spaces)
+        parts = line.split(maxsplit=4)
+        if len(parts) < 5:
             continue
         try:
             rows.append({"pid": int(parts[0]), "ppid": int(parts[1]),
-                         "rss_kb": int(parts[2]), "cmd": parts[3]})
+                         "rss_kb": int(parts[2]), "cmd": parts[4]})
         except ValueError:
             continue
     return rows
@@ -507,6 +508,11 @@ def build_readme_snippet(results):
         f"({', '.join(sorted(modes))} mode), each stack in its own minimal "
         f"Docker container on the same machine. Full method, per-component "
         f"memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).")
+    lines.append("")
+    lines.append(
+        "_Idle RAM_ and _After the full profile_ are container cgroup totals, "
+        "not process RSS — the cgroup figure excludes file-backed pages, so "
+        "`ps` reports higher. Both are listed in [COMPARISON.md](COMPARISON.md).")
     return "\n".join(lines)
 
 
