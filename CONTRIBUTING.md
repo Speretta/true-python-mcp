@@ -135,7 +135,8 @@ when done: `git push && git push --tags`.
 All ten ruff crates are exact-pinned to one ruff release and move together
 in a single commit: `ruff_linter = 0.X.Y` plus nine support crates at
 `= 0.0.Z` (ruff ships this train weekly). The upgrade is manual and
-deliberate; Dependabot ignores `ruff_*` for exactly this reason.
+deliberate; the pre-push `cargo outdated` gate ignores `ruff_*`/`ty_*` for
+exactly this reason.
 
 1. Bump every `ruff_*` pin in `Cargo.toml` in one commit, then run
    `cargo check` to re-lock and surface API breaks.
