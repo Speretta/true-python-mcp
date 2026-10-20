@@ -174,6 +174,40 @@ fn ruff_tools_over_the_wire() {
 }
 
 #[test]
+fn ty_check_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let (err, text, sc) = server.call(
+        "ty_check",
+        json!({"path": "tests/data/ty/bad.py", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["diagnostic_count"], 3);
+    let codes: Vec<&str> = sc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        codes,
+        vec!["invalid-assignment", "invalid-return-type", "invalid-argument-type"]
+    );
+
+    // notebook diagnostics carry a 0-based cell index
+    let (_, _, sc) = server.call(
+        "ty_check",
+        json!({"path": "tests/data/ty/cross_cell.ipynb", "format": "json"}),
+    );
+    let cells: Vec<u64> = sc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|diagnostic| diagnostic["cell"].as_u64().unwrap())
+        .collect();
+    assert_eq!(cells, vec![2], "0-based cell indexes");
+}
+
+#[test]
 fn ruff_revision_chains_into_fix_and_format() {
     let dir = temp_dir("ruffchain");
     let path = dir.join("sample.py");
