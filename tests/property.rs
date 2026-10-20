@@ -28,6 +28,11 @@ use proptest::test_runner::{TestCaseError, TestRunner};
 use serde_json::{Map, Value, json};
 use tpmcp::notebook::{AnyNotebook, JupyterNotebook, Notebook, open};
 
+mod common;
+
+use std::path::Path;
+use std::sync::OnceLock;
+
 /// Cases per property: the five properties run in well under a second
 /// total at this size, so the budget is generous.
 const CASES: u32 = 256;
@@ -361,6 +366,31 @@ proptest! {
     #[test]
     fn open_never_panics(text in arb_raw_text()) {
         let _ = open(&text);
+    }
+}
+
+/// One stable scratch dir for the ty property: `common::temp_dir` clears and
+/// recreates on every call, which would churn one dir per proptest case.
+fn ty_prop_dir() -> &'static Path {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| common::temp_dir("ty-prop"))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    /// Property 6: `ty_check` never panics on arbitrary bounded bytes — the
+    /// glue-level containment invariant. ty's own rules are a dependency's
+    /// surface and are deliberately NOT asserted; only that the process
+    /// survives, on both the plain (.py) and notebook (.ipynb) read paths.
+    #[test]
+    fn ty_check_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        for name in ["arb.py", "arb.ipynb"] {
+            let path = ty_prop_dir().join(name);
+            std::fs::write(&path, &text).unwrap();
+            let _ = tpmcp::ty::check_path(&path); // Ok or Err — never a panic/abort
+        }
     }
 }
 
