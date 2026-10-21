@@ -3,6 +3,42 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.2.1] - 2026-10-21
+
+`ty_check` now resolves the project's virtual environment and ruff honors the
+global user config: type-checking targets the discovered venv (VIRTUAL_ENV,
+CONDA_PREFIX, a `.venv`/`venv` ancestor walk, or an explicit `python`
+parameter) and its Python version; ruff falls back to the global user config
+when no project config exists.
+
+### Added
+
+- target ty checks at the discovered environment's python version
+- honor the ruff global user config with project precedence
+- discover venv ancestors and add python param to ty_check
+
+### Changed
+
+- document the ty_check python param and ruff global config
+- pin ty venv discovery and python param
+- pin notebook_create notebook_format override
+- pin cell_set_type raw-to-code conversion
+- pin notebook_read with_outputs rendering
+- cache the ty discovery result across checks
+- persist nightly regression seeds even when the stress fails
+- re-level example 07 and note the unexemplified file tools
+- add a notebook cleanup and restructure walkthrough
+- add a fresh notebook_create walkthrough
+- add a ruff-on-a-notebook example walkthrough
+- pin cell_move errors and cell_clear_outputs shapes
+- pin ty_check on a marimo .py as plain Python
+- cover apply_edit's branch cases
+- pin ruff fix and format on a notebook over the wire
+- pin the py_read/py_write/py_edit file tools over the wire
+- pin cross-file type resolution in ty_check
+- run cargo audit in CI
+- wait for ci.yml before publishing a release
+
 ## [0.2.0] - 2026-10-20
 
 The embedded `ty_check` type checker roughly doubles the binary (17.9 MiB →
