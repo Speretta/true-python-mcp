@@ -148,3 +148,150 @@ fn py_docs_unknown_symbol_is_an_error_over_the_wire() {
     assert!(text.contains("did not resolve"), "{text}");
     assert_eq!(sc["error"], "analysis_error");
 }
+
+/// `datetime.datetime.strptime` is a three-hop walk (module → class → method)
+/// whose trace names each hop's kind, and whose terminal is a method.
+#[test]
+fn resolves_nested_datetime_strptime() {
+    let dir = temp_dir("docs-strptime");
+    let symbol = resolve_symbol("datetime.datetime.strptime", Some(&dir)).unwrap();
+    assert_eq!(symbol.resolved_name, "strptime");
+    assert_eq!(symbol.kind, "method");
+    assert!(
+        !symbol.signatures.is_empty(),
+        "strptime should have a signature"
+    );
+    assert!(
+        symbol.signatures[0].contains("date_string"),
+        "signature should list date_string: {}",
+        symbol.signatures[0]
+    );
+    assert_eq!(
+        symbol.resolution,
+        [
+            "datetime -> module datetime",
+            "datetime -> class datetime.datetime",
+            "strptime -> method datetime.datetime.strptime",
+        ]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pathlib.Path.read_text` is another module → class → method chain.
+#[test]
+fn resolves_nested_pathlib_read_text() {
+    let dir = temp_dir("docs-read-text");
+    let symbol = resolve_symbol("pathlib.Path.read_text", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "method");
+    assert_eq!(
+        symbol.resolution,
+        [
+            "pathlib -> module pathlib",
+            "Path -> class pathlib.Path",
+            "read_text -> method pathlib.Path.read_text",
+        ]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `collections.abc.Iterable` walks module → submodule → class, and the
+/// submodule hop is reported as a module (not a bare import).
+#[test]
+fn resolves_nested_collections_abc_iterable() {
+    let dir = temp_dir("docs-iterable");
+    let symbol = resolve_symbol("collections.abc.Iterable", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "class");
+    assert_eq!(
+        symbol.resolution,
+        [
+            "collections -> module collections",
+            "abc -> module collections.abc",
+            "Iterable -> class collections.abc.Iterable",
+        ]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A multi-segment dead-end reports the failing segment, not the terminal.
+#[test]
+fn nested_dead_end_names_failing_segment() {
+    let dir = temp_dir("docs-deadend");
+    let error = resolve_symbol("json.nonexistent.thing", Some(&dir)).unwrap_err();
+    assert_eq!(error.kind(), "analysis_error");
+    let message = error.to_string();
+    assert!(message.contains("did not resolve"), "{message}");
+    assert!(message.contains("nonexistent"), "{message}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `print` has two `@overload`s: one symbol, two signatures, `disambiguation:
+/// overloads` — not `multiple`.
+#[test]
+fn resolves_builtin_print_overloads() {
+    let dir = temp_dir("docs-print-overloads");
+    let symbol = resolve_symbol("print", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "function");
+    assert_eq!(symbol.disambiguation, "overloads");
+    assert_eq!(
+        symbol.signatures.len(),
+        2,
+        "print has two overloads: {:?}",
+        symbol.signatures
+    );
+    assert!(
+        symbol.signatures[0].contains("values"),
+        "first overload should list *values: {}",
+        symbol.signatures[0]
+    );
+    assert!(
+        symbol.signatures[1].contains("flush"),
+        "second overload should list flush: {}",
+        symbol.signatures[1]
+    );
+    assert!(
+        symbol.candidates.len() == 1,
+        "the non-top overload should be listed as a candidate: {:?}",
+        symbol.candidates
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A class terminal renders its constructor, so the LLM learns how to
+/// instantiate it, while `kind` stays `class`.
+#[test]
+fn resolves_class_constructor() {
+    let dir = temp_dir("docs-deque");
+    let symbol = resolve_symbol("collections.deque", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "class");
+    assert_eq!(symbol.disambiguation, "unique");
+    assert_eq!(symbol.signatures.len(), 1);
+    assert!(
+        symbol.signatures[0].starts_with("class deque("),
+        "constructor should be rendered as `class deque(...)`: {}",
+        symbol.signatures[0]
+    );
+    assert!(
+        symbol.signatures[0].contains("maxlen"),
+        "constructor should list maxlen: {}",
+        symbol.signatures[0]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `print` over the wire: JSON carries the two overload signatures, the
+/// `overloads` marker, the candidates and the `is_reexported` flag.
+#[test]
+fn py_docs_print_overloads_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let (err, text, sc) = server.call("py_docs", json!({"symbol": "print", "format": "json"}));
+    assert!(!err, "{text}");
+    assert_eq!(sc["kind"], "function");
+    assert_eq!(sc["disambiguation"], "overloads");
+    assert_eq!(sc["is_reexported"], false);
+    let signatures = sc["signatures"].as_array().unwrap();
+    assert_eq!(signatures.len(), 2, "{sc}");
+    assert!(signatures[0].as_str().unwrap().contains("values"));
+    let candidates = sc["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1, "{sc}");
+    assert_eq!(candidates[0]["kind"], "function");
+}
