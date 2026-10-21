@@ -11,6 +11,7 @@ use ruff_db::system::{
 };
 use ruff_db::vendored::VendoredFileSystem;
 use ruff_notebook::{Notebook, NotebookError};
+use ruff_python_ast::PythonVersion;
 use ty_module_resolver::{Db as ModuleResolverDb, ModuleName, resolve_module_confident};
 use ty_python_core::Db as PythonCoreDb;
 use ty_python_core::ProgramFile;
@@ -21,6 +22,7 @@ use ty_python_semantic::{
     AnalysisSettings, Db as SemanticDb, PythonVersionWithSource, check_file_unwrap,
     default_lint_registry,
 };
+use ty_site_packages::PythonEnvironment;
 
 use crate::error::Error;
 
@@ -244,15 +246,32 @@ impl TyDb {
         self.files().virtual_file(self, path.as_path()).file()
     }
 
-    /// The interpreter's real stdlib directory (`<prefix>/lib/python3.X`), when
-    /// an environment was discovered. The docs resolver uses this to fall back
-    /// to the real CPython `Lib/*.py` source for docstrings the typeshed stub
-    /// omits. Read-only: it is the same discovery [`discover_settings`] already
-    /// performed — never a subprocess or interpreter execution.
+    /// The interpreter's real stdlib directory (`<prefix>/lib/python3.X` on
+    /// Unix, `<prefix>/Lib` on Windows), when an environment was discovered.
+    /// The docs resolver uses this to fall back to the real CPython `Lib/*.py`
+    /// source for docstrings the typeshed stub omits. Read-only: it is the same
+    /// discovery [`discover_settings`] already performed — never a subprocess
+    /// or interpreter execution.
+    ///
+    /// The crate's discovery is authoritative on Unix; on Windows it can miss
+    /// the real `Lib` (its `home`-derived prefix probe is Unix-flavoured), so we
+    /// fall back to laying the stdlib out ourselves from the base interpreter's
+    /// prefix (`pyvenv.cfg`'s `home` for a venv, `sys.prefix` for a system env).
     pub(crate) fn real_stdlib_path(&self) -> Option<SystemPathBuf> {
         let environment = self.program_settings.python_environment.as_ref().ok()?;
         let environment = environment.as_ref()?;
-        environment.real_stdlib_path(&self.system).ok()
+
+        if let Ok(path) = environment.real_stdlib_path(&self.system) {
+            return Some(path);
+        }
+
+        let base = base_interpreter_prefix(environment, &self.system)?;
+        let version = environment
+            .python_version_from_metadata()
+            .map(|with_source| with_source.version)
+            .unwrap_or_default();
+        let stdlib = stdlib_source_dir(&base, StdlibLayout::host(), version);
+        self.system.is_directory(&stdlib).then_some(stdlib)
     }
 
     /// Whether `name` resolves to an importable module in this database's
@@ -355,4 +374,111 @@ impl salsa::Database for TyDb {}
 pub(super) fn to_system_path(path: &Path) -> Option<SystemPathBuf> {
     let absolute = std::path::absolute(path).ok()?;
     SystemPath::from_std_path(&absolute).map(SystemPath::to_path_buf)
+}
+
+/// The on-disk layout of a CPython stdlib, keyed by the host platform. A
+/// parameter rather than a `cfg!` gate so the Linux test suite can exercise the
+/// Windows `Lib` layout without a Windows runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdlibLayout {
+    /// The stdlib lives directly under `<prefix>/Lib`.
+    Windows,
+    /// The stdlib lives under `<prefix>/lib/python{major}.{minor}`.
+    Unix,
+}
+
+impl StdlibLayout {
+    /// The layout of the platform tpmcp is actually running on.
+    fn host() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
+}
+
+/// The real stdlib source directory for a CPython installation rooted at
+/// `prefix`, laid out for the given platform and Python version.
+fn stdlib_source_dir(
+    prefix: &SystemPath,
+    layout: StdlibLayout,
+    version: PythonVersion,
+) -> SystemPathBuf {
+    match layout {
+        StdlibLayout::Windows => prefix.join("Lib"),
+        StdlibLayout::Unix => prefix.join(format!("lib/python{version}")),
+    }
+}
+
+/// The base interpreter's `sys.prefix` — the root that actually owns the
+/// stdlib. For a system environment that is the environment's own prefix; for a
+/// virtual environment it is the `home` value recorded in `pyvenv.cfg` (the base
+/// interpreter's own directory on Windows, `<prefix>/bin` on Unix).
+fn base_interpreter_prefix(
+    environment: &PythonEnvironment,
+    system: &dyn System,
+) -> Option<SystemPathBuf> {
+    let prefix = environment.sys_prefix().to_path_buf();
+    if !environment.is_virtual() {
+        return Some(prefix);
+    }
+
+    let pyvenv_cfg = prefix.join("pyvenv.cfg");
+    let contents = system.read_to_string(&pyvenv_cfg).ok()?;
+    let home = SystemPathBuf::from(pyvenv_home(&contents)?);
+    if cfg!(windows) {
+        Some(home)
+    } else {
+        home.parent().map(SystemPath::to_path_buf)
+    }
+}
+
+/// The `home` value from a `pyvenv.cfg` file, or `None` when it is absent or
+/// blank.
+fn pyvenv_home(contents: &str) -> Option<&str> {
+    contents.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "home")
+            .then(|| value.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
+
+    use super::*;
+
+    #[test]
+    fn stdlib_source_dir_windows_uses_lib_layout() {
+        let prefix = SystemPath::new("C:/hostedtoolcache/windows/Python/3.12.10/x64");
+        let dir = stdlib_source_dir(prefix, StdlibLayout::Windows, PythonVersion::from((3, 12)));
+        assert_eq!(
+            dir.as_str(),
+            "C:/hostedtoolcache/windows/Python/3.12.10/x64/Lib"
+        );
+    }
+
+    #[test]
+    fn stdlib_source_dir_unix_uses_versioned_layout() {
+        let prefix = SystemPath::new("/opt/python");
+        let dir = stdlib_source_dir(prefix, StdlibLayout::Unix, PythonVersion::from((3, 12)));
+        assert_eq!(dir.as_str(), "/opt/python/lib/python3.12");
+    }
+
+    #[test]
+    fn pyvenv_home_parses_the_home_key() {
+        // Unix `\n` line endings.
+        assert_eq!(
+            pyvenv_home("home = C:\\Python312\nversion_info = 3.12\n"),
+            Some("C:\\Python312")
+        );
+        // Windows `\r\n` line endings trim to the same value.
+        assert_eq!(
+            pyvenv_home("home = C:\\Python312\r\nversion_info = 3.12\r\n"),
+            Some("C:\\Python312")
+        );
+    }
 }
