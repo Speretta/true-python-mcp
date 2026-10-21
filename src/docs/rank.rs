@@ -17,18 +17,23 @@ use crate::ty::TyDb;
 /// applied in order, lower sorts first (better).
 type RankKey = (bool, bool, bool, u8, String, TextSize);
 
-/// Deduplicates ty's definitions by `(file, focus_range)` and ranks them:
-/// not-stub before stub, not-reexported before re-exported, reachable before
-/// unreachable, class/function/type_alias before bare assignment/import, then
-/// source order as the final tiebreak.
+/// Deduplicates ty's definitions by identity and ranks them: not-stub before
+/// stub, not-reexported before re-exported, reachable before unreachable,
+/// class/function/type_alias before bare assignment/import, then source order
+/// as the final tiebreak.
 pub(super) fn rank_candidates<'db>(
     db: &TyDb,
     resolved: &[ResolvedDefinition<'db>],
 ) -> Vec<ResolvedDefinition<'db>> {
-    let mut seen = std::collections::HashSet::new();
-    let mut deduped = Vec::with_capacity(resolved.len());
+    // Dedup by the definition's identity, not its `focus_range`: two genuinely
+    // distinct definitions (e.g. a re-export alias and its target, or two
+    // overloads) can share one `(file, range)`, so a range key would collapse
+    // them into one candidate. `ResolvedDefinition` is `Eq`, and its
+    // `Definition` arm is a salsa-tracked handle that compares by `scope` +
+    // `place` (the `kind` field is `#[no_eq]`), so equality is exact identity.
+    let mut deduped: Vec<ResolvedDefinition<'db>> = Vec::with_capacity(resolved.len());
     for definition in resolved {
-        if seen.insert(definition.focus_range(db)) {
+        if !deduped.contains(definition) {
             deduped.push(definition.clone());
         }
     }
