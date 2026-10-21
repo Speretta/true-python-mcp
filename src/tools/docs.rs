@@ -144,6 +144,19 @@ fn docs_markdown(symbol: &str, resolved: &DocSymbol) -> String {
     if resolved.is_stub {
         out.push_str("is_stub: true\n");
     }
+    if resolved.is_reexported {
+        out.push_str("is_reexported: true\n");
+    }
+    if !resolved.candidates.is_empty() {
+        out.push_str("candidates:\n");
+        for candidate in &resolved.candidates {
+            let _ = writeln!(
+                out,
+                "  {}: {} ({})",
+                candidate.resolved_name, candidate.kind, candidate.source
+            );
+        }
+    }
     out.push_str("resolution:\n");
     for hop in &resolved.resolution {
         let _ = writeln!(out, "  {hop}");
@@ -165,6 +178,8 @@ fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
         "source": resolved.source_path,
         "source_line": resolved.source_line,
         "is_stub": resolved.is_stub,
+        "is_reexported": resolved.is_reexported,
         "resolution": resolved.resolution,
+        "candidates": resolved.candidates,
     })
 }
