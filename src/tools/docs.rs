@@ -187,7 +187,12 @@ fn docs_markdown(symbol: &str, resolved: &DocSymbol) -> String {
                 resolved.docstring_source
             );
         }
-        None => out.push_str("docstring: none\n"),
+        None => {
+            out.push_str("docstring: none\n");
+            if let Some(note) = &resolved.note {
+                let _ = writeln!(out, "note: {note}");
+            }
+        }
     }
     match &resolved.source_path {
         Some(path) => {
@@ -233,6 +238,7 @@ fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
         "parameters": resolved.parameters,
         "docstring": resolved.docstring,
         "docstring_source": resolved.docstring_source,
+        "note": resolved.note,
         "source": resolved.source_path,
         "source_line": resolved.source_line,
         "is_stub": resolved.is_stub,
@@ -259,6 +265,9 @@ fn members_markdown(module: &DocModule) -> String {
         }
         if let Some(summary) = &member.docstring_summary {
             let _ = writeln!(out, "    docstring: {summary}");
+        }
+        if let Some(note) = &member.note {
+            let _ = writeln!(out, "    note: {note}");
         }
     }
     out

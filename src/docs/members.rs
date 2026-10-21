@@ -22,7 +22,8 @@ use ty_python_semantic::{Db as SemanticDb, SemanticModel};
 use crate::error::Error;
 use crate::ty::TyDb;
 
-use super::rank::{kind_of_resolved, rank_candidates};
+use super::enrich::resolve_docstring;
+use super::rank::{is_stub_of, kind_of_resolved, rank_candidates};
 use super::resolve::resolve_expr;
 use super::signature::callable_output;
 
@@ -48,6 +49,9 @@ pub struct DocModuleMember {
     pub signature: Option<String>,
     /// First line of the member's docstring, truncated.
     pub docstring_summary: Option<String>,
+    /// When the member's docstring is missing, a short human-readable note
+    /// explaining why and what was looked at — never a silent `None`.
+    pub note: Option<String>,
 }
 
 /// The resolved module and its (possibly truncated) member listing.
@@ -190,13 +194,18 @@ fn resolve_member<'db>(
         kind: "other".to_string(),
         signature: None,
         docstring_summary: None,
+        note: None,
     };
 
     let Ok(resolved) = resolve_expr(model, &call.func) else {
+        // why: the member was enumerated, so hiding it would silently contradict
+        // pass 1; report the dead end instead of a bare `other`.
+        member.note = Some(format!("member `{name}` did not resolve to a definition"));
         return member;
     };
     let candidates = rank_candidates(db, &resolved);
     let Some(first) = candidates.first() else {
+        member.note = Some(format!("member `{name}` has no ranked definition"));
         return member;
     };
 
@@ -215,10 +224,15 @@ fn resolve_member<'db>(
     };
     member.signature = raw_signature.map(|signature| one_line_signature(&signature));
 
-    member.docstring_summary = first
-        .docstring(db)
-        .or_else(|| first.implementation_docstring(db))
-        .map(|docstring| docstring_summary(&docstring));
+    let docstring = resolve_docstring(
+        &first.focus_range(db).file().path(db).clone(),
+        is_stub_of(db, first),
+        first
+            .docstring(db)
+            .or_else(|| first.implementation_docstring(db)),
+    );
+    member.docstring_summary = docstring.docstring.as_deref().map(docstring_summary);
+    member.note = docstring.note;
 
     member
 }

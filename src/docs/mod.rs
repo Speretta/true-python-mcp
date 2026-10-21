@@ -32,6 +32,7 @@
 //! entry per segment, so a dead-end is reported at the failing segment with its
 //! receiver type — never a silent wrong answer.
 
+mod enrich;
 mod members;
 mod rank;
 mod resolve;
@@ -50,6 +51,7 @@ use ty_python_semantic::{Db as SemanticDb, HasType, SemanticModel};
 use crate::error::Error;
 use crate::ty::TyDb;
 
+use enrich::resolve_docstring;
 pub use members::{DocModule, DocModuleMember, resolve_module_members};
 use rank::{
     disambiguation_of, is_reexported_of, is_stub_of, kind_of_resolved, rank_candidates,
@@ -104,6 +106,9 @@ pub struct DocSymbol {
     pub docstring: Option<String>,
     /// Where the docstring came from: `source`, `stub`, or `none`.
     pub docstring_source: &'static str,
+    /// When the docstring is missing, a short human-readable note explaining
+    /// why and what was looked at — never a silent `None`.
+    pub note: Option<String>,
     /// Path of the defining file (system, vendored, or virtual), if known.
     pub source_path: Option<String>,
     /// 1-based line of the definition, if known.
@@ -220,22 +225,23 @@ pub fn resolve_symbol_with_python(
         is_reexported,
     );
 
-    // The overload's own docstring, falling back to the runtime implementation
-    // (overload declarations often omit theirs).
-    let docstring = first
-        .docstring(&db)
-        .or_else(|| first.implementation_docstring(&db));
-    let docstring_source = match (&docstring, is_stub) {
-        (Some(_), true) => "stub",
-        (Some(_), false) => "source",
-        (None, _) => "none",
-    };
-
     let focus = first.focus_range(&db);
     let source_file = focus.file();
+    let definition_path = source_file.path(&db).clone();
     let source_text = source_text(&db, source_file);
     let line_index = LineIndex::from_source_text(&source_text);
     let source_line = Some(line_index.line_index(focus.range().start()).get());
+
+    // The overload's own docstring, falling back to the runtime implementation
+    // (overload declarations often omit theirs) — and, when nothing has it, an
+    // honest note instead of a silent `None`.
+    let docstring = resolve_docstring(
+        &definition_path,
+        is_stub,
+        first
+            .docstring(&db)
+            .or_else(|| first.implementation_docstring(&db)),
+    );
 
     let candidates = candidates
         .iter()
@@ -253,9 +259,10 @@ pub fn resolve_symbol_with_python(
         signatures,
         return_type,
         parameters,
-        docstring,
-        docstring_source,
-        source_path: Some(source_file.path(&db).as_str().to_string()),
+        docstring: docstring.docstring,
+        docstring_source: docstring.source,
+        note: docstring.note,
+        source_path: Some(definition_path.as_str().to_string()),
         source_line,
         is_stub,
         is_reexported,

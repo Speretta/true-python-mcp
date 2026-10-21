@@ -380,3 +380,45 @@ fn py_module_members_json_over_the_wire() {
     assert!(err, "unknown module must be an error, got: {text}");
     assert!(text.contains("did not resolve"), "{text}");
 }
+
+/// A symbol with no docstring anywhere returns an honest note, never a bare
+/// `None`.
+#[test]
+fn missing_docstring_returns_a_note() {
+    let dir = temp_dir("docs-note");
+    std::fs::write(dir.join("mymod.py"), "def no_docs():\n    pass\n").unwrap();
+    let symbol = resolve_symbol("mymod.no_docs", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "function");
+    assert!(symbol.docstring.is_none(), "should have no docstring");
+    assert_eq!(symbol.docstring_source, "none");
+    let note = symbol
+        .note
+        .as_deref()
+        .expect("a missing docstring must carry a note, not a silent None");
+    assert!(note.contains("no docstring"), "{note}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The note reaches the JSON wire when a docstring is missing.
+#[test]
+fn missing_docstring_note_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let dir = temp_dir("docs-note-wire");
+    std::fs::write(dir.join("mymod.py"), "def no_docs():\n    pass\n").unwrap();
+    let (err, text, sc) = server.call(
+        "py_docs",
+        json!({
+            "symbol": "mymod.no_docs",
+            "path": dir.to_str().unwrap(),
+            "format": "json"
+        }),
+    );
+    assert!(!err, "{text}");
+    assert!(sc["docstring"].is_null(), "no docstring: {sc}");
+    assert_eq!(sc["docstring_source"], "none");
+    let note = sc["note"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a missing docstring must carry a note: {sc}"));
+    assert!(note.contains("no docstring"), "{note}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
