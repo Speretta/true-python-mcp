@@ -30,7 +30,7 @@ It does two jobs:
 - Byte-exact edits: your diff shows only what you changed
 - Revision guard: stale writes are refused, not silently applied
 - ruff lint and format for any `.py`, not just notebooks
-- 14 tools, plus 3 for plain Python files with `--file-tools`
+- 16 tools, plus 3 for plain Python files with `--file-tools`
 
 ## Memory footprint
 
@@ -119,6 +119,8 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file (uses the nearest project ruff/pyproject config, falling back to the global user config). With `fix: true` it repairs the safe ones. |
 | `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
 | `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in — no interpreter, no subprocess). Pass `python` to check against a specific venv; otherwise auto-discovers it. Notebook diagnostics carry a 0-based `cell` index. |
+| `py_docs` | Resolve a library symbol — function/method/class/attribute — to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
+| `py_module_members` | List a module's public members with one-line signatures and docstrings. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). |
 
 Notebook outputs, execution counts, and metadata keep their values, and
