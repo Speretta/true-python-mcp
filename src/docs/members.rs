@@ -121,19 +121,17 @@ pub fn resolve_module_members(
     // Deduplicate (a name can surface from both the member and the submodule
     // listing) and order deterministically: ty's `NameKind` convention (Normal
     // first, then Dunder, then Sunder — the derived `Ord` of the enum, matching
-    // ty's own completion ordering), then lexicographic.
-    let mut names: Vec<String> = Vec::with_capacity(completions.len());
+    // ty's own completion ordering), then lexicographic. Each name is paired
+    // with its `NameKind` once (a Schwartzian transform), so the classifier
+    // runs once per name and sort/dedup compare cheap `Copy` keys instead of
+    // reclassifying inside the comparator or scanning with `contains`.
+    let mut names: Vec<(NameKind, String)> = Vec::with_capacity(completions.len());
     for completion in &completions {
         let name = completion.name.to_string();
-        if !names.contains(&name) {
-            names.push(name);
-        }
+        names.push((NameKind::classify(&name), name));
     }
-    names.sort_by(|a, b| {
-        NameKind::classify(a)
-            .cmp(&NameKind::classify(b))
-            .then_with(|| a.cmp(b))
-    });
+    names.sort_unstable();
+    names.dedup();
 
     let member_count = names.len();
     let truncated = member_count > MAX_MEMBERS;
@@ -144,7 +142,7 @@ pub fn resolve_module_members(
     // One synthetic call per capped member, in a single module, so discovery
     // and parsing happen once regardless of the member count.
     let mut source = format!("import {module}\n");
-    for name in &names {
+    for (_, name) in &names {
         source.push_str(&format!("{module}.{name}()\n"));
     }
     let db = TyDb::for_virtual_source_with_python(src_root, &source, python)?;
@@ -167,7 +165,7 @@ pub fn resolve_module_members(
     let members = names
         .iter()
         .zip(calls)
-        .map(|(name, call)| resolve_member(&db, &env, &model, name, call))
+        .map(|((_, name), call)| resolve_member(&db, &env, &model, name, call))
         .collect();
 
     Ok(DocModule {
