@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 mod common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{ground_truth_ty, run_ty, server::Server, temp_dir};
 use serde_json::{Value, json};
@@ -418,3 +418,100 @@ fn cached_settings_still_read_fresh_bytes() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---- venv discovery (environment resolution) ----
+
+/// Create a minimal fake virtual environment at `root/<name>`: a `pyvenv.cfg`
+/// marker plus a `lib/python3.11/site-packages/<pkg>/__init__.py`. ty only
+/// needs the on-disk shape — a `pyvenv.cfg` and a resolvable `site-packages` —
+/// to discover the environment; it never runs the (absent) interpreter. The
+/// `home` key is required by the `pyvenv.cfg` parser but its target is never
+/// consulted because `include-system-site-packages` is absent, so it just has
+/// to be an existing directory.
+fn fake_venv(root: &Path, name: &str, pkg: &str) -> PathBuf {
+    let venv = root.join(name);
+    let site = venv.join("lib/python3.11/site-packages");
+    std::fs::create_dir_all(site.join(pkg)).unwrap();
+    std::fs::write(site.join(pkg).join("__init__.py"), "SOME_CONSTANT = 1\n").unwrap();
+    std::fs::write(
+        venv.join("pyvenv.cfg"),
+        format!("home = {}\n", root.display()),
+    )
+    .unwrap();
+    venv
+}
+
+/// The ancestor walk: a nested file (`root/src/mod.py`) finds `root/.venv` and
+/// resolves its packages, so `import somepkg` no longer falls through to the
+/// system Python and reports `unresolved-import`. Before the walk, discovery
+/// only checked `src_root/.venv` — one level — and this file missed it.
+#[test]
+fn nested_file_resolves_ancestor_venv() {
+    let dir = temp_dir("ty-ancestor");
+    let root = dir.join("root");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    fake_venv(&root, ".venv", "somepkg");
+    let path = root.join("src/mod.py");
+    std::fs::write(&path, "import somepkg\n").unwrap();
+
+    let diagnostics = ty::check_path(&path).unwrap();
+    assert!(
+        !codes(&diagnostics).iter().any(|c| c == "unresolved-import"),
+        "the nested file must resolve the ancestor venv: {diagnostics:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Two virtual environments in the chain with no explicit signal (no `python`,
+/// no VIRTUAL_ENV, no CONDA_PREFIX) are ambiguous: the walk cannot pick one, so
+/// `check_path` errors instead of silently choosing.
+#[test]
+fn multiple_ancestor_venvs_are_ambiguous() {
+    let dir = temp_dir("ty-ambiguous");
+    let root = dir.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    fake_venv(&root, ".venv", "pkg_a");
+    fake_venv(&root, "venv", "pkg_b");
+    let path = root.join("mod.py");
+    std::fs::write(&path, "import pkg_a\n").unwrap();
+
+    let error = ty::check_path(&path).unwrap_err();
+    assert_eq!(error.kind(), "analysis_error");
+    assert!(
+        error.to_string().contains("ambiguous Python environment"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An explicit `python` param pointing at a venv root resolves that venv's
+/// packages even when the checked file has no ancestor venv of its own.
+#[test]
+fn explicit_python_param_resolves_venv() {
+    let dir = temp_dir("ty-python-param");
+    let root = dir.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let venv = fake_venv(&root, ".venv", "somepkg");
+
+    // The file lives outside `root` so no ancestor walk can find `root/.venv`.
+    let other = dir.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let path = other.join("mod.py");
+    std::fs::write(&path, "import somepkg\n").unwrap();
+
+    let snapshot = tpmcp::fs::read(&path).unwrap();
+    let diagnostics =
+        ty::check_snapshot_with_python(&path, &snapshot, Some(venv.as_path())).unwrap();
+    assert!(
+        !codes(&diagnostics).iter().any(|c| c == "unresolved-import"),
+        "the explicit python param must resolve the venv: {diagnostics:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// VIRTUAL_ENV / CONDA_PREFIX precedence is not unit-tested here: `set_var` is
+// `unsafe` in edition 2024 and races under `nextest`'s process-per-test model.
+// The VIRTUAL_ENV and conda branches are instead exercised indirectly by
+// `PythonEnvironment::discover`, which `discover_environment` delegates to for
+// the CONDA_PREFIX and system-fallback paths (the discover order reads
+// VIRTUAL_ENV and conda first).
