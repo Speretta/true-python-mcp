@@ -30,6 +30,7 @@ const DEFAULT_TOOLS: &[&str] = &[
     "notebook_create",
     "notebook_read",
     "py_docs",
+    "py_module_members",
     "ruff_check",
     "ruff_format",
     "ty_check",

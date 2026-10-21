@@ -8,7 +8,7 @@ mod common;
 use common::server::Server;
 use common::temp_dir;
 use serde_json::json;
-use tpmcp::docs::resolve_symbol;
+use tpmcp::docs::{resolve_module_members, resolve_symbol};
 
 /// `json.dumps` resolves to a function whose rendered signature names `dumps`
 /// and its parameters, and whose docstring typeshed keeps.
@@ -294,4 +294,89 @@ fn py_docs_print_overloads_over_the_wire() {
     let candidates = sc["candidates"].as_array().unwrap();
     assert_eq!(candidates.len(), 1, "{sc}");
     assert_eq!(candidates[0]["kind"], "function");
+}
+
+/// `json`'s member listing names the public functions and classes, each with a
+/// one-line signature, and a docstring for the documented ones.
+#[test]
+fn resolves_json_members() {
+    let dir = temp_dir("docs-members-json");
+    let module = resolve_module_members("json", Some(&dir), None).unwrap();
+    assert_eq!(module.resolved_name, "json");
+    assert!(!module.truncated, "json has far fewer than the cap");
+    assert_eq!(module.members.len(), module.member_count);
+
+    let names: Vec<&str> = module.members.iter().map(|m| m.name.as_str()).collect();
+    for expected in ["dumps", "loads", "JSONEncoder"] {
+        assert!(names.contains(&expected), "missing {expected} in {names:?}");
+    }
+    let dumps = module.members.iter().find(|m| m.name == "dumps").unwrap();
+    assert_eq!(dumps.kind, "function");
+    assert!(
+        dumps
+            .signature
+            .as_deref()
+            .is_some_and(|s| s.contains("dumps")),
+        "dumps should carry a signature: {:?}",
+        dumps.signature
+    );
+    assert!(
+        dumps
+            .docstring_summary
+            .as_deref()
+            .is_some_and(|d| d.contains("Serialize")),
+        "dumps should carry a docstring summary: {:?}",
+        dumps.docstring_summary
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An unknown module is an honest error, not a panic or an empty listing.
+#[test]
+fn unknown_module_members_is_an_error() {
+    let dir = temp_dir("docs-members-unknown");
+    let error =
+        resolve_module_members("definitely_not_a_real_module", Some(&dir), None).unwrap_err();
+    assert_eq!(error.kind(), "analysis_error");
+    assert!(error.to_string().contains("did not resolve"), "{error}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `py_module_members` over the wire: JSON carries the resolved module, the
+/// member count and the members with kind + signature.
+#[test]
+fn py_module_members_json_over_the_wire() {
+    let mut server = Server::start(&[]);
+
+    let (err, text, sc) = server.call(
+        "py_module_members",
+        json!({"module": "json", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["module"], "json");
+    assert_eq!(sc["resolved_name"], "json");
+    assert_eq!(sc["truncated"], false);
+    let member_count = sc["member_count"].as_u64().unwrap();
+    assert!(member_count >= 3, "{sc}");
+
+    let members = sc["members"].as_array().unwrap();
+    let names: Vec<&str> = members
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    for expected in ["dumps", "loads", "JSONEncoder"] {
+        assert!(names.contains(&expected), "missing {expected} in {names:?}");
+    }
+    let dumps = members.iter().find(|m| m["name"] == "dumps").unwrap();
+    assert_eq!(dumps["kind"], "function");
+    assert!(
+        dumps["signature"].as_str().unwrap().contains("dumps"),
+        "{}",
+        dumps["signature"]
+    );
+
+    // An unknown module is an honest tool error (isError), not a panic.
+    let (err, text, _) = server.call("py_module_members", json!({"module": "no_such_module_xyz"}));
+    assert!(err, "unknown module must be an error, got: {text}");
+    assert!(text.contains("did not resolve"), "{text}");
 }

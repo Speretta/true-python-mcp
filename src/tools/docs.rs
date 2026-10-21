@@ -12,7 +12,7 @@ use rmcp::{tool, tool_router};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::docs::{self, DocSymbol};
+use crate::docs::{self, DocModule, DocSymbol};
 use crate::error::Error;
 use crate::render::Format;
 use crate::server::Tpmcp;
@@ -24,6 +24,29 @@ pub struct PyDocsArgs {
     /// `print`. The first segment is an import (or a builtin); the rest are
     /// walked as attributes.
     pub symbol: String,
+    /// Optional anchor: a `.py`/`.ipynb` file or a directory. A file anchors
+    /// at its parent directory, a directory anchors at itself — the search
+    /// root and environment are discovered next to it, as `ty_check` does.
+    /// Omit to anchor at the current directory.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Optional path to a Python interpreter or a virtual-environment root to
+    /// resolve against (its site-packages). Omit to auto-discover the
+    /// environment: VIRTUAL_ENV, CONDA_PREFIX, then a `.venv`/`venv` ancestor
+    /// walk, then the system Python.
+    #[serde(default)]
+    pub python: Option<PathBuf>,
+    /// Result format, "markdown" (default) or "json".
+    #[serde(default)]
+    pub format: Format,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PyModuleMembersArgs {
+    /// A single Python module to enumerate, e.g. `json`, `pathlib`, `numpy`.
+    /// The resolved members are listed with their kind, one-line signature and
+    /// one-line docstring.
+    pub module: String,
     /// Optional anchor: a `.py`/`.ipynb` file or a directory. A file anchors
     /// at its parent directory, a directory anchors at itself — the search
     /// root and environment are discovered next to it, as `ty_check` does.
@@ -77,6 +100,41 @@ impl Tpmcp {
                 args.format,
                 || docs_markdown(&args.symbol, &symbol),
                 || docs_json(&args.symbol, &symbol),
+            ))
+        })
+        .await
+    }
+
+    #[tool(
+        title = "Python Module Members",
+        description = "Enumerate a Python module's members (`json`, `pathlib`, `numpy`) with each \
+                       member's kind, a one-line signature and a one-line docstring, using \
+                       Astral's ty (compiled in, no interpreter, no subprocess). The listing is \
+                       ordered by ty's name convention (public names first, then dunder, then \
+                       single-underscore) and lexicographically, and is capped for huge packages \
+                       with an explicit `truncated` flag. Pass `path` to anchor the search root \
+                       and `python` to resolve against a specific interpreter or virtual \
+                       environment; omit both to anchor at the current directory and \
+                       auto-discover the environment. Read-only.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn py_module_members(
+        &self,
+        Parameters(args): Parameters<PyModuleMembersArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let src_root = anchor_src_root(args.path.as_deref());
+            let module =
+                docs::resolve_module_members(&args.module, Some(src_root), args.python.as_deref())?;
+            Ok(respond(
+                args.format,
+                || members_markdown(&module),
+                || members_json(&module),
             ))
         })
         .await
@@ -181,5 +239,37 @@ fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
         "is_reexported": resolved.is_reexported,
         "resolution": resolved.resolution,
         "candidates": resolved.candidates,
+    })
+}
+
+fn members_markdown(module: &DocModule) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "py_module_members: {}", module.module);
+    let _ = writeln!(out, "resolved_name: {}", module.resolved_name);
+    let _ = write!(out, "member_count: {}", module.member_count);
+    if module.truncated {
+        let _ = write!(out, " (showing {})", module.members.len());
+    }
+    out.push('\n');
+    out.push_str("members:\n");
+    for member in &module.members {
+        let _ = writeln!(out, "  {}: {}", member.name, member.kind);
+        if let Some(signature) = &member.signature {
+            let _ = writeln!(out, "    signature: {signature}");
+        }
+        if let Some(summary) = &member.docstring_summary {
+            let _ = writeln!(out, "    docstring: {summary}");
+        }
+    }
+    out
+}
+
+fn members_json(module: &DocModule) -> serde_json::Value {
+    json!({
+        "module": module.module,
+        "resolved_name": module.resolved_name,
+        "member_count": module.member_count,
+        "truncated": module.truncated,
+        "members": module.members,
     })
 }

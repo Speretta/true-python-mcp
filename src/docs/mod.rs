@@ -32,6 +32,7 @@
 //! entry per segment, so a dead-end is reported at the failing segment with its
 //! receiver type — never a silent wrong answer.
 
+mod members;
 mod rank;
 mod resolve;
 mod signature;
@@ -49,6 +50,7 @@ use ty_python_semantic::{Db as SemanticDb, HasType, SemanticModel};
 use crate::error::Error;
 use crate::ty::TyDb;
 
+pub use members::{DocModule, DocModuleMember, resolve_module_members};
 use rank::{
     disambiguation_of, is_reexported_of, is_stub_of, kind_of_resolved, rank_candidates,
     resolved_name_of, source_of,
