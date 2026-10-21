@@ -33,8 +33,8 @@ use ruff_python_parser::parse_module;
 /// Stack-growth parameters for the AST walk, mirroring ruff's parser (which
 /// uses the same crate): shallow nesting runs unchecked, deeper recursion
 /// probes the remaining stack and grows into 1 MiB heap segments when it runs
-/// low. Without the guard, deeply nested Python — which ruff's own guarded
-/// parser happily accepts — overflows the 2 MiB tokio worker stacks and
+/// low. Without the guard, deeply nested Python (which ruff's own guarded
+/// parser happily accepts) overflows the 2 MiB tokio worker stacks and
 /// SIGSEGVs the whole server during notebook_check.
 const STACK_RED_ZONE: usize = 100 * 1024;
 const STACK_SIZE: usize = 1024 * 1024;

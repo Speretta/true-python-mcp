@@ -14,7 +14,7 @@
 //! minimal-width and decimal exponents from -5 to 15 print in fixed
 //! notation. That matches Python's `repr` only for multi-digit exponents
 //! (`1e+30` round-trips verbatim); Python's zero-padded `1e-06` normalizes
-//! to `1e-6`, `1e-05` to `0.00001`, and `1e15` to `1000000000000000.0` —
+//! to `1e-6`, `1e-05` to `0.00001`, and `1e15` to `1000000000000000.0`,
 //! once, then stable. tests/canonical_forms.rs pins this boundary.
 
 use std::collections::BTreeMap;
@@ -45,7 +45,7 @@ enum Field<'a> {
 }
 
 /// The passthrough entries of an `extra` map as fields. A model key shadowed
-/// by an `extra` entry keeps the `extra` value — the same precedence the
+/// by an `extra` entry keeps the `extra` value, the same precedence the
 /// previous DOM-based writer had, where `Map::insert` of the extras replaced
 /// the model value under a colliding key.
 fn extra_fields(extra: &BTreeMap<String, Value>) -> Vec<(&str, Field<'_>)> {
@@ -95,7 +95,7 @@ fn emit_field(out: &mut String, field: &Field, depth: usize) {
     }
 }
 
-/// The `cells` array — byte-identical to `emit_value` over an array of the
+/// The `cells` array, byte-identical to `emit_value` over an array of the
 /// same cell objects.
 fn emit_cells(out: &mut String, cells: &[Cell], depth: usize) {
     if cells.is_empty() {

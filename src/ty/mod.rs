@@ -38,7 +38,7 @@ pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagno
 }
 
 /// Like [`check_snapshot`], but pins the type-checking environment to `python`
-/// — a path to a Python interpreter or a virtual-environment root — instead of
+/// (a path to a Python interpreter or a virtual-environment root) instead of
 /// relying on the implicit discovery order. `None` behaves like
 /// [`check_snapshot`].
 pub fn check_snapshot_with_python(

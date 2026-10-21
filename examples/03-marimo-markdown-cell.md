@@ -47,7 +47,7 @@ revenue = 1200
 ```
 ````
 
-In the file, cell 0 is stored as a `mo.md(r"""...""")` call. tpmcp hides that wrapper and shows only the markdown text, so the AI works with plain text. The answer also carries a revision — a short hash of the file state — and every write must present the current one.
+In the file, cell 0 is stored as a `mo.md(r"""...""")` call. tpmcp hides that wrapper and shows only the markdown text, so the AI works with plain text. The answer also carries a revision (a short hash of the file state), and every write must present the current one.
 
 ## Step 2: Change the title (`cell_edit`)
 

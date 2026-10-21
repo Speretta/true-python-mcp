@@ -1,14 +1,14 @@
 //! CPython `Lib/*.py` docstring fallback for the docs resolver.
 //!
 //! Typeshed keeps a docstring for most stdlib definitions, but where a stub
-//! omits it the honest answer is not a silent `None` — it is to look at the
+//! omits it the honest answer is not a silent `None`: it is to look at the
 //! interpreter's *real* CPython source (a venv's `lib/python3.X/` symlinks the
 //! base stdlib, and a system Python owns `/usr/lib/python3.X/`). This module
 //! maps a vendored typeshed stub path (`stdlib/json/__init__.pyi`) to the real
 //! source (`<stdlib>/json/__init__.py`), parses it with ruff's already-linked
 //! parser, and extracts the terminal definition's docstring. It is
-//! filesystem-only: no subprocess, no interpreter execution, and no eager walk
-//! — one file per symbol, cached for the process.
+//! filesystem-only: no subprocess, no interpreter execution, and no eager walk.
+//! One file per symbol, cached for the process.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use ruff_python_parser::parse_module;
 use crate::ty::TyDb;
 
 /// The docstring answer for one definition: the docstring itself, where it came
-/// from, and — when there is none anywhere — an honest note explaining why and
+/// from, and, when there is none anywhere, an honest note explaining why and
 /// what was looked at (never a silent gap).
 pub(super) struct ResolvedDocstring {
     pub(super) docstring: Option<String>,

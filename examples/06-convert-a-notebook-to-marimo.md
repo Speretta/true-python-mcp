@@ -84,7 +84,7 @@ warnings:
 Nothing is dropped silently. Each warning tells the AI what to do next: the
 magic cell is kept verbatim and will read back as broken, the raw cell became
 a code cell, the outputs stayed behind (marimo files do not store them), and
-tpmcp added one scaffold cell of its own — the `import marimo as mo` that the
+tpmcp added one scaffold cell of its own: the `import marimo as mo` that the
 markdown cell's `mo.md(...)` call needs at runtime. The scaffold cell is why
 the file has 7 cells while the response counts the 6 converted ones.
 
@@ -186,7 +186,7 @@ cell 3 has a syntax error and is read-only; repair its Python syntax to edit it 
 ````
 
 A broken block has no parsed structure, so surgical edits into it are
-refused — the refusal changed nothing on disk. The repair path is to replace
+refused; the refusal changed nothing on disk. The repair path is to replace
 the cell: delete it and insert a valid one at the same index.
 
 ## Step 5: Delete the broken cell (`cell_delete`)
@@ -252,7 +252,7 @@ tpmcp answers (structuredContent):
 {"cell_count":7,"cells":[{"cell_type":"code","first_line":"import marimo as mo","index":0,"kind":null,"line_count":1},{"cell_type":"markdown","first_line":"# Survey analysis","index":1,"kind":null,"line_count":3},{"cell_type":"code","first_line":"import pandas as pd","index":2,"kind":null,"line_count":5},{"cell_type":"code","first_line":"# seaborn ships with the environment; marimo has no shell escape","index":3,"kind":null,"line_count":1},{"cell_type":"code","first_line":"import seaborn as sns","index":4,"kind":null,"line_count":3},{"cell_type":"code","first_line":"@app.cell","index":5,"kind":"broken","line_count":6},{"cell_type":"code","first_line":"total = len(responses)","index":6,"kind":null,"line_count":2}],"format":"marimo 0.25.1","path":"examples/demo/survey.py","range":[0,7],"revision":"050c1a4e8841567a"}
 ````
 
-The delete shifted the indexes, so the AI re-reads before acting — the
+The delete shifted the indexes, so the AI re-reads before acting. The
 outline's `kind` field shows the SQL note is now the broken cell 5.
 
 ## Step 8: Try to retype it (`cell_set_type`)
@@ -280,7 +280,7 @@ markdown instead.
 
 ## Step 9: Delete and reinsert as markdown (`cell_delete`, `cell_insert`)
 
-The LLM sends (JSON format this time — every tool speaks both):
+The LLM sends (JSON format this time; every tool speaks both):
 ````json
 {
   "name": "cell_delete",
@@ -364,19 +364,19 @@ warnings:
 ````
 
 The `.md` export renders markdown cells verbatim, fences the code, and keeps
-text outputs as blockquotes — for example the plot cell's:
+text outputs as blockquotes, for example the plot cell's:
 ````markdown
 outputs:
 > execute_result image/png: <96 bytes> | text/plain:
 >     <Axes: xlabel='segment', ylabel='rating'>
 ````
 
-The PNG itself has no place in a standalone markdown file, so it is dropped —
+The PNG itself has no place in a standalone markdown file, so it is dropped
 and reported, like everything else.
 
 ## Result
 
-`examples/demo/survey.py` after the repairs — a valid marimo app, in the
+`examples/demo/survey.py` after the repairs, a valid marimo app, in the
 layout marimo's own serializer writes (the `mo` scaffold cell exports
 `(mo,)`, the pandas cell exports `(responses,)`, and the cells that use it
 take it as a parameter):
@@ -453,7 +453,7 @@ Every value in the source notebook either survived, was reported in a
 warning, or both: the dataframes and plot code converted exactly, the shell
 escape and the raw SQL note were replaced with working equivalents by the
 AI, and the only lost bytes are the ones marimo files and markdown documents
-have no room for — outputs, execution counts, and the PNG, all named in the
+have no room for: outputs, execution counts, and the PNG, all named in the
 warnings.
 
 ## The input file

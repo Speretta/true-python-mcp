@@ -2,7 +2,7 @@
 //!
 //! Read-only invocations need no revision. Mutating invocations (`fix=true`,
 //! or formatting in place) run under the path lock, verify the caller's
-//! revision, and return the new revision — same conflict-safety contract as
+//! revision, and return the new revision: same conflict-safety contract as
 //! the cell tools.
 
 use std::path::{Path, PathBuf};
@@ -89,7 +89,7 @@ impl Tpmcp {
                 })?;
                 fs::with_file_lock(&args.path, || {
                     // Single read (CPU-F2): verify the caller's revision and lint
-                    // the exact same bytes — strictly tighter than verify-then-
+                    // the exact same bytes, strictly tighter than verify-then-
                     // reread, since the file cannot change between the two reads.
                     let snapshot = fs::read_verified(&args.path, &revision)?;
                     ruff::check(&args.path, SafeFixes::Apply, snapshot)

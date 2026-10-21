@@ -64,7 +64,7 @@ outputs(1): stream(stdout)
 ````
 
 Three code cells, each with a stored `stream(stdout)` output, and the
-"Findings" note in cell 2 — typed as code, but it is markdown text.
+"Findings" note in cell 2, typed as code, but it is markdown text.
 
 ## Step 2: Strip the outputs (`cell_clear_outputs`)
 
@@ -89,7 +89,7 @@ revision: 77b022742fd1f6ca
 ````
 
 Each code cell's `outputs` becomes `[]` and its `execution_count` becomes
-`null`, per the nbformat spec — the notebook is now clean to commit.
+`null`, per the nbformat spec. The notebook is now clean to commit.
 
 ## Step 3: Tag the parameters cell (`cell_set_metadata`)
 
@@ -126,7 +126,7 @@ previous metadata:
 ````
 
 `cell_set_metadata` is a full replace, not a patch, and it echoes the
-previous object (`{}`) so the change can be undone. Only the metadata moved —
+previous object (`{}`) so the change can be undone. Only the metadata moved;
 the cell's source, `id`, and `outputs` are untouched.
 
 ## Step 4: Turn the note into markdown (`cell_set_type`)
@@ -182,7 +182,7 @@ revision: 41c58f4236497c44
 ````
 
 `to` is interpreted after removing the cell: with four cells, `from: 2, to: 3`
-removes cell 2 (leaving three) and inserts it at index 3 — the very end.
+removes cell 2 (leaving three) and inserts it at index 3, the very end.
 
 ## Step 6: Verify the new shape (`notebook_read`)
 
@@ -231,7 +231,7 @@ print(y)
 ````
 
 Two code cells and two markdown cells, no `exec` markers and no
-`outputs(…)` lines — the outputs are gone, and the note is now a markdown
+`outputs(…)` lines. The outputs are gone, and the note is now a markdown
 cell at the end.
 
 ## Result

@@ -2,7 +2,7 @@
 //!
 //! Each format lives in a sibling module and implements [`Notebook`];
 //! [`open`] detects the format from file content and [`create`] builds new
-//! documents, both returning [`AnyNotebook`] — a statically dispatched enum
+//! documents, both returning [`AnyNotebook`], a statically dispatched enum
 //! of the supported formats. Tools and rendering only ever see this API, so
 //! adding a format means adding a module, one arm in each of those two
 //! functions, and one `AnyNotebook` variant (whose missing match arms the
@@ -131,7 +131,7 @@ impl SourceText {
     }
 
     /// Split after every `\n` (CRLF stays attached to its line), dropping a
-    /// trailing empty chunk — nbformat's canonical line form.
+    /// trailing empty chunk; nbformat's canonical line form.
     pub fn split_canonical(text: &str) -> Vec<String> {
         text.split_inclusive('\n').map(String::from).collect()
     }
@@ -260,7 +260,7 @@ impl AnyNotebook {
     }
 
     /// After a mutation that introduced a markdown cell into a marimo
-    /// notebook, make sure the file defines `mo` — the same scaffold
+    /// notebook, make sure the file defines `mo`, the same scaffold
     /// marimo's own converter adds. Returns the scaffold warning when an
     /// import cell was inserted, `Ok(None)` when nothing was needed.
     /// Jupyter notebooks never need the scaffold.

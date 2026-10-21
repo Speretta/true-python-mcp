@@ -14,8 +14,8 @@ markdown.
 
 ## Step 1: Type-check the module (`ty_check`)
 
-`ty_check` runs Astral's type checker on the file — compiled in, no
-interpreter, no subprocess — and writes nothing. The LLM sends:
+`ty_check` runs Astral's type checker on the file (compiled in, no
+interpreter, no subprocess) and writes nothing. The LLM sends:
 
 ````json
 {
@@ -37,7 +37,7 @@ revision: 48d8e3328fd98d1d
 ````
 
 The answer names the file, reports the current revision on the
-`revision: 48d8e3328fd98d1d` line — a fingerprint of the file contents — and
+`revision: 48d8e3328fd98d1d` line (a fingerprint of the file contents) and
 lists one diagnostic: `invalid-assignment` at line 7, column 20. The message
 names both types: the `Literal["9.99"]` string is not assignable to the `float`
 annotation.
@@ -65,7 +65,7 @@ revision: ab44d46c50b3e283
 cell 2 2:16 invalid-assignment Object of type `Literal["9.99"]` is not assignable to `float`
 ````
 
-Same code, same message — but the position is written for a notebook. `cell 2`
+Same code, same message, but the position is written for a notebook. `cell 2`
 is the 0-based cell index, and `2:16` is the line and column inside that cell,
 not inside the whole file. Cell 2 is the third cell (indexes start at 0), and
 its second line is the `price: float = "9.99"` assignment.
@@ -111,13 +111,13 @@ print(format_price(price))
 ````
 
 The read confirms the layout. Cell 2 holds three lines, and its second line is
-exactly the assignment the diagnostic pointed at — cell-relative line 2. The
+exactly the assignment the diagnostic pointed at (cell-relative line 2). The
 read returns the same revision as the check (`ab44d46c50b3e283`), so the next
 call can chain from it.
 
 ## Step 4: Fix the cell (`cell_set_source`)
 
-The LLM replaces the whole cell — the string becomes a float — carrying the
+The LLM replaces the whole cell (the string becomes a float), carrying the
 revision from the read:
 
 ````json
@@ -171,7 +171,7 @@ revision: fe042f360f796138
 no type errors found
 ````
 
-No diagnostics — `no type errors found`. The same tool that found the error now
+No diagnostics: `no type errors found`. The same tool that found the error now
 confirms it is gone. `examples/demo/ty_bug.py` is left as it is: `ty_check` is
 read-only and tpmcp's cell tools edit notebooks, not plain modules, so the AI
 reports the module's `7:20 invalid-assignment` line to the user instead of
@@ -195,7 +195,7 @@ The notebook changed like this (`diff -u` against the original):
    }
 ````
 
-One line, one cell — the byte-exact edit the notebook tools always make.
+One line, one cell: the byte-exact edit the notebook tools always make.
 `examples/demo/ty_bug.py` is unchanged on disk; the AI handed the user its
 `7:20 invalid-assignment` line to fix in their editor. Two `ty_check` calls
 found and verified the error; one `cell_set_source` call fixed it.

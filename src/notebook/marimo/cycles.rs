@@ -66,6 +66,7 @@ pub(super) fn cycles(parents: &HashMap<usize, Vec<usize>>) -> Vec<Vec<usize>> {
             } else {
                 let (node, lowlink, index) = (frame.node, frame.lowlink, frame.index);
                 work.pop();
+                // lowlink == index marks an SCC root.
                 if lowlink == index {
                     let mut component = Vec::new();
                     while let Some(member) = stack.pop() {

@@ -4,10 +4,10 @@
 //! [`with_file_lock`] serializes every mutation of one file:
 //!
 //! 1. The in-process mutex (fast path) serializes pipelined tool calls of
-//!    this server instance — rmcp spawns each request as an independent
+//!    this server instance: rmcp spawns each request as an independent
 //!    task, so two `cell_edit`s on one file can genuinely overlap.
 //! 2. An OS advisory lock (`flock`/`LockFileEx` via the `fd-lock` crate, no
-//!    unsafe here) serializes separate tpmcp processes — two AI clients
+//!    unsafe here) serializes separate tpmcp processes: two AI clients
 //!    each spawn their own server, and without this both could pass
 //!    `read_verified` at revision A and the second rename would silently
 //!    destroy the first writer's update.
@@ -18,21 +18,21 @@
 //! the inode behind the path. A `flock` on the notebook's own inode does not
 //! exclude a competitor that opens the path *after* the rename: P1 locks
 //! inode i1 and writes; P2 opens the path, now inode i2, locks i2 without
-//! blocking, verifies and renames — both processes are past-verify at once
+//! blocking, verifies and renames: both processes are past-verify at once
 //! and one update is lost. The lock object must therefore have a *stable
 //! name that is never renamed*. Two candidates:
 //!
 //! - A sidecar next to the notebook (`nb.ipynb.lock`): pollutes the user's
 //!   project directory and git status, and cannot be created at all when
-//!   the notebook's directory is read-only — both realistic for an editing
+//!   the notebook's directory is read-only; both realistic for an editing
 //!   tool.
 //! - A per-canonical-path lock file under the user cache dir (**chosen**):
 //!   `$XDG_CACHE_HOME|~/.cache` (Unix), `~/Library/Caches` (macOS),
 //!   `%LOCALAPPDATA%` (Windows), `tpmcp/locks/<blake3(key)>.lock`. The
 //!   project tree stays clean, locking works for read-only directories, and
 //!   keying by canonical path makes every spelling of the same file share
-//!   one lock — the same key the in-process mutex uses. `TPMCP_LOCK_DIR`
-//!   (absolute) overrides the directory — the test suites and CI use it to
+//!   one lock, the same key the in-process mutex uses. `TPMCP_LOCK_DIR`
+//!   (absolute) overrides the directory; the test suites and CI use it to
 //!   stay out of the real cache.
 //!
 //! Lock files are empty and are never deleted: unlinking a lock file
@@ -41,7 +41,7 @@
 //! per edited file in the cache dir.
 //!
 //! If the lock file cannot be opened or locked (no `$HOME`/`LOCALAPPDATA`,
-//! exotic sandbox), we warn and continue with in-process locking only —
+//! exotic sandbox), we warn and continue with in-process locking only,
 //! degrading to the previous behavior rather than failing every write.
 
 use std::collections::HashMap;
@@ -120,8 +120,8 @@ fn stamp_table() -> &'static RwLock<HashMap<PathBuf, VerifiedStamp>> {
 /// Blocking write lock on the sidecar lock file. On failure we warn and
 /// fall back to in-process locking rather than failing the user's write.
 /// A blocking `flock` can in principle be interrupted (EINTR), but tpmcp
-/// installs no signal handlers on its worker threads — a terminal Ctrl-C
-/// kills the process by default disposition before the syscall returns —
+/// installs no signal handlers on its worker threads. A terminal Ctrl-C
+/// kills the process by default disposition before the syscall returns,
 /// so the reachable failures are environmental (missing cache dir,
 /// sandboxing) and degrading with a loud warning is the useful behavior.
 fn write_lock(lock: &mut fd_lock::RwLock<File>) -> Option<fd_lock::RwLockWriteGuard<'_, File>> {
@@ -143,7 +143,7 @@ fn write_lock(lock: &mut fd_lock::RwLock<File>) -> Option<fd_lock::RwLockWriteGu
 /// Keyed by canonical path so `./a.ipynb` and `/abs/a.ipynb` share one
 /// lock. For a file that does not exist yet, canonicalizing the whole path
 /// fails, so canonicalize the *parent* instead (this resolves symlinked
-/// directories) and re-attach the file name — two spellings of the same
+/// directories) and re-attach the file name: two spellings of the same
 /// future file still share one lock. The `absolute` fallback only applies
 /// when even the parent is missing; create paths then fabricate the
 /// directory, and rename atomicity still guarantees a whole file.

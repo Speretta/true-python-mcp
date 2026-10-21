@@ -1,13 +1,13 @@
 //! Jupyter notebooks (`.ipynb`, nbformat v4).
 //!
-//! Parsing keeps every non-`source` field as passthrough JSON — moved, never
-//! cloned, out of the parsed document — and
+//! Parsing keeps every non-`source` field as passthrough JSON (moved, never
+//! cloned, out of the parsed document), and
 //! [`JupyterNotebook::to_string_canonical`] writes the exact layout Jupyter
 //! and VS Code produce (see [`serialize`]). Untouched cells round-trip
 //! byte-for-byte on files already in that canonical layout, including their
 //! original `source` shape; a file in another layout (CRLF structure,
 //! two-space indent, exotic number spellings) normalizes once on the first
-//! write and is stable afterwards — tests/canonical_forms.rs pins the
+//! write and is stable afterwards; tests/canonical_forms.rs pins the
 //! boundary. An edited cell is normalized to canonical lines, which is what
 //! nbformat does on every save.
 
@@ -72,7 +72,7 @@ impl JupyterNotebook {
         }
         let minor = version_field(&map, "nbformat_minor")?;
         // Consume the parsed document: the cells array moves out of the root
-        // and every passthrough value moves into `extra` — zero clones.
+        // and every passthrough value moves into `extra`; zero clones.
         let raw_cells = match map.remove("cells") {
             Some(Value::Array(cells)) => cells,
             _ => return Err("missing \"cells\" array".to_string()),
@@ -291,7 +291,7 @@ fn parse_cell(index: usize, value: Value) -> Result<Cell, String> {
 }
 
 /// Every remaining field of a consumed JSON object, moved verbatim into
-/// `extra` (the passthrough contract) — no value is cloned.
+/// `extra` (the passthrough contract); no value is cloned.
 fn passthrough(map: Map<String, Value>) -> BTreeMap<String, Value> {
     map.into_iter().collect()
 }

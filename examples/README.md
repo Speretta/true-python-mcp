@@ -17,8 +17,8 @@ the final git diff.
 | [08-ty-check.md](08-ty-check.md) | simple | ty on a plain `.py` file and a notebook: the same type error, the notebook diagnostic carrying a 0-based cell index and a cell-relative line. |
 | [09-format-a-notebook.md](09-format-a-notebook.md) | basic | ruff on a Jupyter `.ipynb`: cell-mapped findings, the safe fix, and `ruff_format` (dry run, then in place) reformatting one cell byte-exactly. |
 | [10-create-a-notebook-from-scratch.md](10-create-a-notebook-from-scratch.md) | simple | A fresh notebook built from `cells` (no `from_path`), then the create-only `file already exists` refusal. |
-| [11-clean-and-restructure-a-notebook.md](11-clean-and-restructure-a-notebook.md) | complex | Tidy a notebook before committing: clear outputs, tag a cell, retype a code cell to markdown, and move it — four cell tools in one flow. |
-| [12-library-docs.md](12-library-docs.md) | simple | `py_docs` on stdlib symbols — signature, parameters, docstring, resolution trace, class `bases`, CPython-source enrichment, the honesty `note` — and `py_module_members`. |
+| [11-clean-and-restructure-a-notebook.md](11-clean-and-restructure-a-notebook.md) | complex | Tidy a notebook before committing: clear outputs, tag a cell, retype a code cell to markdown, and move it (four cell tools in one flow). |
+| [12-library-docs.md](12-library-docs.md) | simple | `py_docs` on stdlib symbols (signature, parameters, docstring, resolution trace, class `bases`, CPython-source enrichment, the honesty `note`) and `py_module_members`. |
 
 The generic `--file-tools` trio (`py_read`, `py_write`, `py_edit`) is off by
 default and deliberately not exemplified here: coding hosts ship their own

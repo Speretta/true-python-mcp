@@ -241,7 +241,7 @@ impl TyDb {
     /// Unix, `<prefix>/Lib` on Windows), when an environment was discovered.
     /// The docs resolver uses this to fall back to the real CPython `Lib/*.py`
     /// source for docstrings the typeshed stub omits. Read-only: it is the same
-    /// discovery [`discover_settings`] already performed — never a subprocess
+    /// discovery [`discover_settings`] already performed; never a subprocess
     /// or interpreter execution.
     ///
     /// The crate's discovery is authoritative on Unix; on Windows it can miss

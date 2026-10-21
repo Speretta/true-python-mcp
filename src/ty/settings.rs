@@ -25,8 +25,8 @@ type SettingsCache = RwLock<HashMap<SettingsCacheKey, Arc<ProgramSettings>>>;
 
 /// Process-wide cache of the discovery result, keyed by the checked file's
 /// parent directory (the source root) and the explicit `python` override (if
-/// any). Discovery — the environment lookup, the site-packages walk, and
-/// search-path resolution — is the expensive half of [`TyDb::new`]. Its product
+/// any). Discovery (the environment lookup, the site-packages walk, and
+/// search-path resolution) is the expensive half of [`TyDb::new`]. Its product
 /// is plain `Send + Sync` data, so it is safe to share; the database itself is
 /// *not* (salsa's `Storage` is per-thread state and must never be shared across
 /// checks). The `python` path participates in the key so an explicit-python
@@ -40,8 +40,8 @@ fn settings_cache() -> &'static SettingsCache {
 /// Resolve the [`ProgramSettings`] for a file rooted at `src_root`, optionally
 /// pinning the type-checking environment with `python`, caching the result per
 /// (source root, python) pair so repeat checks of files in the same directory
-/// skip the filesystem walk. The cache holds settings only — never the salsa
-/// database — so a stale entry is harmless: each check still builds a fresh
+/// skip the filesystem walk. The cache holds settings only, never the salsa
+/// database, so a stale entry is harmless: each check still builds a fresh
 /// [`TyDb`] that reads the checked file's current bytes.
 pub(super) fn discover_settings(
     src_root: &SystemPath,
@@ -204,8 +204,8 @@ fn version_source_name(source: &PythonVersionSource) -> &'static str {
 }
 
 /// The environment discovery order. An explicit signal always wins without
-/// ambiguity; only the ancestor walk — reached when nothing else pinned a
-/// choice — can be ambiguous:
+/// ambiguity; only the ancestor walk (reached when nothing else pinned a
+/// choice) can be ambiguous:
 ///
 /// 1. an explicit `python` param (an interpreter or a venv root);
 /// 2. the `VIRTUAL_ENV` env var ("the choice is already made");
@@ -219,8 +219,8 @@ fn discover_environment(
     system: &TySystem,
 ) -> Result<Option<PythonEnvironment>, Error> {
     // (1) Explicit `python` wins. `PythonCliFlag` is the origin whose path
-    // semantics match the param — it may name an interpreter *or* a
-    // `sys.prefix` dir — unlike `VirtualEnvVar`/`LocalVenv`, which demand a
+    // semantics match the param (it may name an interpreter *or* a
+    // `sys.prefix` dir), unlike `VirtualEnvVar`/`LocalVenv`, which demand a
     // venv root and reject a bare interpreter.
     if let Some(python) = python {
         let python_sys = to_system_path(python).ok_or_else(|| {
@@ -282,7 +282,7 @@ fn discover_environment(
 }
 
 /// Walks `src_root`'s ancestor chain and collects every child named `.venv` or
-/// `venv` that actually holds a `pyvenv.cfg` — a real virtual environment, not a
+/// `venv` that actually holds a `pyvenv.cfg`, a real virtual environment, not a
 /// bare directory with a suggestive name.
 fn ancestor_venvs(src_root: &SystemPath, system: &TySystem) -> Vec<SystemPathBuf> {
     let mut found = Vec::new();

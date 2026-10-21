@@ -1,5 +1,5 @@
-//! The `py_docs` tool: resolve a dotted Python symbol — `json.dumps`,
-//! `typing.Any`, `print` — to its kind, rendered signature, structured
+//! The `py_docs` tool: resolve a dotted Python symbol (`json.dumps`,
+//! `typing.Any`, `print`) to its kind, rendered signature, structured
 //! parameters, return type and docstring, using ty's IDE support. Read-only:
 //! no interpreter, no subprocess, no write into the caller's tree.
 
@@ -26,7 +26,7 @@ pub struct PyDocsArgs {
     /// walked as attributes.
     pub symbol: String,
     /// Optional anchor: a `.py`/`.ipynb` file or a directory. A file anchors
-    /// at its parent directory, a directory anchors at itself — the search
+    /// at its parent directory, a directory anchors at itself, and the search
     /// root and environment are discovered next to it, as `ty_check` does.
     /// Omit to anchor at the current directory.
     #[serde(default)]
@@ -48,16 +48,14 @@ pub struct PyModuleMembersArgs {
     /// The resolved members are listed with their kind, one-line signature and
     /// one-line docstring.
     pub module: String,
-    /// Optional anchor: a `.py`/`.ipynb` file or a directory. A file anchors
-    /// at its parent directory, a directory anchors at itself — the search
-    /// root and environment are discovered next to it, as `ty_check` does.
-    /// Omit to anchor at the current directory.
+    /// Optional anchor for the search root and environment, matching
+    /// `py_docs`'s `path`: a file anchors at its parent directory, a
+    /// directory anchors at itself. Omit to anchor at the current directory.
     #[serde(default)]
     pub path: Option<PathBuf>,
-    /// Optional path to a Python interpreter or a virtual-environment root to
-    /// resolve against (its site-packages). Omit to auto-discover the
-    /// environment: VIRTUAL_ENV, CONDA_PREFIX, then a `.venv`/`venv` ancestor
-    /// walk, then the system Python.
+    /// Optional Python interpreter or virtual-environment root to resolve
+    /// against, matching `py_docs`'s `python`. Omit to auto-discover the
+    /// environment.
     #[serde(default)]
     pub python: Option<PathBuf>,
     /// Result format, "markdown" (default) or "json".

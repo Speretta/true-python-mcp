@@ -1,10 +1,10 @@
-# Find one value in a big notebook — and verify the whole thing
+# Find one value in a big notebook, and verify the whole thing
 
 The user has `examples/demo/report.ipynb`, a 40-cell monthly report, and one
 value in it changed. Reading 40 cell bodies to find it would burn tokens for
 nothing, so the AI navigates with the outline and the query view, hits a
 revision conflict because the user edits the same file in VS Code mid-session,
-recovers, and verifies the result — findings and lint included — in the same
+recovers, and verifies the result (findings and lint included) in the same
 single read.
 
 > **User asks the AI:** *"In examples/demo/report.ipynb the tax rate changed:
@@ -27,7 +27,7 @@ The LLM sends:
 }
 ````
 
-tpmcp answers — one row per cell instead of 40 fenced bodies:
+tpmcp answers with one row per cell instead of 40 fenced bodies:
 ````markdown
 notebook: examples/demo/report.ipynb
 revision: 3954eebcbd18aaec
@@ -115,7 +115,7 @@ cells: 40 (36 code, 4 markdown) · nbformat 4.5
 ````
 
 Each row is the cell's index, type, line count and first line (long lines are
-cut at a fixed budget — cell 38's sum is truncated). The AI can see the
+cut at a fixed budget; cell 38's sum is truncated). The AI can see the
 `tax_rate` definition at cell 4 without reading a single body.
 
 ## Step 2: Page through matches (`notebook_read`, `query` + `limit`)
@@ -162,7 +162,7 @@ matches: 25 cell(s), 33 line(s)
 
 `query` returns only the matching cells and lines, with the 1-based line
 numbers `cell_set_source` ranges use. `start`/`limit` page through the match
-list — 25 cells match `revenue_q`, so the first page of 5 comes with a
+list. 25 cells match `revenue_q`, so the first page of 5 comes with a
 steering line for the other 20.
 
 ## Step 3: Find the definition (`notebook_read`, `query`)
@@ -201,7 +201,7 @@ matches: 9 cell(s), 9 line(s)
 
 Nine cells mention `tax_rate`; the first match is the definition
 (`tax_rate = 0.19`, cell 4) and the rest just use it, so cell 4 is the only
-edit. The query response also carries the file revision — query views chain
+edit. The query response also carries the file revision; query views chain
 into mutations exactly like full reads.
 
 ## Meanwhile, in VS Code
@@ -235,7 +235,7 @@ The machine-readable part (structuredContent):
 {"current_revision": "52614b24a6b1e18c", "error": "conflict", "expected_revision": "3954eebcbd18aaec", "message": "revision conflict for examples/demo/report.ipynb: expected 3954eebcbd18aaec, file is now at 52614b24a6b1e18c; re-read the file and retry with its current revision", "path": "examples/demo/report.ipynb"}
 ````
 
-The revision came from step 3, before the user's save — so the write is
+The revision came from step 3, before the user's save, so the write is
 refused and nothing on disk changes. The error carries the current revision,
 which is all the AI needs to recover.
 
@@ -302,7 +302,7 @@ revision: 9421a0d00b66e6bc
 
 The user also asked that the notebook stay clean. Instead of a separate
 `notebook_check` + `ruff_check` round-trip, the AI rides the diagnostics on
-the next read — with `limit=3`, because only the header and the findings
+the next read, with `limit=3`, because only the header and the findings
 matter now:
 
 The LLM sends:
@@ -336,8 +336,8 @@ diagnostics: 0 finding(s), 1 lint issue(s)
 - lint cell 1 1:8 F401 `statistics` imported but unused [fixable: safe]
 ````
 
-The notebook is structurally valid (0 findings), and the lint half — ruff
-running over the same snapshot, mapped to cell indexes — flags one real
+The notebook is structurally valid (0 findings), and the lint half (ruff
+running over the same snapshot, mapped to cell indexes) flags one real
 leftover: cell 1 imports `statistics` and nothing in the notebook uses it.
 The outline rows also confirm the user's `(draft)` retitle survived: the
 refused write of step 4 touched nothing.
@@ -438,8 +438,8 @@ The file changed exactly where it should (`diff -u` against the original):
 ````
 
 All three edits survived: the user's retitle, the new tax rate, and the
-removed unused import. The whole flow — find the cell, edit it, verify the
-notebook — cost two mutating round-trips plus reads that double as
+removed unused import. The whole flow (find the cell, edit it, verify the
+notebook) cost two mutating round-trips plus reads that double as
 navigation and verification.
 
 ## The input file
@@ -447,6 +447,6 @@ navigation and verification.
 `examples/demo/report.ipynb` (40 cells, generated with the real `nbformat`
 library, outputs stored as real executions produce them): a markdown title,
 an unused `import statistics`, `base = 100`, the `tax_rate = 0.19`
-definition, then eight quarters of revenue/cost/margin/net cells — every
-`net_qN` computed from `tax_rate` — and a summary. Too long to quote here;
+definition, then eight quarters of revenue/cost/margin/net cells (every
+`net_qN` computed from `tax_rate`), and a summary. Too long to quote here;
 `git checkout examples/demo` restores it after you replay the flow.

@@ -75,7 +75,7 @@ fn push_literal_region(builder: &mut Builder, text: &str) {
 /// read-only so the LLM can see the broken code. The trailing whitespace up
 /// to the next region boundary becomes its own literal segment, so broken
 /// cells honor the file-wide invariant that cell blocks never end in a
-/// newline and separators live between segments — deleting or inserting
+/// newline and separators live between segments; deleting or inserting
 /// cells around a broken one must not fuse its neighbors.
 fn broken_cell(text: &str) -> (Cell, CellMeta, String) {
     let content_end = text.trim_end_matches(['\n', '\r', ' ', '\t']).len();
@@ -129,7 +129,7 @@ fn split_regions(src: &str) -> Vec<(usize, usize, Region)> {
 /// Decorator stacks split across a region boundary: a trailing run of
 /// column-0 decorator lines (comment and blank lines transparent) at the end
 /// of one region grammatically belongs to the def or class that starts the
-/// next region — the structured parser reads the whole stack as ONE statement
+/// next region. The structured parser reads the whole stack as ONE statement
 /// and `classify` looks at every decorator in it, so the scanner must see the
 /// same bytes in one region. Move the boundary back to the start of the run.
 ///

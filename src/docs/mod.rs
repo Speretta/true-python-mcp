@@ -1,12 +1,12 @@
-//! The `py_docs` symbol resolver: resolve a dotted Python symbol —
-//! `json.dumps`, `typing.Any`, `print` — to its kind, rendered signature,
+//! The `py_docs` symbol resolver: resolve a dotted Python symbol
+//! (`json.dumps`, `typing.Any`, `print`) to its kind, rendered signature,
 //! structured parameters, return type and docstring, fully local, using ty's
 //! IDE support on top of the hand-assembled [`TyDb`].
 //!
 //! Resolution is *anchor = environment*: `src_root` selects the search paths
 //! (reusing `TyDb`'s discovery, so a first-party module shadows the installed
-//! package exactly as `sys.path` would). The first segment is an import — or a
-//! builtin, resolved through the same fallback — and the remaining segments are
+//! package exactly as `sys.path` would). The first segment is an import (or a
+//! builtin, resolved through the same fallback), and the remaining segments are
 //! walked as attributes on the inferred receiver type. The synthetic module
 //! ends in a call (`json.dumps()`) so [`call_signature_details`] can split the
 //! signature into structured parameters; a bare reference would expose only the
@@ -18,19 +18,19 @@
 //! the first is reported. The `disambiguation` marker records *how* ty split
 //! the symbol:
 //!
-//! - `unique` — exactly one definition, one signature;
-//! - `overloads` — one callable with `@overload`s (one `signatures[]` entry per
+//! - `unique`: exactly one definition, one signature;
+//! - `overloads`: one callable with `@overload`s (one `signatures[]` entry per
 //!   overload);
-//! - `union` — a union of callables, one signature per element;
-//! - `multiple` — several genuinely-distinct definitions (all listed in
+//! - `union`: a union of callables, one signature per element;
+//! - `multiple`: several genuinely-distinct definitions (all listed in
 //!   `candidates`);
-//! - `reexport` — the terminal definition is itself a re-exported import;
-//! - `stub_mapped` — reserved for Phase 2b stub→source mapping (not yet
+//! - `reexport`: the terminal definition is itself a re-exported import;
+//! - `stub_mapped`: reserved for Phase 2b stub→source mapping (not yet
 //!   produced).
 //!
 //! A dotted path is walked hop by hop and the `resolution` trace carries one
 //! entry per segment, so a dead-end is reported at the failing segment with its
-//! receiver type — never a silent wrong answer.
+//! receiver type, never a silent wrong answer.
 
 mod doctest;
 mod enrich;
@@ -101,7 +101,7 @@ pub struct DocSymbol {
     /// `module`, `class`, `method`, `function`, `attribute`, `type_alias`, or
     /// `other`.
     pub kind: String,
-    /// Rendered signatures — one per overload, or the constructor for a class
+    /// Rendered signatures: one per overload, or the constructor for a class
     /// (empty when the symbol is not callable).
     pub signatures: Vec<String>,
     /// Rendered return type, when the terminal is callable (first overload).
@@ -116,7 +116,7 @@ pub struct DocSymbol {
     /// (empty when the docstring has none — an honest empty list).
     pub doctest_examples: Vec<String>,
     /// When the docstring is missing, a short human-readable note explaining
-    /// why and what was looked at — never a silent `None`.
+    /// why and what was looked at, never a silent `None`.
     pub note: Option<String>,
     /// For a class, the rendered superclass names (direct bases, `object`
     /// included when there is no explicit base).
@@ -284,7 +284,7 @@ fn resolve_on_db(
 
     // The overload's own docstring, falling back to the runtime implementation
     // (overload declarations often omit theirs), then to the interpreter's real
-    // CPython `Lib/*.py` source — and, when nothing has it, an honest note
+    // CPython `Lib/*.py` source, and, when nothing has it, an honest note
     // instead of a silent `None`.
     let docstring = resolve_docstring(
         db,

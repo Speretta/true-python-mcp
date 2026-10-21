@@ -16,7 +16,7 @@ pub(super) struct Detected {
     /// Markdown text as marimo exposes it (dedented, stripped).
     pub text: String,
     /// String prefix tag in source order: the leading (max two) characters
-    /// from `r`, `t`, `f` — what marimo's serializer preserves on rewrite.
+    /// from `r`, `t`, `f` (what marimo's serializer preserves on rewrite).
     pub tag: String,
     /// Comment lines between the signature and the `mo.md(` call; kept
     /// verbatim across edits (marimo preserves everything outside the call).
