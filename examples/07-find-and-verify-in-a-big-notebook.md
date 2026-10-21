@@ -390,7 +390,7 @@ cells: 39 (35 code, 4 markdown) · nbformat 4.5
 ### [1] code · 1 lines · base = 100
 
 diagnostics: 0 finding(s), 0 lint issue(s)
-no findings: the notebook is valid
+no findings: the notebook passes this check
 ````
 
 39 cells, zero findings, zero lint issues.

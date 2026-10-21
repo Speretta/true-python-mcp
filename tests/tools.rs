@@ -721,6 +721,16 @@ fn notebook_check_over_the_wire() {
     assert!(!err);
     assert_eq!(sc["findings"].as_array().unwrap().len(), 0, "{sc}");
 
+    // A clean notebook is described as passing *this* check (a documented
+    // subset), never overclaimed as "valid".
+    let (err, text, _) = server.call(
+        "notebook_check",
+        json!({"path": "tests/data/vscode_sample.ipynb"}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("passes this check"), "{text}");
+    assert!(!text.contains("is valid"), "{text}");
+
     // marimo graph findings flow through the same tool
     let (err, _, sc) = server.call(
         "notebook_check",

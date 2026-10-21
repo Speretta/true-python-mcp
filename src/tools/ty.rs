@@ -66,10 +66,15 @@ impl Tpmcp {
             let snapshot = fs::read(&args.path)?;
             let diagnostics =
                 ty::check_snapshot_with_python(&args.path, &snapshot, args.python.as_deref())?;
+            // Disclose the environment the check actually targeted: which
+            // Python version, where it was measured, and the interpreter
+            // prefix — never a silent static assumption.
+            let src_root = args.path.parent().unwrap_or_else(|| Path::new("."));
+            let target = ty::version_info(src_root, args.python.as_deref())?;
             Ok(respond(
                 args.format,
-                || ty_markdown(&args.path, &snapshot.revision, &diagnostics),
-                || ty_json(&args.path, &snapshot.revision, &diagnostics),
+                || ty_markdown(&args.path, &snapshot.revision, &diagnostics, &target),
+                || ty_json(&args.path, &snapshot.revision, &diagnostics, &target),
             ))
         })
         .await
@@ -78,10 +83,26 @@ impl Tpmcp {
 
 // ---- rendering ----
 
-fn ty_markdown(path: &Path, revision: &str, diagnostics: &[Diagnostic]) -> String {
+fn target_markdown(out: &mut String, target: &ty::PythonTarget) {
+    out.push_str(&format!("python_version: {}\n", target.python_version));
+    out.push_str(&format!("version_source: {}\n", target.version_source));
+    let environment = target.environment.as_deref().unwrap_or("unknown");
+    out.push_str(&format!("environment: {environment}\n"));
+    if let Some(note) = &target.note {
+        out.push_str(&format!("note: {note}\n"));
+    }
+}
+
+fn ty_markdown(
+    path: &Path,
+    revision: &str,
+    diagnostics: &[Diagnostic],
+    target: &ty::PythonTarget,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("ty check: {}\n", path.display()));
     out.push_str(&format!("revision: {revision}\n"));
+    target_markdown(&mut out, target);
     if diagnostics.is_empty() {
         out.push_str("no type errors found\n");
         return out;
@@ -94,10 +115,19 @@ fn ty_markdown(path: &Path, revision: &str, diagnostics: &[Diagnostic]) -> Strin
     out
 }
 
-fn ty_json(path: &Path, revision: &str, diagnostics: &[Diagnostic]) -> serde_json::Value {
+fn ty_json(
+    path: &Path,
+    revision: &str,
+    diagnostics: &[Diagnostic],
+    target: &ty::PythonTarget,
+) -> serde_json::Value {
     json!({
         "path": path.display().to_string(),
         "revision": revision,
+        "python_version": target.python_version,
+        "version_source": target.version_source,
+        "environment": target.environment,
+        "note": target.note,
         "diagnostic_count": diagnostics.len(),
         "diagnostics": diagnostics,
     })

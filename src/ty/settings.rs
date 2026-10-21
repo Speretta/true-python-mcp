@@ -8,7 +8,7 @@ use ty_module_resolver::{FallibleStrategy, SearchPathSettings};
 use ty_python_core::platform::PythonPlatform;
 use ty_python_core::program::ProgramSettings;
 use ty_python_semantic::{PythonVersionSource, PythonVersionWithSource};
-use ty_site_packages::{PythonEnvironment, SysPrefixPathOrigin};
+use ty_site_packages::{PythonEnvironment, SitePackagesPaths, SysPrefixPathOrigin};
 
 use crate::error::Error;
 
@@ -71,27 +71,26 @@ pub(super) fn discover_settings(
     let vendored = ty_vendored::file_system().clone();
     let mut search_path_settings = SearchPathSettings::new(vec![src_root.to_path_buf()]);
     let environment = discover_environment(src_root, python, &system)?;
-    if let Some(environment) = &environment {
-        search_path_settings.site_packages_paths = environment
-            .site_packages_paths(&system)
-            .map_err(|error| Error::analysis(format!("site-packages discovery failed: {error}")))?
-            .into_vec();
+    // Resolve the environment's site-packages once: they feed both the search
+    // paths and the version measurement below.
+    let site_packages = match &environment {
+        Some(environment) => Some(environment.site_packages_paths(&system).map_err(|error| {
+            Error::analysis(format!("site-packages discovery failed: {error}"))
+        })?),
+        None => None,
+    };
+    // Target the discovered environment's Python version: a venv's `pyvenv.cfg`
+    // records the interpreter version that created it, and the site-packages
+    // layout (`<prefix>/lib/pythonX.Y/site-packages`) names it for a system
+    // environment. Only when neither is measurable do we fall back — and that
+    // fallback is disclosed, never a silent 3.11 (see [`PythonTarget`]).
+    let python_version = resolve_python_version(&environment, &site_packages);
+    if let Some(site_packages) = site_packages {
+        search_path_settings.site_packages_paths = site_packages.into_vec();
     }
     let search_paths = search_path_settings
         .to_search_paths(&system, &vendored, &FallibleStrategy)
         .map_err(|error| Error::analysis(format!("invalid search paths: {error}")))?;
-    // Target the discovered environment's Python version: a venv's `pyvenv.cfg`
-    // records the interpreter version that created it, and that grammar is what
-    // the checker must accept. A system environment has no such metadata, so it
-    // falls back to the 3.11 default the CLI would use.
-    let python_version = environment
-        .as_ref()
-        .and_then(|env| env.python_version_from_metadata())
-        .cloned()
-        .unwrap_or_else(|| PythonVersionWithSource {
-            version: PythonVersion::default(),
-            source: PythonVersionSource::default(),
-        });
     // Keep the discovered environment on the settings: ty's own `ProgramSettings`
     // carries `python_environment` so queries can reuse it instead of re-walking
     // discovery. The docs resolver reads it back for `real_stdlib_path`.
@@ -107,6 +106,101 @@ pub(super) fn discover_settings(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(key, settings.clone());
     Ok(settings)
+}
+
+/// The Python version and environment a check or docs resolution actually
+/// targeted, disclosed so the caller never gets a silent static assumption.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PythonTarget {
+    /// Rendered `major.minor`, e.g. "3.11".
+    pub python_version: String,
+    /// Where the version was measured: `pyvenv_cfg`, `site_packages_layout`,
+    /// `config_file`, `script_metadata`, `cli`, `editor`, or `unknown` when it
+    /// fell back to the default without a measurement.
+    pub version_source: String,
+    /// The discovered environment's `sys.prefix`, when one was found.
+    pub environment: Option<String>,
+    /// An honest note when the version was not measured (default fallback).
+    pub note: Option<String>,
+}
+
+/// Discloses the Python target for `src_root` (a directory) with the same
+/// discovery order `ty_check` uses. Discovery is the cached half of
+/// [`TyDb::new`], so calling this after a check is effectively free.
+pub fn version_info(src_root: &Path, python: Option<&Path>) -> Result<PythonTarget, Error> {
+    let src_root_sys = to_system_path(src_root).ok_or_else(|| {
+        Error::invalid_input(format!(
+            "source root is not representable: {}",
+            src_root.display()
+        ))
+    })?;
+    let settings = discover_settings(src_root_sys.as_path(), python)?;
+    Ok(python_target_from_settings(&settings))
+}
+
+/// Reads the disclosure fields back off a resolved [`ProgramSettings`].
+fn python_target_from_settings(settings: &ProgramSettings) -> PythonTarget {
+    let version = settings.python_version.version;
+    let version_source = version_source_name(&settings.python_version.source);
+    let environment = settings
+        .python_environment
+        .as_ref()
+        .ok()
+        .and_then(|environment| environment.as_ref())
+        .map(|environment| environment.sys_prefix().as_str().to_string());
+    let note = (version_source == "unknown").then(|| {
+        format!("targeting Python {version} (default fallback; interpreter version not measured)")
+    });
+    PythonTarget {
+        python_version: version.to_string(),
+        version_source: version_source.to_string(),
+        environment,
+        note,
+    }
+}
+
+/// Measures the Python version from the discovered environment, most
+/// trustworthy first: the `pyvenv.cfg` metadata (a venv records the interpreter
+/// that made it), then the site-packages layout (`<prefix>/lib/pythonX.Y/
+/// site-packages`, which names the version for a system environment on Unix).
+/// Only when neither is measurable does this fall back to the 3.11 default with
+/// `source: Default`, which [`python_target_from_settings`] discloses as
+/// `unknown` rather than passing it off as measured.
+fn resolve_python_version(
+    environment: &Option<PythonEnvironment>,
+    site_packages: &Option<SitePackagesPaths>,
+) -> PythonVersionWithSource {
+    if let Some(version) = environment
+        .as_ref()
+        .and_then(PythonEnvironment::python_version_from_metadata)
+    {
+        return version.clone();
+    }
+    if let Some(version) = site_packages
+        .as_ref()
+        .and_then(SitePackagesPaths::python_version_from_layout)
+    {
+        return version;
+    }
+    PythonVersionWithSource {
+        version: PythonVersion::default(),
+        source: PythonVersionSource::default(),
+    }
+}
+
+/// The [`PythonVersionSource`] rendered for disclosure.
+/// [`PythonVersionSource::Default`] is reported as `unknown` — it means the
+/// version was never measured, not that it is known to be the default.
+fn version_source_name(source: &PythonVersionSource) -> &'static str {
+    match source {
+        PythonVersionSource::ConfigFile(_) => "config_file",
+        PythonVersionSource::ScriptMetadata(_) => "script_metadata",
+        PythonVersionSource::PyvenvCfgFile(_) => "pyvenv_cfg",
+        PythonVersionSource::InstallationDirectoryLayout { .. } => "site_packages_layout",
+        PythonVersionSource::Cli => "cli",
+        PythonVersionSource::Editor => "editor",
+        PythonVersionSource::Default => "unknown",
+    }
 }
 
 /// The environment discovery order. An explicit signal always wins without

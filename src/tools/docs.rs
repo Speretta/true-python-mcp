@@ -17,6 +17,7 @@ use crate::error::Error;
 use crate::render::Format;
 use crate::server::Tpmcp;
 use crate::tools::{blocking, respond};
+use crate::ty::{self, PythonTarget};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PyDocsArgs {
@@ -96,10 +97,11 @@ impl Tpmcp {
                 Some(src_root),
                 args.python.as_deref(),
             )?;
+            let target = ty::version_info(src_root, args.python.as_deref())?;
             Ok(respond(
                 args.format,
-                || docs_markdown(&args.symbol, &symbol),
-                || docs_json(&args.symbol, &symbol),
+                || docs_markdown(&args.symbol, &symbol, &target),
+                || docs_json(&args.symbol, &symbol, &target),
             ))
         })
         .await
@@ -131,10 +133,11 @@ impl Tpmcp {
             let src_root = anchor_src_root(args.path.as_deref());
             let module =
                 docs::resolve_module_members(&args.module, Some(src_root), args.python.as_deref())?;
+            let target = ty::version_info(src_root, args.python.as_deref())?;
             Ok(respond(
                 args.format,
-                || members_markdown(&module),
-                || members_json(&module),
+                || members_markdown(&module, &target),
+                || members_json(&module, &target),
             ))
         })
         .await
@@ -154,9 +157,23 @@ fn anchor_src_root(path: Option<&Path>) -> &Path {
     }
 }
 
-fn docs_markdown(symbol: &str, resolved: &DocSymbol) -> String {
+fn target_markdown(out: &mut String, target: &PythonTarget) {
+    let _ = writeln!(out, "python_version: {}", target.python_version);
+    let _ = writeln!(out, "version_source: {}", target.version_source);
+    let _ = writeln!(
+        out,
+        "environment: {}",
+        target.environment.as_deref().unwrap_or("unknown")
+    );
+    if let Some(note) = &target.note {
+        let _ = writeln!(out, "note: {note}");
+    }
+}
+
+fn docs_markdown(symbol: &str, resolved: &DocSymbol, target: &PythonTarget) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "py_docs: {symbol}");
+    target_markdown(&mut out, target);
     let _ = writeln!(out, "resolved_name: {}", resolved.resolved_name);
     let _ = writeln!(out, "kind: {} ({})", resolved.kind, resolved.disambiguation);
     if !resolved.bases.is_empty() {
@@ -230,9 +247,13 @@ fn docs_markdown(symbol: &str, resolved: &DocSymbol) -> String {
     out
 }
 
-fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
+fn docs_json(symbol: &str, resolved: &DocSymbol, target: &PythonTarget) -> serde_json::Value {
     json!({
         "symbol": symbol,
+        "python_version": target.python_version,
+        "version_source": target.version_source,
+        "environment": target.environment,
+        "note": target.note,
         "resolved_name": resolved.resolved_name,
         "kind": resolved.kind,
         "disambiguation": resolved.disambiguation,
@@ -252,9 +273,10 @@ fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
     })
 }
 
-fn members_markdown(module: &DocModule) -> String {
+fn members_markdown(module: &DocModule, target: &PythonTarget) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "py_module_members: {}", module.module);
+    target_markdown(&mut out, target);
     let _ = writeln!(out, "resolved_name: {}", module.resolved_name);
     let _ = write!(out, "member_count: {}", module.member_count);
     if module.truncated {
@@ -277,9 +299,13 @@ fn members_markdown(module: &DocModule) -> String {
     out
 }
 
-fn members_json(module: &DocModule) -> serde_json::Value {
+fn members_json(module: &DocModule, target: &PythonTarget) -> serde_json::Value {
     json!({
         "module": module.module,
+        "python_version": target.python_version,
+        "version_source": target.version_source,
+        "environment": target.environment,
+        "note": target.note,
         "resolved_name": module.resolved_name,
         "member_count": module.member_count,
         "truncated": module.truncated,

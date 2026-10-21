@@ -95,7 +95,7 @@ fn enrich_from_cpython(
                 definition_file.as_str()
             )
         } else {
-            "no docstring: the definition has none (C extension or bare stub)".to_string()
+            "no docstring: the definition has none".to_string()
         };
         return Enrichment::Missing { note };
     };

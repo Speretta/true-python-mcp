@@ -327,7 +327,7 @@ fn notebook_check_markdown(
         path.display()
     );
     if findings.is_empty() {
-        out.push_str("no findings: the notebook is valid\n");
+        out.push_str("no findings: the notebook passes this check\n");
         return out;
     }
     out.push_str(&format!(

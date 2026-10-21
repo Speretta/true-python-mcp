@@ -35,11 +35,11 @@ pub fn diagnostics_markdown(findings: &[Finding], lint: &Lint) -> String {
     out.push('\n');
     match lint {
         Lint::Issues(diagnostics) if findings.is_empty() && diagnostics.is_empty() => {
-            out.push_str("no findings: the notebook is valid\n");
+            out.push_str("no findings: the notebook passes this check\n");
             return out;
         }
         Lint::NotRequested if findings.is_empty() => {
-            out.push_str("no findings: the notebook is valid\n");
+            out.push_str("no findings: the notebook passes this check\n");
             return out;
         }
         Lint::Unavailable(reason) => {
