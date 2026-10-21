@@ -274,7 +274,7 @@ fn parse_cell(index: usize, value: Value) -> Result<Cell, String> {
                 };
                 lines.push(line);
             }
-            SourceText::Lines(lines)
+            SourceText::from_lines(lines)
         }
         Some(_) => {
             return Err(format!(

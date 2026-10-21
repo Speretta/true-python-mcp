@@ -120,7 +120,7 @@ fn emit_cells(out: &mut String, cells: &[Cell], depth: usize) {
 fn emit_source(out: &mut String, source: &SourceText, depth: usize) {
     match source {
         SourceText::Str(text) => emit_string(out, text),
-        SourceText::Lines(lines) => {
+        SourceText::Lines { lines, .. } => {
             if lines.is_empty() {
                 out.push_str("[]");
                 return;
