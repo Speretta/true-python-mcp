@@ -5,10 +5,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 mod common;
 
+use std::path::Path;
+
+use common::ground_truth_python;
 use common::server::Server;
 use common::temp_dir;
 use serde_json::json;
-use tpmcp::docs::{resolve_module_members, resolve_symbol};
+use tpmcp::docs::{resolve_module_members, resolve_symbol, resolve_symbol_with_python};
 
 /// `json.dumps` resolves to a function whose rendered signature names `dumps`
 /// and its parameters, and whose docstring typeshed keeps.
@@ -379,6 +382,31 @@ fn py_module_members_json_over_the_wire() {
     let (err, text, _) = server.call("py_module_members", json!({"module": "no_such_module_xyz"}));
     assert!(err, "unknown module must be an error, got: {text}");
     assert!(text.contains("did not resolve"), "{text}");
+}
+
+/// A definition with no typeshed docstring falls back to the interpreter's real
+/// CPython `Lib/*.py` source and reports `docstring_source: "source"`.
+#[test]
+fn enriches_docstring_from_real_source() {
+    let Some(python) = ground_truth_python() else {
+        return;
+    };
+    let dir = temp_dir("docs-enrich");
+    let symbol =
+        resolve_symbol_with_python("antigravity.geohash", Some(&dir), Some(Path::new(&python)))
+            .unwrap();
+    assert_eq!(symbol.kind, "function");
+    assert_eq!(symbol.docstring_source, "source");
+    assert!(
+        symbol
+            .docstring
+            .as_deref()
+            .is_some_and(|docstring| docstring.contains("geohash")),
+        "expected the real-source docstring: {:?}",
+        symbol.docstring
+    );
+    assert!(symbol.note.is_none(), "enriched symbols carry no note");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A symbol with no docstring anywhere returns an honest note, never a bare

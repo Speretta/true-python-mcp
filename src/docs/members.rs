@@ -225,7 +225,9 @@ fn resolve_member<'db>(
     member.signature = raw_signature.map(|signature| one_line_signature(&signature));
 
     let docstring = resolve_docstring(
+        db,
         &first.focus_range(db).file().path(db).clone(),
+        name,
         is_stub_of(db, first),
         first
             .docstring(db)

@@ -92,11 +92,14 @@ pub(super) fn discover_settings(
             version: PythonVersion::default(),
             source: PythonVersionSource::default(),
         });
+    // Keep the discovered environment on the settings: ty's own `ProgramSettings`
+    // carries `python_environment` so queries can reuse it instead of re-walking
+    // discovery. The docs resolver reads it back for `real_stdlib_path`.
     let settings = Arc::new(ProgramSettings {
         python_version,
         python_platform: PythonPlatform::default(),
         search_paths,
-        python_environment: Ok(None),
+        python_environment: Ok(environment),
     });
 
     settings_cache()

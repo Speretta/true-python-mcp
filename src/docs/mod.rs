@@ -233,10 +233,13 @@ pub fn resolve_symbol_with_python(
     let source_line = Some(line_index.line_index(focus.range().start()).get());
 
     // The overload's own docstring, falling back to the runtime implementation
-    // (overload declarations often omit theirs) — and, when nothing has it, an
-    // honest note instead of a silent `None`.
+    // (overload declarations often omit theirs), then to the interpreter's real
+    // CPython `Lib/*.py` source — and, when nothing has it, an honest note
+    // instead of a silent `None`.
     let docstring = resolve_docstring(
+        &db,
         &definition_path,
+        &resolved_name,
         is_stub,
         first
             .docstring(&db)
