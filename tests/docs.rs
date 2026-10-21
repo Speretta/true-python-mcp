@@ -429,14 +429,15 @@ fn enriches_docstring_from_real_source() {
         resolve_symbol_with_python("antigravity.geohash", Some(&dir), Some(Path::new(&python)))
             .unwrap();
     assert_eq!(symbol.kind, "function");
-    assert_eq!(symbol.docstring_source, "source");
+    assert_eq!(symbol.docstring_source, "source", "note: {:?}", symbol.note);
     assert!(
         symbol
             .docstring
             .as_deref()
             .is_some_and(|docstring| docstring.contains("geohash")),
-        "expected the real-source docstring: {:?}",
-        symbol.docstring
+        "expected the real-source docstring: {:?} (note: {:?})",
+        symbol.docstring,
+        symbol.note
     );
     assert!(symbol.note.is_none(), "enriched symbols carry no note");
     std::fs::remove_dir_all(&dir).unwrap();
