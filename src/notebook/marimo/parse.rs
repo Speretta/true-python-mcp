@@ -53,8 +53,8 @@ fn parse_structured(src: &str, parsed: &Parsed<ModModule>) -> Result<MarimoNoteb
 /// it classifies as a cell block) or a literal segment, and the bytes
 /// between statements are kept verbatim. [`parse_structured`] runs it over
 /// the whole file; the scanner fallback runs it over each region that parses
-/// on its own, so both parsers make identical decisions for identical bytes
-/// — a file degrading into the scanner must not change the cells an edit did
+/// on its own, so both parsers make identical decisions for identical bytes.
+/// A file degrading into the scanner must not change the cells an edit did
 /// not touch (tests/property.rs, property 3).
 pub(super) fn walk_statements(builder: &mut Builder, src: &str, parsed: &Parsed<ModModule>) {
     let mut pos = 0usize;
@@ -90,7 +90,7 @@ pub(super) fn walk_statements(builder: &mut Builder, src: &str, parsed: &Parsed<
     }
 }
 
-/// The accumulator both marimo walkers fill — the structured parse and the
+/// The accumulator both marimo walkers fill (the structured parse and the
 /// scanner fallback: literal/cell segments, the parsed cells with their
 /// metas, and the header markers seen so far.
 #[derive(Default)]

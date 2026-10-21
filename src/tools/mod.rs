@@ -29,8 +29,8 @@ use crate::render::Format;
 /// Tool bodies block for real work: cross-process file locks wait on other
 /// processes, and ruff lint/format passes take seconds on large files. The
 /// current-thread runtime pumps stdio on its only worker, so bodies must
-/// never run on it directly. A panic inside a body — only possible in
-/// dependencies, since tpmcp's own code is panic-free — surfaces as an
+/// never run on it directly. A panic inside a body (only possible in
+/// dependencies, since tpmcp's own code is panic-free) surfaces as an
 /// [`Error::Internal`] tool result instead of killing the server.
 pub async fn blocking(
     work: impl FnOnce() -> Result<CallToolResult, Error> + Send + 'static,

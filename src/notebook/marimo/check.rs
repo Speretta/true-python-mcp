@@ -4,8 +4,8 @@
 //! (`marimo/_lint/validate_graph.py` + the dataflow graph): a name defined by
 //! more than one cell, dependency cycles, a setup cell that depends on other
 //! cells, and unparsable regions. On top of that we report drift that marimo's
-//! own save would silently regenerate — stale `return` tuples and stale
-//! signature parameters — as informational findings, because an LLM editing
+//! own save would silently regenerate (stale `return` tuples and stale
+//! signature parameters) as informational findings, because an LLM editing
 //! cells should know the file no longer matches what marimo would write.
 //!
 //! SQL cells (`mo.sql(...)`) are excluded from graph analysis: their defs and
@@ -131,7 +131,7 @@ pub(super) fn check(notebook: &MarimoNotebook) -> Vec<Finding> {
     findings
 }
 
-/// The reactive graph: analyzed cells, name indexes, and dependency edges —
+/// The reactive graph: analyzed cells, name indexes, and dependency edges,
 /// everything the finding passes read. Built once per check.
 struct Graph {
     /// Analyzed Python cells by index (SQL cells excluded, like marimo).

@@ -49,7 +49,7 @@ fn is_mime_bundle(value: &Value) -> bool {
     })
 }
 
-/// `execution_count` per the official nbformat v4.5 schema — both on a code
+/// `execution_count` per the official nbformat v4.5 schema, both on a code
 /// cell and inside an `execute_result` output:
 /// `{"type": ["integer", "null"], "minimum": 0}`, i.e. `null` until the cell
 /// has run (verified against nbformat 5.11.1's `validate`). Integers beyond
@@ -316,9 +316,9 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
         }
         // The same strict nbformat policy as the output-level rule
         // (is_execution_count): null or a non-negative integer. 3.0 and -1
-        // validate as INVALID in nbformat itself. An integer beyond u64 —
-        // which nbformat's arbitrary-precision validator accepts in the
-        // ORIGINAL file — arrives as a float from serde_json and our own
+        // validate as INVALID in nbformat itself. An integer beyond u64
+        // (which nbformat's arbitrary-precision validator accepts in the
+        // ORIGINAL file) arrives as a float from serde_json and our own
         // serializer would re-spell it as float notation that nbformat
         // rejects, so passing it would promise a validity the next write
         // breaks; it is flagged like every other exotic number spelling
@@ -393,7 +393,7 @@ mod tests {
         }
         // Floats and negatives fail nbformat itself; a beyond-u64 integer
         // would be re-spelled as float notation our serializer writes and
-        // nbformat rejects — so all of them are flagged before any write
+        // nbformat rejects; so all of them are flagged before any write
         // can turn the file invalid.
         for count in ["3.0", "-1", "18446744073709551616", "\"3\""] {
             let findings = count_findings(count);

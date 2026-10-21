@@ -248,7 +248,7 @@ impl TyDb {
     /// an environment was discovered. The docs resolver uses this to fall back
     /// to the real CPython `Lib/*.py` source for docstrings the typeshed stub
     /// omits. Read-only: it is the same discovery [`discover_settings`] already
-    /// performed — never a subprocess or interpreter execution.
+    /// performed; never a subprocess or interpreter execution.
     pub(crate) fn real_stdlib_path(&self) -> Option<SystemPathBuf> {
         let environment = self.program_settings.python_environment.as_ref().ok()?;
         let environment = environment.as_ref()?;

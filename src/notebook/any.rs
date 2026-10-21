@@ -3,7 +3,7 @@
 //! `open` detects the format at runtime, so the tool layer needs one owned
 //! type for "a notebook of some format". Instead of `Box<dyn Notebook>` this
 //! is a closed enum with match delegation: no heap indirection, no vtable,
-//! every call inlinable, and — the point of the closed set — adding a format
+//! every call inlinable, and (the point of the closed set) adding a format
 //! is compiler-enforced: a new variant turns every `match` here into a
 //! compile error until it is handled. (The openness of `dyn` was illusory
 //! anyway: `open`/`create`/`Format` hardcode the supported formats, so an

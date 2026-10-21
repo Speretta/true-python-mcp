@@ -3,7 +3,7 @@
 The user's marimo app `examples/demo/cycle.py` never finishes running: its
 cells spin forever. This doc shows how the AI finds the cause and fixes it.
 
-> **User asks the AI:** *"My marimo app examples/demo/cycle.py is stuck — cells never finish. What is wrong?"*
+> **User asks the AI:** *"My marimo app examples/demo/cycle.py is stuck. Cells never finish. What is wrong?"*
 
 What follows is the real conversation between the AI (the LLM) and tpmcp, captured
 from the server. The LLM sends tool calls and sees the answers as markdown.
@@ -123,7 +123,7 @@ format: marimo 0.25.1 · revision: 4bd5ac6f7271df02
 - info cell 1 `stale-signature`: cell 1 takes (a) but marimo would regenerate (); the signature is refreshed on marimo's next save
 ````
 
-Zero errors — the cycle is gone. The two info findings report drift: cell 1
+Zero errors; the cycle is gone. The two info findings report drift: cell 1
 still says `def _(a):` although it no longer uses `a`. tpmcp does not rewrite
 signatures (marimo refreshes them on its next save); the file runs fine.
 

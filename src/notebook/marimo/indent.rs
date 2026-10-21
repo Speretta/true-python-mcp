@@ -6,7 +6,7 @@
 //! indentation: the interior of column-0 multiline strings (`sql = """`
 //! followed by unindented query text) and stray low-indented comments.
 //! Re-indenting them on write-back would silently change string VALUES while
-//! the tool's diff — computed on the dedented logical source — shows only the
+//! the tool's diff (computed on the dedented logical source) shows only the
 //! intended edit. marimo's own loader agrees: its token-aware `fixed_dedent`
 //! leaves under-indented string interiors completely untouched ("Dedenting
 //! such a block would eat into its content"). So every body line's origin is
@@ -86,7 +86,7 @@ pub(super) fn strip_fixed_indent(text: &str, indent: &str) -> (String, Option<Ve
 /// Recompute the per-line indent memory after an edit.
 ///
 /// Lines that survived the edit (matched by a line-level diff) keep their
-/// recorded origin — except a former string-interior line that left the
+/// recorded origin, except a former string-interior line that left the
 /// string: as a code line it must carry the indent or the file breaks. New
 /// or changed lines carry the indent by default, except inside a multiline
 /// string, where they inherit the origin of the string block's first

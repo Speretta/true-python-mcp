@@ -1,6 +1,6 @@
 //! The `py_module_members` resolver: enumerate a module's public surface and,
 //! for each member, resolve its kind, one-line signature and one-line
-//! docstring — a two-pass walk over the same hand-assembled [`TyDb`] the
+//! docstring: a two-pass walk over the same hand-assembled [`TyDb`] the
 //! `py_docs` resolver uses.
 //!
 //! Pass 1 lists members through ty's *only* public enumeration surface: a
@@ -42,7 +42,7 @@ pub struct DocModuleMember {
     /// The member's own name (`dumps`), as you would type `module.dumps`.
     pub name: String,
     /// `module`, `class`, `method`, `function`, `attribute`, `type_alias`, or
-    /// `other` — the same coarse kind strings `py_docs` reports.
+    /// `other`: the same coarse kind strings `py_docs` reports.
     pub kind: String,
     /// Rendered one-line signature (`def dumps(obj, ...) -> str`, or the
     /// constructor `class X(...)`); `None` when the member is not callable.
@@ -50,7 +50,7 @@ pub struct DocModuleMember {
     /// First line of the member's docstring, truncated.
     pub docstring_summary: Option<String>,
     /// When the member's docstring is missing, a short human-readable note
-    /// explaining why and what was looked at — never a silent `None`.
+    /// explaining why and what was looked at, never a silent `None`.
     pub note: Option<String>,
 }
 
@@ -92,7 +92,7 @@ pub fn resolve_module_members(
 
     // `from module import *` is the only public way to list a module's members
     // (`all_members`/`Member` in ty are `pub(crate)`). The list ty returns is
-    // every end-of-scope symbol — it is NOT filtered by `__all__` or
+    // every end-of-scope symbol. It is NOT filtered by `__all__` or
     // star-import privacy, so private (`_`-prefixed) and dunder names appear;
     // they are demoted to the tail of the ordering below.
     let probe_source = format!("from {module} import *\n");
@@ -120,7 +120,7 @@ pub fn resolve_module_members(
 
     // Deduplicate (a name can surface from both the member and the submodule
     // listing) and order deterministically: ty's `NameKind` convention (Normal
-    // first, then Dunder, then Sunder — the derived `Ord` of the enum, matching
+    // first, then Dunder, then Sunder; the derived `Ord` of the enum, matching
     // ty's own completion ordering), then lexicographic.
     let mut names: Vec<String> = Vec::with_capacity(completions.len());
     for completion in &completions {
@@ -181,7 +181,7 @@ pub fn resolve_module_members(
 
 /// Resolves one member to its kind, one-line signature and docstring. A member
 /// that ty lists but that fails to resolve still appears, as `other` with no
-/// signature — hiding it would silently contradict the enumeration.
+/// signature; hiding it would silently contradict the enumeration.
 fn resolve_member<'db>(
     db: &'db TyDb,
     env: &ty_python_semantic::types::ProgramEnvironment<'db>,

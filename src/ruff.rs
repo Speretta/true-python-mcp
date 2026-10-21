@@ -100,7 +100,7 @@ pub enum FormatWrite {
 /// Named replacement for the old heterogeneous 4-tuple spine of [`check`]
 /// (Style-10). `notebook_index` is the only thing the linted source is needed
 /// for downstream (mapping offsets back to cells), so we carry that small
-/// value instead of an owned `SourceKind` — which also lets the unchanged path
+/// value instead of an owned `SourceKind`, which also lets the unchanged path
 /// avoid a deep clone (Memory-3).
 struct LintPass {
     diagnostics: Vec<RuffDiagnostic>,
@@ -114,7 +114,7 @@ struct LintPass {
 /// Single-read contract (CPU-F2): the caller reads `path` exactly once via
 /// [`crate::fs`] and hands us those bytes. For [`SafeFixes::Apply`] the caller
 /// has already revision-verified them, so the verified snapshot and the linted
-/// snapshot are the *same* bytes — strictly tighter than the old
+/// snapshot are the *same* bytes, strictly tighter than the old
 /// verify-then-reread flow, where the file could change between the two reads.
 pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<CheckOutcome, Error> {
     let settings = resolve_settings(path)?;
@@ -157,7 +157,7 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
                 None
             };
             LintPass {
-                // Post-fix source when changed, borrowed original otherwise —
+                // Post-fix source when changed, borrowed original otherwise;
                 // either way `transformed` is the bytes the diagnostics map to.
                 notebook_index: notebook_index_of(&transformed),
                 diagnostics: result.diagnostics,
@@ -213,7 +213,7 @@ pub fn format_file(
     let source_kind = source_kind_from(snapshot.content, source_type, path)?;
 
     // Consume `source_kind` so the notebook branch can hand ownership to
-    // `format_notebook`, which mutates it in place (no deep clone — Memory-4).
+    // `format_notebook`, which mutates it in place (no deep clone; Memory-4).
     let formatted = match source_kind {
         SourceKind::Python { code, is_stub } => {
             let options = settings

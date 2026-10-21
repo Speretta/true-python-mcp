@@ -6,8 +6,8 @@
 //! model can chain mutations without re-reading.
 
 // Rendered views are built by writing directly into their destination
-// buffer. `fmt::Write for String` is infallible — it grows the string and
-// never returns `Err` (allocation failure aborts) — and this crate denies
+// buffer. `fmt::Write for String` is infallible: it grows the string and
+// never returns `Err` (allocation failure aborts). This crate denies
 // panicking wrappers, so every `write!` result below is discarded with
 // `let _ =`.
 use std::fmt::Write as _;
@@ -125,7 +125,7 @@ pub fn notebook_markdown(
 
 /// Capacity hint for a rendered notebook: the windowed cells' source bytes
 /// (the dominant term) plus a per-cell allowance for headers and fences.
-/// Only a hint — full detail numbers every line and can render output
+/// Only a hint: full detail numbers every line and can render output
 /// payloads, neither of which is cheap to predict, so the buffer may grow.
 fn markdown_capacity(cells: &[Cell], window: Window) -> usize {
     window

@@ -184,11 +184,11 @@ uv pip install --python /tmp/opencode/nbenv/bin/python nbformat marimo ty==0.0.1
 
 ## Test data
 
-- `tests/data/*.ipynb` — hand-made Jupyter fixtures.
-- `tests/data/ty/` — hand-written, stdlib-only fixtures for the `ty` oracle
+- `tests/data/*.ipynb`: hand-made Jupyter fixtures.
+- `tests/data/ty/`: hand-written, stdlib-only fixtures for the `ty` oracle
   (codes+positions captured from `ty 0.0.18`, `--python-version 3.11`).
-- `tests/data/marimo/tutorials/` — files copied verbatim from the marimo
+- `tests/data/marimo/tutorials/`: files copied verbatim from the marimo
   project (Apache-2.0, see the `NOTICE` there). Do not edit them; add new
   files instead.
-- `tests/data/marimo/*.py` — hand-written fixtures in the shape of marimo
+- `tests/data/marimo/*.py`: hand-written fixtures in the shape of marimo
   files (see the `NOTICE` for the provenance split).

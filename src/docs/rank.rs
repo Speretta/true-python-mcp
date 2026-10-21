@@ -141,7 +141,7 @@ fn kind_of_definition(db: &TyDb, definition: Definition<'_>) -> &'static str {
 
 /// Whether a function definition is a method: its name is bound in a class
 /// body (ty records a function's name in the enclosing scope, so the enclosing
-/// scope — not the function body — is the class for a method).
+/// scope (not the function body) is the class for a method).
 fn is_method(db: &TyDb, definition: Definition<'_>) -> bool {
     matches!(
         definition.scope(db).node(db),

@@ -73,7 +73,7 @@ pub(super) struct CellMeta {
     indent: String,
     /// Per-line record of the body's original shape: `false` for lines that
     /// lacked the fixed indent in the file (column-0 multiline-string
-    /// interiors, stray comments) — written back verbatim so string values
+    /// interiors, stray comments), written back verbatim so string values
     /// survive edits. `None` when every line carried the indent (the common
     /// case, and cells tpmcp creates). Unused for markdown cells (re-wrapped
     /// wholesale) and read-only blocks (replayed verbatim).
@@ -110,7 +110,7 @@ impl MarimoNotebook {
     }
 
     /// The bytes cell `index` contributes to the serialization: an unedited
-    /// cell borrows its captured block (no copy — serialize writes it into
+    /// cell borrows its captured block (no copy; serialize writes it into
     /// the output once); an edited cell regenerates just its body.
     fn cell_bytes(&self, index: usize) -> Cow<'_, str> {
         let meta = &self.metas[index];

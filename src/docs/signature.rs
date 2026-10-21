@@ -79,7 +79,7 @@ fn doc_params<'db>(
 /// by the name) and `**kwargs` (followed by another `*`).
 fn find_bare_star(label: &str) -> Option<usize> {
     // why: `CallSignatureParameter` has no `is_keyword_only` flag, so the bare
-    // `*` separator — only present in the rendered label — is the sole signal
+    // `*` separator (only present in the rendered label) is the sole signal
     // for keyword-only vs positional-or-keyword.
     let bytes = label.as_bytes();
     for (index, byte) in bytes.iter().enumerate() {
@@ -93,7 +93,7 @@ fn find_bare_star(label: &str) -> Option<usize> {
 /// Classifies one parameter's kind from ty's flags plus the inferred position.
 /// The positional-only/variadic flags come straight off the structured
 /// [`CallSignatureParameter`]; only `keyword_only` (vs `positional_or_keyword`)
-/// needs inference, because ty does not expose an `is_keyword_only` flag — the
+/// needs inference, because ty does not expose an `is_keyword_only` flag. The
 /// position relative to the `*` separator / `*args` is the only signal.
 fn param_kind(
     param: &CallSignatureParameter<'_>,

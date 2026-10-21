@@ -110,7 +110,7 @@ impl MarimoNotebook {
     /// marimo's serializer writes them: `return` names exactly the cell's
     /// defs that some cell refs (sorted), and the signature takes exactly
     /// the refs that are not allowed (own defs, setup defs, unshadowed
-    /// builtins), sorted — the same expectations check.rs reports drift
+    /// builtins), sorted, the same expectations check.rs reports drift
     /// against, so a freshly built file carries no stale-return or
     /// stale-signature findings. Parsed cells serialize from their captured
     /// bytes and are never touched, so roundtrips stay byte-exact. Very long

@@ -12,7 +12,7 @@
 //! case of a writer frozen mid-call for over a minute, deleting its
 //! orphan-to-be only turns its doomed rename into a clean io_error; the
 //! target file itself is never affected, because rename of a missing source
-//! fails atomically. All errors are ignored — sweeping must never fail a
+//! fails atomically. All errors are ignored; sweeping must never fail a
 //! write.
 
 use std::collections::HashSet;

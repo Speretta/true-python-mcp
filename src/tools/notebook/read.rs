@@ -39,7 +39,7 @@ pub(super) fn search_matches(
 
 /// The validation phase, on the same snapshot the response renders (reads
 /// never lock; the reported revision is the one these findings were computed
-/// from). `content` moves into ruff for check+lint — no second read, no
+/// from). `content` moves into ruff for check+lint: no second read, no
 /// clone. A ruff failure degrades to [`Lint::Unavailable`]: an optional
 /// attachment must never cost the caller the notebook itself.
 pub(super) fn run_validation(

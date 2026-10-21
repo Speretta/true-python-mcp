@@ -6,8 +6,8 @@
 //! config (`ruff.toml`, `.ruff.toml`, or a `pyproject.toml` carrying a
 //! `[tool.ruff]` table) wins outright; the global user config is only a
 //! fallback when no project config exists; ruff's [`Settings::default()`] comes
-//! last. ruff never merges config files — the "closest" file is authoritative —
-//! and neither do we.
+//! last. ruff never merges config files: the "closest" file is authoritative.
+//! Neither do we.
 //!
 //! The cache is keyed by the resolved config-file path and validated with a
 //! single stat (mtime + length) per call, so an edited config is picked up on
@@ -16,8 +16,8 @@
 //!
 //! Panic-free: `RwLock` poisoning is recovered with `PoisonError::into_inner`
 //! (same policy as `src/fs.rs`). The map is only ever mutated by a single
-//! `insert` under the write lock — an operation that cannot leave it
-//! inconsistent — so a poisoned lock still guards a valid map and recovery is
+//! `insert` under the write lock. That operation cannot leave it
+//! inconsistent, so a poisoned lock still guards a valid map and recovery is
 //! safe. A config we cannot stat for mtime simply falls back to a fresh,
 //! uncached build rather than risking a stale entry.
 //!

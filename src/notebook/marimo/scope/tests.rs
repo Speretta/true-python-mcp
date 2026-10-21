@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 use super::{analyze, is_local};
 
-/// See tests/common/mod.rs — duplicated here because src unit tests cannot
+/// See tests/common/mod.rs; duplicated here because src unit tests cannot
 /// import from tests/.
 fn ground_truth_python() -> Option<String> {
     let python = std::env::var("TPMCP_GROUND_TRUTH_PYTHON")

@@ -3,7 +3,7 @@
 The user has a small Jupyter notebook at `examples/demo/messy.ipynb`. Its
 code cell has an unused `import os` and messy spacing. This is the same ruff
 that example 02 ran on a plain `.py` file, now pointed at a notebook: the
-user wants it linted, the safe fix applied, and the cell formatted — with the
+user wants it linted, the safe fix applied, and the cell formatted, with the
 stored output and metadata left exactly as they are.
 
 > **User asks the AI:** *"Lint examples/demo/messy.ipynb, apply the safe fix,
@@ -67,7 +67,7 @@ no issues found
 ````
 
 `fix: true` removes the unused import. The one finding here is a safe fix, and
-that is all tpmcp applies on its own — anything unsafe stays for a human. The
+that is all tpmcp applies on its own; anything unsafe stays for a human. The
 new revision appears right in the `applied automatic fixes · revision: …` line
 (`c204e80ee0821c4d`).
 
@@ -142,7 +142,7 @@ revision: 2489d448a38eec0c
 no issues found
 ````
 
-No diagnostics — the same tool that found the unused import now confirms the
+No diagnostics: the same tool that found the unused import now confirms the
 notebook is clean.
 
 ## Result
@@ -169,7 +169,7 @@ The notebook changed like this (`diff -u` against the original):
 
 One cell changed, and only its `source` list: the unused import is gone and
 the spacing is normalized. The cell's stored `stream(stdout)` output, its
-`execution_count`, its `id`, and its `metadata` are byte-for-byte untouched —
+`execution_count`, its `id`, and its `metadata` are byte-for-byte untouched.
 `ruff_format` reformats a notebook the way the cell tools edit one, so git
 shows exactly the lines that changed.
 

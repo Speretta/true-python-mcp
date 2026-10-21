@@ -4,7 +4,7 @@
 //! Every mutating tool follows the same protocol:
 //!
 //! 1. Take the per-path lock ([`with_file_lock`]) so concurrent tpmcp calls
-//!    to the same file are serialized — in-process (pipelined tool calls)
+//!    to the same file are serialized, both in-process (pipelined tool calls)
 //!    and cross-process (separate tpmcp servers, e.g. two AI clients).
 //! 2. [`read_verified`] the file against the caller-supplied revision.
 //! 3. Mutate the in-memory snapshot.
@@ -89,14 +89,14 @@ pub fn read_verified(path: &Path, revision: &str) -> Result<Snapshot, Error> {
 /// Writes follow symlinks, matching reads: `path` is resolved first and the
 /// rename lands next to the RESOLVED target. Renaming over the symlink
 /// itself would replace the link with a regular file while every read keeps
-/// following the old target — after the first edit the user's real file
+/// following the old target; after the first edit the user's real file
 /// (dotfiles/sync setups) would silently stop receiving updates. Hardlinks
 /// cannot be preserved by any rename-based atomic write (the edit lands on a
 /// fresh inode); this matches how Jupyter/nbformat itself saves.
 ///
 /// The target's permission bits are copied onto the temp file before the
 /// rename (best-effort), so an edit preserves e.g. 0600. Ownership is NOT
-/// preserved: the rename installs the temp file, owned by the writing user —
+/// preserved: the rename installs the temp file, owned by the writing user;
 /// if the target had another owner (group-writable directory), the owner
 /// changes. Inherent to atomic-rename writes without privileges.
 pub fn write(path: &Path, content: &str) -> Result<String, Error> {
@@ -158,8 +158,8 @@ fn rename_gate(_target: &Path) {}
 ///
 /// If this flow verified a revision earlier ([`read_verified`] recorded the
 /// fingerprint) and the target's `(mtime, size)` changed since, an external
-/// program — one that takes neither our lock nor part in the revision
-/// protocol — saved mid-call. The stat is only a cheap filter: when it
+/// program (one that takes neither our lock nor part in the revision
+/// protocol) saved mid-call. The stat is only a cheap filter: when it
 /// differs we re-read and decide by content, so a bare `touch` or a
 /// byte-identical save is not a conflict; anything else aborts with the
 /// same [`Error::Conflict`] the revision guard produces.
@@ -209,7 +209,7 @@ pub fn create(path: &Path, content: &str) -> Result<String, Error> {
     write(path, content)
 }
 
-/// Whether ANY filesystem entry exists at `path` — including directories,
+/// Whether ANY filesystem entry exists at `path`, including directories,
 /// unreadable files and symlinks (even dangling ones). One stat, no read:
 /// create-mode tools must refuse to clobber entries that [`read`] cannot
 /// see (non-UTF-8, oversized, permission-denied), and a read-based
@@ -238,7 +238,7 @@ fn preserve_mode(target: &Path, tmp: &Path) {
 
 /// Majority line ending of `text`: CRLF when CRLF-terminated lines
 /// outnumber LF-only-terminated ones, else LF (ties go to LF, the more
-/// common default). The previous rule — "CRLF if it occurs anywhere" — let
+/// common default). The previous rule ("CRLF if it occurs anywhere") let
 /// a single stray CRLF flip a 1000-line LF cell to CRLF on the next
 /// line-range edit.
 pub fn detect_eol(text: &str) -> &'static str {
@@ -284,7 +284,7 @@ pub fn join_logical(lines: &[&str], eol: &str, trailing_eol: bool) -> String {
 /// Replace the 1-based inclusive logical line range `start..=end` of
 /// `text` with `new_lines` (empty = deletion).
 ///
-/// Lines outside the range keep their original terminators byte-for-byte —
+/// Lines outside the range keep their original terminators byte-for-byte;
 /// a stray CRLF among LF lines no longer flips the untouched lines.
 /// Replacement lines are joined with the majority EOL of `text`
 /// ([`detect_eol`]); terminators the caller's lines carry are stripped

@@ -47,7 +47,7 @@ It does two jobs:
 
 Measured 2026-10-21 by the [Bench workflow](.github/workflows/bench.yml) (Linux 6.17.0-1022-azure, docker 28.0.4): median of 3-3 runs per stack (normal mode), each stack in its own minimal Docker container on the same machine. Full method, per-component memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).
 
-_Idle RAM_ and _After the full profile_ are container cgroup totals, not process RSS — the cgroup figure excludes file-backed pages, so `ps` reports higher. Both are listed in [COMPARISON.md](COMPARISON.md).
+_Idle RAM_ and _After the full profile_ are container cgroup totals, not process RSS. The cgroup figure excludes file-backed pages, so `ps` reports higher. Both are listed in [COMPARISON.md](COMPARISON.md).
 
 ## See it work
 
@@ -118,8 +118,8 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `notebook_check` | Finds problems without changing anything: a broken notebook structure, merge conflict marks, or marimo graph errors (two cells defining the same name, a cycle). |
 | `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file (uses the nearest project ruff/pyproject config, falling back to the global user config). With `fix: true` it repairs the safe ones. |
 | `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
-| `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in — no interpreter, no subprocess). Pass `python` to check against a specific venv; otherwise auto-discovers it. Notebook diagnostics carry a 0-based `cell` index. |
-| `py_docs` | Resolve a library symbol — function/method/class/attribute — to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
+| `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in; no interpreter, no subprocess). Pass `python` to check against a specific venv; otherwise auto-discovers it. Notebook diagnostics carry a 0-based `cell` index. |
+| `py_docs` | Resolve a library symbol (function/method/class/attribute) to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
 | `py_module_members` | List a module's public members with one-line signatures and docstrings. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). |
 

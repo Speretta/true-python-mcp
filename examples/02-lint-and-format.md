@@ -1,7 +1,7 @@
 # Lint and format a plain Python file
 
 The user has a plain Python file at `examples/demo/messy.py`. No notebook is
-involved — this is an ordinary `.py` file. It has unused imports, an unused
+involved; this is an ordinary `.py` file. It has unused imports, an unused
 local variable, and messy spacing. The user wants the AI to lint it, apply the
 safe fixes, and format it.
 
@@ -70,7 +70,7 @@ applied automatic fixes · revision: f34960ad3fe50f4a
 
 `fix: true` applies only the safe fixes: the two unused imports are gone. The
 F841 finding stays, and it moved from line 10 to line 8 because the file is
-now two lines shorter. tpmcp does not delete that variable on its own — that
+now two lines shorter. tpmcp does not delete that variable on its own. That
 would be an unsafe fix. The AI decides what to do with it, and the honest
 choice is to report it to the user instead of silently deleting code. The new
 revision appears right in the `applied automatic fixes · revision: …` line
@@ -129,7 +129,7 @@ The file changed like this (`diff -u` against the original):
 The two unused imports are gone and the spacing is fixed, in exactly the lines
 the tools touched. The `unused = 42` line stays: F841 is an unsafe fix, so it
 is left for a human decision, and the AI tells the user about it in its final
-answer. Every step chained revisions — read, fix, format — so each write
+answer. Every step chained revisions (read, fix, format), so each write
 landed on a file state the AI had actually seen.
 
 ## The input file

@@ -1,11 +1,11 @@
 # Fix a typo in a Jupyter cell
 
 The user has a small Jupyter notebook at `examples/demo/demo.ipynb`. The second
-cell prints the text `hello wrold` — a typo in the source code. The user wants
+cell prints the text `hello wrold`, a typo in the source code. The user wants
 the AI to fix that one word and leave everything else alone.
 
 > **User asks the AI:** *"There is a typo in the second cell of
-> examples/demo/demo.ipynb — fix it."*
+> examples/demo/demo.ipynb. Fix it."*
 
 What follows is the real conversation between the AI (the LLM) and tpmcp,
 captured from the server. The LLM sends tool calls and sees the answers as
@@ -55,7 +55,7 @@ x = 1 + 1
 Two details matter in this answer. First, cell indexes are 0-based: the
 "second cell" the user means is cell `1`, and it holds the typo. Second, the
 answer reports a revision (`eefc2ea99b5fe065`). The revision is a fingerprint
-of the file contents, and every change must carry it — that way tpmcp never
+of the file contents, and every change must carry it. That way tpmcp never
 writes over a file that changed since the AI last looked at it.
 
 ## Step 2: Replace the typo (`cell_edit`)

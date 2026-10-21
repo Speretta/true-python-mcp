@@ -35,7 +35,7 @@ pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagno
 }
 
 /// Like [`check_snapshot`], but pins the type-checking environment to `python`
-/// — a path to a Python interpreter or a virtual-environment root — instead of
+/// (a path to a Python interpreter or a virtual-environment root) instead of
 /// relying on the implicit discovery order. `None` behaves like
 /// [`check_snapshot`].
 pub fn check_snapshot_with_python(
@@ -44,7 +44,7 @@ pub fn check_snapshot_with_python(
     python: Option<&Path>,
 ) -> Result<Vec<Diagnostic>, Error> {
     // The parsed AST's recursive Drop glue runs when the salsa database drops
-    // at the end of the check — unguarded, like ruff's walk was before its
+    // at the end of the check, unguarded, like ruff's walk was before its
     // guard. Grow the stack for the WHOLE check (including that drop), not just
     // the walk inside check_file; `check_file` grows a larger segment for the
     // semantic-index/inference recursion.

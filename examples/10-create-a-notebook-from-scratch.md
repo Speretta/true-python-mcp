@@ -1,8 +1,8 @@
 # Create a notebook from scratch
 
 The user wants a brand-new Jupyter notebook, not a conversion of an existing
-one. `notebook_create` with `cells` makes it from scratch — the path's
-`.ipynb` extension picks the Jupyter format — and the same call again is
+one. `notebook_create` with `cells` makes it from scratch. The path's
+`.ipynb` extension picks the Jupyter format, and the same call again is
 refused because the file now exists.
 
 > **User asks the AI:** *"Create examples/demo/fresh.ipynb with a title cell
@@ -47,7 +47,7 @@ revision: bac331a9a9284c49
 nbformat 4.5 Jupyter, the markdown cell becomes a markdown cell, and the code
 cell gets the empty `outputs` and `execution_count: null` a never-run cell
 carries. tpmcp generates each new cell's `id` on creation, so this revision
-is unique to this run — replaying the same call yields a different one
+is unique to this run; replaying the same call yields a different one
 (unlike the fixture-based walkthroughs, whose revisions are fixed by their
 fixed content).
 
@@ -126,6 +126,6 @@ generated on creation, so they (and the revision above) differ on every run:
 }
 ````
 
-This file is the example's product, not a checked-in input — remove it before
+This file is the example's product, not a checked-in input. Remove it before
 replaying (`rm examples/demo/fresh.ipynb`), or Step 1 will refuse instead of
 creating.
