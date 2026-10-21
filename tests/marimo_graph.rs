@@ -98,6 +98,39 @@ fn check_reports_stale_drift_as_info() {
     assert!(findings.iter().all(|f| f.severity == Severity::Info));
 }
 
+/// The stale-signature finding names its builtin assumption when a builtin
+/// shaped the result: the builtin set is pinned to Python 3.13, not the
+/// discovered environment.
+#[test]
+fn stale_signature_names_the_builtin_assumption() {
+    let content = r#"import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App()
+
+
+@app.cell
+def _(print):
+    print("hi")
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+"#;
+    let notebook = open(content).unwrap();
+    let findings = notebook.check();
+    let stale = findings
+        .iter()
+        .find(|finding| finding.code == "stale-signature")
+        .expect("the stale signature should be flagged");
+    assert!(
+        stale.message.contains("as of Python 3.13"),
+        "the builtin assumption must be surfaced: {}",
+        stale.message
+    );
+}
+
 #[test]
 fn check_is_clean_on_valid_fixtures() {
     for name in [

@@ -21,8 +21,14 @@ use crate::notebook::{Finding, Severity};
 
 /// BUILTINS as marimo sees them: the interpreter's builtins plus the module
 /// dunders and special names in `builtins.__dict__` (marimo/_ast/variables.py).
+///
+/// ASSUMPTION (honest): marimo's real set is the `builtins.__dict__` of the
+/// interpreter that *runs* marimo, which we cannot read without one. We
+/// approximate it with ruff's CPython builtins pinned to Python 3.13
+/// ([`MARIMO_BUILTIN_MINOR_VERSION`]), independent of the environment `ty_check`
+/// discovers. The stale-signature finding names this when it shapes a result.
 pub(super) fn is_marimo_builtin(name: &str) -> bool {
-    ruff_python_stdlib::builtins::is_python_builtin(name, 13, false)
+    ruff_python_stdlib::builtins::is_python_builtin(name, MARIMO_BUILTIN_MINOR_VERSION, false)
         || matches!(
             name,
             "__builtin__"
@@ -40,6 +46,10 @@ pub(super) fn is_marimo_builtin(name: &str) -> bool {
                 | "_IncompleteInputError"
         )
 }
+
+/// The CPython minor version whose builtin set [`is_marimo_builtin`] assumes —
+/// the newest the linked ruff knows, not the discovered environment's.
+const MARIMO_BUILTIN_MINOR_VERSION: u8 = 13;
 
 /// A cell prepared for graph analysis.
 struct Node {
@@ -431,6 +441,7 @@ impl Graph {
             // Stale signature: marimo writes parameters for exactly the refs that
             // are not allowed (setup defs, unshadowed builtins, toplevel names)
             // and not defined by the cell itself, sorted.
+            let mut assumed_builtins: Vec<&str> = Vec::new();
             let expected_params: Vec<&str> = {
                 let mut names: Vec<&str> = node
                     .info
@@ -438,10 +449,14 @@ impl Graph {
                     .iter()
                     .map(String::as_str)
                     .filter(|name| {
+                        let assumed_builtin = is_marimo_builtin(name) && !all_defs.contains(name);
+                        if assumed_builtin {
+                            assumed_builtins.push(*name);
+                        }
                         !node.info.defs.contains(*name)
                             && !setup_defs.contains(name)
                             && !self.toplevel_names.contains(*name)
-                            && !(is_marimo_builtin(name) && !all_defs.contains(name))
+                            && !assumed_builtin
                     })
                     .filter(|name| ruff_python_stdlib::identifiers::is_identifier(name))
                     .collect();
@@ -454,13 +469,25 @@ impl Graph {
                 .map(String::as_str)
                 .eq(expected_params.iter().copied())
             {
+                // The builtin set is approximated as Python 3.13's (see
+                // [`is_marimo_builtin`]); say so only when it actually shaped
+                // this finding, so the assumption is never silent.
+                let builtin_note = if assumed_builtins.is_empty() {
+                    String::new()
+                } else {
+                    assumed_builtins.sort_unstable();
+                    format!(
+                        " (assumed builtin {} as of Python 3.13, not the discovered environment)",
+                        assumed_builtins.join(", ")
+                    )
+                };
                 findings.push(Finding {
                     severity: Severity::Info,
                     cell: Some(*index),
                     code: "stale-signature".to_string(),
                     message: format!(
                         "{} takes ({}) but marimo would regenerate ({}); the signature is refreshed \
-                         on marimo's next save",
+                         on marimo's next save{builtin_note}",
                         node.label,
                         stored_params.join(", "),
                         expected_params.join(", ")

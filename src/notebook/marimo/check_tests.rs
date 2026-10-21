@@ -18,6 +18,15 @@ fn builtins_match_marimo() {
     }
 }
 
+/// The builtin set is pinned to Python 3.13, not the latest Python: 3.13's
+/// `PythonFinalizationError` is a builtin while 3.15's `sentinel` is not. This
+/// pins the assumption so a bump is a deliberate change, not an accident.
+#[test]
+fn builtins_are_pinned_to_python_313() {
+    assert!(is_marimo_builtin("PythonFinalizationError"));
+    assert!(!is_marimo_builtin("sentinel"));
+}
+
 #[test]
 fn return_suffix_parsing() {
     assert_eq!(parse_return("    return"), Vec::<String>::new());
