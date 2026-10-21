@@ -47,10 +47,16 @@ pub fn search(cells: &[Cell], query: &str, start: Option<usize>, limit: Option<u
     let mut matched_lines = 0;
     for (index, cell) in cells.iter().enumerate() {
         let source = cell.source_text();
+        // Lowercase the whole cell once, not once per line: the lowercased copy
+        // is used only for the `contains` test, while the rendered text is
+        // still sliced from the original `source` by index (lowercasing never
+        // changes the line split, so the two line lists stay aligned).
+        let lowercased = source.to_lowercase();
+        let lower_lines = crate::fs::logical_lines(&lowercased);
         let lines: Vec<(usize, String)> = crate::fs::logical_lines(&source)
             .iter()
             .enumerate()
-            .filter(|(_, line)| line.to_lowercase().contains(&needle))
+            .filter(|(number, _)| lower_lines[*number].contains(&needle))
             .map(|(number, line)| {
                 let text = line.trim();
                 (

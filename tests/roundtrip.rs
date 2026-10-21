@@ -116,7 +116,10 @@ fn new_cell_shape_follows_nbformat() {
     assert_eq!(code.extra["execution_count"], serde_json::Value::Null);
     assert_eq!(code.extra["outputs"], serde_json::json!([]));
     assert_eq!(code.extra["id"].as_str().unwrap().len(), 8);
-    assert_eq!(code.source, SourceText::Lines(vec!["x = 1\n".to_string()]));
+    assert_eq!(
+        code.source,
+        SourceText::from_lines(vec!["x = 1\n".to_string()])
+    );
 
     let markdown = JupyterNotebook::new_cell("markdown", "# hi", false);
     assert!(!markdown.extra.contains_key("outputs"));

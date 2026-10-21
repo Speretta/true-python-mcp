@@ -138,7 +138,7 @@ fn markdown_capacity(cells: &[Cell], window: Window) -> usize {
 fn source_byte_len(cell: &Cell) -> usize {
     match &cell.source {
         SourceText::Str(text) => text.len(),
-        SourceText::Lines(lines) => lines.iter().map(String::len).sum(),
+        SourceText::Lines { lines, .. } => lines.iter().map(String::len).sum(),
     }
 }
 

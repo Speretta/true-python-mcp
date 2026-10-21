@@ -1,6 +1,7 @@
 //! Candidate deduplication, ranking, and the `disambiguation` marker, plus the
 //! coarse `kind` strings the resolver and its trace report.
 
+use ruff_db::files::File;
 use ruff_db::source::source_text;
 use ruff_source_file::LineIndex;
 use ruff_text_size::{Ranged, TextSize};
@@ -14,8 +15,10 @@ use crate::ty::TyDb;
 // ---- candidate ranking ----
 
 /// The deterministic sort key for one resolved definition: the ranking rules
-/// applied in order, lower sorts first (better).
-type RankKey = (bool, bool, bool, u8, String, TextSize);
+/// applied in order, lower sorts first (better). The file tiebreak is `File`
+/// (not its path string), so ranking costs no per-candidate allocation; `File`
+/// orders by salsa-assigned id — stable within a process, not across runs.
+type RankKey = (bool, bool, bool, u8, File, TextSize);
 
 /// Deduplicates ty's definitions by identity and ranks them: not-stub before
 /// stub, not-reexported before re-exported, reachable before unreachable,
@@ -41,7 +44,7 @@ pub(super) fn rank_candidates<'db>(
         .into_iter()
         .map(|definition| (rank_key(db, &definition), definition))
         .collect();
-    ranked.sort_by(|a, b| a.0.cmp(&b.0));
+    ranked.sort_by_key(|a| a.0);
     ranked
         .into_iter()
         .map(|(_, definition)| definition)
@@ -56,7 +59,7 @@ fn rank_key(db: &TyDb, resolved: &ResolvedDefinition<'_>) -> RankKey {
         is_reexported_of(db, resolved),
         !is_reachable(db, resolved),
         kind_rank_of(db, resolved),
-        focus.file().path(db).as_str().to_string(),
+        focus.file(),
         focus.range().start(),
     )
 }

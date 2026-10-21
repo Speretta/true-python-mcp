@@ -17,6 +17,7 @@ pub use jupyter::JupyterNotebook;
 pub use marimo::{MARIMO_VERSION, MarimoNotebook};
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -40,7 +41,7 @@ impl Cell {
     pub fn from_text(cell_type: impl Into<String>, text: &str) -> Self {
         Self {
             cell_type: cell_type.into(),
-            source: SourceText::Lines(SourceText::split_canonical(text)),
+            source: SourceText::from_lines(SourceText::split_canonical(text)),
             extra: BTreeMap::new(),
         }
     }
@@ -60,7 +61,7 @@ impl Cell {
 
     /// Replace the source, normalizing it to canonical lines.
     pub fn set_source_text(&mut self, text: &str) {
-        self.source = SourceText::Lines(SourceText::split_canonical(text));
+        self.source = SourceText::from_lines(SourceText::split_canonical(text));
     }
 
     /// Jupyter cell id (nbformat 4.5+), when present.
@@ -93,19 +94,39 @@ impl Cell {
 
 /// Cell source in the representation the file used. Jupyter files store
 /// either a single string or an array of lines; other formats use `Lines`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum SourceText {
     Str(String),
-    Lines(Vec<String>),
+    Lines {
+        /// The lines exactly as the file stored them (terminators intact), so
+        /// serialization reproduces the original bytes.
+        lines: Vec<String>,
+        /// The concatenation of `lines`, cached on first read so [`text`]
+        /// is a borrow rather than a fresh allocation on every call.
+        joined: OnceCell<String>,
+    },
 }
 
 impl SourceText {
     /// The full source text: borrowed when stored as a single string,
-    /// concatenated when stored as lines.
+    /// concatenated (and cached) when stored as lines.
     pub fn text(&self) -> Cow<'_, str> {
         match self {
             Self::Str(text) => Cow::Borrowed(text),
-            Self::Lines(lines) => Cow::Owned(lines.concat()),
+            Self::Lines { lines, joined } => {
+                Cow::Borrowed(joined.get_or_init(|| lines.concat()).as_str())
+            }
+        }
+    }
+
+    /// A [`SourceText::Lines`] whose joined text is computed lazily on first
+    /// [`text`](Self::text). `lines` is immutable after construction — every
+    /// mutation replaces the whole [`SourceText`] — so the cache never goes
+    /// stale.
+    pub fn from_lines(lines: Vec<String>) -> Self {
+        Self::Lines {
+            lines,
+            joined: OnceCell::new(),
         }
     }
 
@@ -113,6 +134,18 @@ impl SourceText {
     /// trailing empty chunk — nbformat's canonical line form.
     pub fn split_canonical(text: &str) -> Vec<String> {
         text.split_inclusive('\n').map(String::from).collect()
+    }
+}
+
+impl PartialEq for SourceText {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Str(left), Self::Str(right)) => left == right,
+            // Ignore the `joined` cache: it is derived from `lines`, so two
+            // equal sources may still differ in whether it has been filled.
+            (Self::Lines { lines: left, .. }, Self::Lines { lines: right, .. }) => left == right,
+            _ => false,
+        }
     }
 }
 
