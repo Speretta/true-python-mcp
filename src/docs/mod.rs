@@ -45,7 +45,9 @@ use ruff_db::source::source_text;
 use ruff_python_ast as ast;
 use ruff_source_file::LineIndex;
 use ruff_text_size::Ranged;
-use ty_python_semantic::types::ide_support::{call_signature_details, constructor_signature};
+use ty_python_semantic::types::ide_support::{
+    call_signature_details, constructor_signature, type_hierarchy_supertypes,
+};
 use ty_python_semantic::{Db as SemanticDb, HasType, SemanticModel};
 
 use crate::error::Error;
@@ -109,6 +111,9 @@ pub struct DocSymbol {
     /// When the docstring is missing, a short human-readable note explaining
     /// why and what was looked at — never a silent `None`.
     pub note: Option<String>,
+    /// For a class, the rendered superclass names (direct bases, `object`
+    /// included when there is no explicit base).
+    pub bases: Vec<String>,
     /// Path of the defining file (system, vendored, or virtual), if known.
     pub source_path: Option<String>,
     /// 1-based line of the definition, if known.
@@ -232,6 +237,24 @@ pub fn resolve_symbol_with_python(
     let line_index = LineIndex::from_source_text(&source_text);
     let source_line = Some(line_index.line_index(focus.range().start()).get());
 
+    // A class terminal's direct bases, rendered as names. `type_hierarchy_supertypes`
+    // reads the class literal off the target expression's inferred type, so it
+    // reports the same `Path(PurePath)` the stub declares (plus `object` when a
+    // class has no explicit base).
+    let bases = if is_class {
+        call.func
+            .inferred_type(&model)
+            .map(|ty| {
+                type_hierarchy_supertypes(&db, &env, ty)
+                    .into_iter()
+                    .map(|class| class.name.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     // The overload's own docstring, falling back to the runtime implementation
     // (overload declarations often omit theirs), then to the interpreter's real
     // CPython `Lib/*.py` source — and, when nothing has it, an honest note
@@ -265,6 +288,7 @@ pub fn resolve_symbol_with_python(
         docstring: docstring.docstring,
         docstring_source: docstring.source,
         note: docstring.note,
+        bases,
         source_path: Some(definition_path.as_str().to_string()),
         source_line,
         is_stub,

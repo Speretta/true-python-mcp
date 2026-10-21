@@ -159,6 +159,9 @@ fn docs_markdown(symbol: &str, resolved: &DocSymbol) -> String {
     let _ = writeln!(out, "py_docs: {symbol}");
     let _ = writeln!(out, "resolved_name: {}", resolved.resolved_name);
     let _ = writeln!(out, "kind: {} ({})", resolved.kind, resolved.disambiguation);
+    if !resolved.bases.is_empty() {
+        let _ = writeln!(out, "bases: {}", resolved.bases.join(", "));
+    }
     if resolved.signatures.is_empty() {
         out.push_str("signatures: not callable\n");
     } else {
@@ -239,6 +242,7 @@ fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
         "docstring": resolved.docstring,
         "docstring_source": resolved.docstring_source,
         "note": resolved.note,
+        "bases": resolved.bases,
         "source": resolved.source_path,
         "source_line": resolved.source_line,
         "is_stub": resolved.is_stub,

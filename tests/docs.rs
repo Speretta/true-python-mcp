@@ -384,6 +384,39 @@ fn py_module_members_json_over_the_wire() {
     assert!(text.contains("did not resolve"), "{text}");
 }
 
+/// A class terminal reports its direct superclasses in `bases`.
+#[test]
+fn resolves_class_bases() {
+    let dir = temp_dir("docs-bases");
+    let symbol = resolve_symbol("pathlib.Path", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "class");
+    assert!(
+        symbol.bases.iter().any(|base| base == "PurePath"),
+        "Path should list PurePath among its bases: {:?}",
+        symbol.bases
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `bases` reaches the JSON wire for a class terminal.
+#[test]
+fn py_docs_bases_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let (err, text, sc) = server.call(
+        "py_docs",
+        json!({"symbol": "pathlib.Path", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["kind"], "class");
+    let bases = sc["bases"]
+        .as_array()
+        .unwrap_or_else(|| panic!("bases missing: {sc}"));
+    assert!(
+        bases.iter().any(|base| base.as_str() == Some("PurePath")),
+        "bases should list PurePath: {bases:?}"
+    );
+}
+
 /// A definition with no typeshed docstring falls back to the interpreter's real
 /// CPython `Lib/*.py` source and reports `docstring_source: "source"`.
 #[test]
