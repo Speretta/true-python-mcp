@@ -169,13 +169,8 @@ pub trait ProgramDb: SemanticDb {
     where
         Self: Sized,
     {
-        program_inner(self)
+        Program::from_settings(self, self.program_settings())
     }
-}
-
-#[salsa::tracked(returns(copy))]
-fn program_inner(db: &dyn ProgramDb) -> Program<'_> {
-    Program::from_settings(db, db.program_settings())
 }
 
 impl TyDb {
