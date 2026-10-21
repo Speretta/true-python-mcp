@@ -51,7 +51,8 @@ LINKS = {
 }
 
 OP_ORDER = ["read", "check", "edit", "insert", "execute", "delete",
-            "reread", "lint", "analyze", "conflict-0s", "conflict-10s"]
+            "reread", "lint", "analyze", "docs-cold", "docs-warm",
+            "docs-members", "conflict-0s", "conflict-10s"]
 
 PLACEHOLDER = "<!-- MEASURED_TABLE -->"
 
@@ -250,7 +251,75 @@ def print_summary(dirpath):
                       file=sys.stderr)
 
 
-def measured_section(results):
+def context7_block(dirpath):
+    """Render the remote context7 latency block, or "" when not measured.
+
+    context7_measure.py writes `results/context7/runN/context7.json` with no
+    summary.json, so load() skips it and it never joins the memory tables.
+    Those files are read directly here; per-call latencies are medianed across
+    runs and labeled REMOTE (a network round-trip, unlike every local stack).
+    """
+    root = Path(dirpath) / "context7"
+    if not root.is_dir():
+        return ""
+    files = sorted(root.glob("run*/context7.json"))
+    if not files:
+        return ""
+    resolve_cold, resolve_ms, query_cold, query_ms = [], [], [], []
+    endpoint = mode = date = None
+    resolve_args = query_args = None
+    for f in files:
+        d = json.loads(f.read_text())
+        endpoint = d.get("endpoint") or endpoint
+        mode = d.get("mode") or mode
+        date = d.get("date_utc") or date
+        r = d.get("resolve_library_id") or {}
+        q = d.get("query_docs") or {}
+        resolve_args = r.get("args") or resolve_args
+        query_args = q.get("args") or query_args
+        if r.get("cold_ms") is not None:
+            resolve_cold.append(r["cold_ms"])
+        resolve_ms.extend(r.get("latencies_ms") or [])
+        if q.get("cold_ms") is not None:
+            query_cold.append(q["cold_ms"])
+        query_ms.extend(q.get("latencies_ms") or [])
+    rmed, qmed = median(resolve_ms), median(query_ms)
+    rcold, qcold = median(resolve_cold), median(query_cold)
+    rl = (resolve_args or {}).get("libraryName", "Python")
+    rq = (resolve_args or {}).get("query", "json.dumps")
+    qq = (query_args or {}).get("query", "json.dumps")
+    lines = []
+    lines.append("### Context7 (remote) — doc-snippet search, not symbol resolution")
+    lines.append("")
+    lines.append(
+        f"Context7 is a **remote** MCP server ([context7.com](https://context7.com), "
+        f"streamable HTTP at `{endpoint}`, `Authorization: Bearer <key>`) — a different "
+        "category from every local stack above. `resolve-library-id` and `query-docs` "
+        "search Context7's cloud documentation index and return doc **snippets**; they "
+        "do not resolve symbols against a local environment, and every call is a "
+        "network round-trip. tpmcp's `py_docs`/`py_module_members` in the latency table "
+        "above are local and in-process (no interpreter, no API key, no network), so "
+        "the two are not apples-to-apples — the rows below are labeled REMOTE to keep "
+        "that honest.")
+    lines.append("")
+    lines.append("| Tool (REMOTE, network round-trip) | Median | First call |")
+    lines.append("|---|---|---|")
+    lines.append(f"| `resolve-library-id` (libraryName `{rl}`, query `{rq}`) "
+                 f"| {ms_cell(rmed)} | {ms_cell(rcold)} |")
+    lines.append(f"| `query-docs` (query `{qq}`) "
+                 f"| {ms_cell(qmed)} | {ms_cell(qcold)} |")
+    lines.append("")
+    lines.append(
+        f"Measured {date[:10] if date else '?'} ({mode} mode), median of {len(files)} "
+        "run(s) x the per-call samples. The median covers repeat calls on an "
+        "established session; \"first call\" is the first call in the session, so it "
+        "can include the server-side cold path and connection reuse. Every call is a "
+        "network round-trip.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def measured_section(results, ctx7=""):
     lines = []
     present = [s for s in STACK_ORDER if s in results]
 
@@ -380,8 +449,19 @@ def measured_section(results):
                  "the same source as a snippet” for execution-only "
                  "servers. lint means ruff on the same marimo-format "
                  "fixture: by file path for tpmcp, as a code string for "
-                 "mcp-server-analyzer (its only input shape).")
+                 "mcp-server-analyzer (its only input shape). docs-cold is "
+                 "the FIRST `py_docs` call in a fresh server process (empty "
+                 "discovery and docstring caches); docs-warm is the "
+                 "identical repeat call (caches populated); docs-members is "
+                 "`py_module_members`, a distinct tool that shares the "
+                 "already-warm discovery cache but enumerates the module "
+                 "itself.")
     lines.append("")
+    if ctx7:
+        lines.append(ctx7)
+        if not lines[-1].endswith("\n\n"):
+            lines.append("")
+
 
     # ---- conflict verdicts ----
     lines.append("### The file changes while the AI works")
@@ -465,7 +545,8 @@ def render(dirpath, outfile):
     if not results:
         print("no results found - run bench/measure.sh first", file=sys.stderr)
         return 1
-    doc = static.replace(PLACEHOLDER, measured_section(results))
+    ctx7 = context7_block(dirpath)
+    doc = static.replace(PLACEHOLDER, measured_section(results, ctx7))
     Path(outfile).write_text(doc)
     print(f"{outfile} generated from {sum(len(v) for v in results.values())} "
           f"runs across {len(results)} stacks")

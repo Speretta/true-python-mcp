@@ -73,7 +73,8 @@ STALE_SOURCE = 'greeting = "hello bench (stale)"'
 
 # Canonical operation order (render.py builds the latency matrix from it).
 OP_ORDER = ["read", "check", "edit", "insert", "execute", "delete",
-            "reread", "lint", "analyze", "conflict-0s", "conflict-10s"]
+            "reread", "lint", "analyze", "docs-cold", "docs-warm",
+            "docs-members", "conflict-0s", "conflict-10s"]
 
 
 def now_ms():
@@ -155,8 +156,9 @@ class HttpClient:
 
     kind = "http"
 
-    def __init__(self, url):
+    def __init__(self, url, headers=None):
         self.url = url
+        self.headers = dict(headers) if headers else {}
         self.next_id = 0
         self.session = None
         self.start_ms = now_ms()
@@ -166,6 +168,7 @@ class HttpClient:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        headers.update(self.headers)
         if self.session:
             headers["Mcp-Session-Id"] = self.session
         req = urllib.request.Request(
@@ -311,6 +314,21 @@ def step(label, tool, variants, after=None, skip=None):
 NO_CHECK = "no validate/check tool"
 NO_LINT = "no lint tool"
 NO_ANALYZE = "no combined analyze tool"
+NO_DOCS = "no docs/symbol-lookup tool"
+
+
+def _docs_skips():
+    """The three docs-profile rows for stacks without a docs tool.
+
+    tpmcp fills these in with real calls (profile_tpmcp); every other stack
+    lacks a symbol/docs tool, so the steps are recorded as explicit skips and
+    render.py shows "—" (with the reason in the audit) instead of "n/a".
+    """
+    return [
+        step("docs-cold", None, [], skip=NO_DOCS),
+        step("docs-warm", None, [], skip=NO_DOCS),
+        step("docs-members", None, [], skip=NO_DOCS),
+    ]
 
 # --------------------------------------------------------------------------
 # Operation profiles v2. Index math: the fixture has 21 cells; cell 4 is
@@ -339,6 +357,15 @@ def profile_tpmcp(ctx):
         step("lint", "ruff_check", [{"path": NB_PY}]),
         step("analyze", None, [],
              skip="check + lint already cover validation and diagnostics"),
+        # Docs capability: py_docs (cold then warm) + py_module_members.
+        # "cold" is the FIRST call in this fresh server process, so the
+        # discovery and docstring caches are empty; "warm" is the identical
+        # repeat, when those caches are populated. members is a distinct
+        # tool that shares the (now warm) discovery cache but enumerates the
+        # module itself. All three are read-only, no interpreter involved.
+        step("docs-cold", "py_docs", [{"symbol": "json.dumps"}]),
+        step("docs-warm", "py_docs", [{"symbol": "json.dumps"}]),
+        step("docs-members", "py_module_members", [{"module": "json"}]),
     ]
 
 
@@ -367,7 +394,7 @@ def profile_datalayer(ctx):
              [{"notebook_name": "bench", "response_format": "detailed"}]),
         step("lint", None, [], skip=NO_LINT),
         step("analyze", None, [], skip=NO_ANALYZE),
-    ]
+    ] + _docs_skips()
 
 
 def profile_block(ctx):
@@ -400,7 +427,7 @@ def profile_block(ctx):
                "position_index": 4}]),
         step("lint", None, [], skip=NO_LINT),
         step("analyze", None, [], skip=NO_ANALYZE),
-    ]
+    ] + _docs_skips()
 
 
 def profile_cursor(ctx):
@@ -418,7 +445,7 @@ def profile_cursor(ctx):
         step("reread", "notebook_read", [{"notebook_path": NB}]),
         step("lint", None, [], skip=NO_LINT),
         step("analyze", None, [], skip=NO_ANALYZE),
-    ]
+    ] + _docs_skips()
 
 
 def profile_marimo(ctx):
@@ -439,7 +466,7 @@ def profile_marimo(ctx):
         step("lint", "lint_notebook", [{"args": {}}],
              skip="session-scoped; headless there is none"),
         step("analyze", None, [], skip=NO_ANALYZE),
-    ]
+    ] + _docs_skips()
 
 
 def profile_analyzer(ctx):
@@ -458,7 +485,7 @@ def profile_analyzer(ctx):
         step("reread", None, [], skip="not a notebook server"),
         step("lint", "ruff-check", [{"code": src}]),
         step("analyze", "analyze-code", [{"code": src}]),
-    ]
+    ] + _docs_skips()
 
 
 def profile_runpython(ctx):
@@ -474,7 +501,7 @@ def profile_runpython(ctx):
         step("reread", None, [], skip="execution-only server"),
         step("lint", None, [], skip=NO_LINT),
         step("analyze", None, [], skip=NO_ANALYZE),
-    ]
+    ] + _docs_skips()
 
 
 def profile_yzfly(ctx):
@@ -491,7 +518,7 @@ def profile_yzfly(ctx):
         step("reread", None, [], skip="out of profile scope"),
         step("lint", None, [], skip=NO_LINT),
         step("analyze", None, [], skip=NO_ANALYZE),
-    ]
+    ] + _docs_skips()
 
 
 PROFILES = {
