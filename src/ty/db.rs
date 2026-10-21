@@ -455,17 +455,15 @@ mod tests {
     fn stdlib_source_dir_windows_uses_lib_layout() {
         let prefix = SystemPath::new("C:/hostedtoolcache/windows/Python/3.12.10/x64");
         let dir = stdlib_source_dir(prefix, StdlibLayout::Windows, PythonVersion::from((3, 12)));
-        assert_eq!(
-            dir.as_str(),
-            "C:/hostedtoolcache/windows/Python/3.12.10/x64/Lib"
-        );
+        assert_eq!(dir, prefix.join("Lib"));
     }
 
     #[test]
     fn stdlib_source_dir_unix_uses_versioned_layout() {
         let prefix = SystemPath::new("/opt/python");
-        let dir = stdlib_source_dir(prefix, StdlibLayout::Unix, PythonVersion::from((3, 12)));
-        assert_eq!(dir.as_str(), "/opt/python/lib/python3.12");
+        let version = PythonVersion::from((3, 12));
+        let dir = stdlib_source_dir(prefix, StdlibLayout::Unix, version);
+        assert_eq!(dir, prefix.join(format!("lib/python{version}")));
     }
 
     #[test]
