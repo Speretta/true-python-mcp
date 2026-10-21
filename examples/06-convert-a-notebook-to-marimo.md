@@ -47,7 +47,7 @@ cells: 6 (4 code, 1 markdown, 1 other) · nbformat 4.5
 ### [5] code · 2 lines · total = len(responses)
 
 diagnostics: 0 finding(s)
-no findings: the notebook is valid
+no findings: the notebook passes this check
 ````
 
 One call gives the shape of the notebook (one row per cell, no bodies) and its
@@ -334,7 +334,7 @@ tpmcp answers:
 ````markdown
 notebook_check: examples/demo/survey.py
 format: marimo 0.25.1 · revision: 57cc699fb3b931c6
-no findings: the notebook is valid
+no findings: the notebook passes this check
 ````
 
 No syntax errors, no graph problems: the file parses as a whole again and
