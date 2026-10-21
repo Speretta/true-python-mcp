@@ -1,11 +1,8 @@
 use std::path::Path;
-use std::sync::Arc;
 
-use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::{Diagnostic as TyDiagnostic, Severity, UnifiedFile};
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::source::source_text;
-use ruff_db::system::SystemVirtualPathBuf;
 use ruff_notebook::{Notebook, NotebookIndex};
 use ruff_source_file::{LineColumn, LineIndex, OneIndexed};
 use ty_python_semantic::Db as SemanticDb;
@@ -14,7 +11,8 @@ use crate::error::Error;
 use crate::fs;
 use crate::ruff::{Diagnostic, LineCol};
 
-use super::db::{NOTEBOOK_VIRTUAL_PATH, TyDb, VirtualSource, to_system_path};
+use super::cache::{CacheKey, with_db};
+use super::db::{NOTEBOOK_VIRTUAL_PATH, TyDb, to_system_path};
 
 /// Sources larger than this are refused before the checker recurses: the type
 /// check walks the semantic index on the small worker stack, and a pathological
@@ -41,13 +39,23 @@ pub(super) fn check_snapshot_inner(
     let src_root_sys = to_system_path(src_root).ok_or_else(|| {
         Error::invalid_input(format!("path is not representable: {}", src_root.display()))
     })?;
-    let db = TyDb::new(src_root_sys.as_path(), None, python)?;
     let system_path = to_system_path(path).ok_or_else(|| {
         Error::invalid_input(format!("path is not representable: {}", path.display()))
     })?;
-    let file = system_path_to_file(&db, &system_path)
-        .map_err(|error| Error::analysis(format!("cannot read {system_path}: {error}")))?;
-    check_file(&db, file)
+
+    with_db(
+        CacheKey::new(src_root, python),
+        snapshot.content.len(),
+        || TyDb::new(src_root_sys.as_path(), python),
+        |db| {
+            let file = system_path_to_file(db, &system_path)
+                .map_err(|error| Error::analysis(format!("cannot read {system_path}: {error}")))?;
+            // Refresh the file from disk so a cached database re-reads the
+            // current bytes (invalidating any memoized check of the old ones).
+            File::sync_path(db, &system_path);
+            check_file(db, file)
+        },
+    )
 }
 
 /// Type-checks a `.ipynb` notebook from the caller's snapshot: parse it into
@@ -73,22 +81,20 @@ fn check_notebook(
         Error::invalid_input(format!("path is not representable: {}", src_root.display()))
     })?;
 
-    let virtual_path = SystemVirtualPathBuf::from(NOTEBOOK_VIRTUAL_PATH.to_string());
-    let db = TyDb::new(
-        src_root_sys.as_path(),
-        Some(VirtualSource {
-            path: virtual_path.clone(),
-            content: Arc::from(source),
-        }),
-        python,
-    )?;
-    let file = db.files().virtual_file(&db, virtual_path.as_path()).file();
-    check_file(&db, file).map(|diagnostics| {
-        diagnostics
-            .into_iter()
-            .map(|diagnostic| map_to_cell(diagnostic, &index))
-            .collect()
-    })
+    with_db(
+        CacheKey::new(src_root, python),
+        source.len(),
+        || TyDb::new(src_root_sys.as_path(), python),
+        |db| {
+            let file = db.serve_virtual(NOTEBOOK_VIRTUAL_PATH, &source);
+            check_file(db, file).map(|diagnostics| {
+                diagnostics
+                    .into_iter()
+                    .map(|diagnostic| map_to_cell(diagnostic, &index))
+                    .collect()
+            })
+        },
+    )
 }
 
 // ---- input guards ----

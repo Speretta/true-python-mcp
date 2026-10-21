@@ -6,6 +6,7 @@
 //! typeshed stdlib + the site-packages of the environment discovered next to
 //! the checked file.
 
+pub(crate) mod cache;
 mod check;
 mod db;
 mod settings;
@@ -16,6 +17,7 @@ use crate::error::Error;
 use crate::fs;
 use crate::ruff::Diagnostic;
 
+pub(crate) use db::DOCS_VIRTUAL_PATH;
 pub use db::TyDb;
 pub use settings::{PythonTarget, version_info};
 
@@ -44,12 +46,10 @@ pub fn check_snapshot_with_python(
     snapshot: &fs::Snapshot,
     python: Option<&Path>,
 ) -> Result<Vec<Diagnostic>, Error> {
-    // The parsed AST's recursive Drop glue runs when the salsa database drops
-    // at the end of the check — unguarded, like ruff's walk was before its
-    // guard. Grow the stack for the WHOLE check (including that drop), not just
-    // the walk inside check_file; `check_file` grows a larger segment for the
-    // semantic-index/inference recursion.
-    crate::stack::guarded(snapshot.content.len(), || {
-        check::check_snapshot_inner(path, snapshot, python)
-    })
+    // The parsed AST's recursive Drop glue no longer runs here: the database
+    // is cached (see `cache`), so its drop is deferred to eviction or thread
+    // teardown, where `cache` re-applies `crate::stack::guarded` sized by the
+    // largest source it served. The semantic-index/inference recursion itself
+    // is still grown inside `check_file` (`guarded_walk`).
+    check::check_snapshot_inner(path, snapshot, python)
 }
