@@ -421,7 +421,7 @@ fn cached_settings_still_read_fresh_bytes() {
 
 // ---- venv discovery (environment resolution) ----
 
-/// The on-disk site-packages path for a fake venv, per platform: Windows puts
+/// The on-disk site-packages path for a scaffolded venv, per platform: Windows puts
 /// it at `Lib/site-packages` (no version component), POSIX at
 /// `lib/pythonX.Y/site-packages`. ty's discovery scans for these layouts, so a
 /// fixture that only exists in the POSIX shape breaks the Windows CI.
@@ -433,14 +433,15 @@ fn site_packages_dir(venv: &Path, version: &str) -> PathBuf {
     }
 }
 
-/// Create a minimal fake virtual environment at `root/<name>`: a `pyvenv.cfg`
-/// marker plus a `site-packages/<pkg>/__init__.py` in the platform layout. ty
-/// only needs the on-disk shape — a `pyvenv.cfg` and a resolvable
-/// `site-packages` — to discover the environment; it never runs the (absent)
-/// interpreter. The `home` key is required by the `pyvenv.cfg` parser but its
-/// target is never consulted because `include-system-site-packages` is absent,
-/// so it just has to be an existing directory.
-fn fake_venv(root: &Path, name: &str, pkg: &str) -> PathBuf {
+/// Create a minimal on-disk scaffold for a virtual environment at
+/// `root/<name>`: a `pyvenv.cfg` marker plus a `site-packages/<pkg>/__init__.py`
+/// in the platform layout. ty only needs the on-disk shape — a `pyvenv.cfg` and
+/// a resolvable `site-packages` — to discover the environment; it never runs
+/// the (absent) interpreter. The `home` key is required by the `pyvenv.cfg`
+/// parser but its target is never consulted because
+/// `include-system-site-packages` is absent, so it just has to be an existing
+/// directory.
+fn scaffold_venv(root: &Path, name: &str, pkg: &str) -> PathBuf {
     let venv = root.join(name);
     let site = site_packages_dir(&venv, "3.11");
     std::fs::create_dir_all(site.join(pkg)).unwrap();
@@ -462,7 +463,7 @@ fn nested_file_resolves_ancestor_venv() {
     let dir = temp_dir("ty-ancestor");
     let root = dir.join("root");
     std::fs::create_dir_all(root.join("src")).unwrap();
-    fake_venv(&root, ".venv", "somepkg");
+    scaffold_venv(&root, ".venv", "somepkg");
     let path = root.join("src/mod.py");
     std::fs::write(&path, "import somepkg\n").unwrap();
 
@@ -482,8 +483,8 @@ fn multiple_ancestor_venvs_are_ambiguous() {
     let dir = temp_dir("ty-ambiguous");
     let root = dir.join("root");
     std::fs::create_dir_all(&root).unwrap();
-    fake_venv(&root, ".venv", "pkg_a");
-    fake_venv(&root, "venv", "pkg_b");
+    scaffold_venv(&root, ".venv", "pkg_a");
+    scaffold_venv(&root, "venv", "pkg_b");
     let path = root.join("mod.py");
     std::fs::write(&path, "import pkg_a\n").unwrap();
 
@@ -503,7 +504,7 @@ fn explicit_python_param_resolves_venv() {
     let dir = temp_dir("ty-python-param");
     let root = dir.join("root");
     std::fs::create_dir_all(&root).unwrap();
-    let venv = fake_venv(&root, ".venv", "somepkg");
+    let venv = scaffold_venv(&root, ".venv", "somepkg");
 
     // The file lives outside `root` so no ancestor walk can find `root/.venv`.
     let other = dir.join("other");
