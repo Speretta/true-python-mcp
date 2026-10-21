@@ -456,7 +456,10 @@ fn missing_docstring_returns_a_note() {
         .note
         .as_deref()
         .expect("a missing docstring must carry a note, not a silent None");
-    assert!(note.contains("no docstring"), "{note}");
+    assert_eq!(
+        note, "no docstring: the definition has none",
+        "a plain .py definition is neither a C extension nor a bare stub"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -482,4 +485,68 @@ fn missing_docstring_note_over_the_wire() {
         .unwrap_or_else(|| panic!("a missing docstring must carry a note: {sc}"));
     assert!(note.contains("no docstring"), "{note}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `py_docs` and `py_module_members` disclose the environment they resolved
+/// against — `python_version`, `version_source`, `environment` — in both the
+/// markdown and JSON renderings, so the LLM/user never gets a silent static
+/// version assumption.
+#[test]
+fn docs_disclose_python_target() {
+    let mut server = Server::start(&[]);
+
+    let (err, text, sc) = server.call("py_docs", json!({"symbol": "json.dumps", "format": "json"}));
+    assert!(!err, "{text}");
+    assert!(
+        sc["python_version"]
+            .as_str()
+            .is_some_and(|version| version.split('.').count() == 2),
+        "python_version disclosed as major.minor: {sc}"
+    );
+    assert!(
+        !sc["version_source"].as_str().unwrap_or("").is_empty(),
+        "version_source disclosed: {sc}"
+    );
+    assert!(
+        sc["environment"].is_string() || sc["environment"].is_null(),
+        "environment is a path or null: {sc}"
+    );
+
+    let (err, text, _) = server.call("py_docs", json!({"symbol": "json.dumps"}));
+    assert!(!err, "{text}");
+    for label in ["python_version:", "version_source:", "environment:"] {
+        assert!(
+            text.contains(label),
+            "py_docs markdown missing {label}: {text}"
+        );
+    }
+
+    let (err, text, sc) = server.call(
+        "py_module_members",
+        json!({"module": "json", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        sc["python_version"]
+            .as_str()
+            .is_some_and(|version| version.split('.').count() == 2),
+        "python_version disclosed as major.minor: {sc}"
+    );
+    assert!(
+        !sc["version_source"].as_str().unwrap_or("").is_empty(),
+        "version_source disclosed: {sc}"
+    );
+    assert!(
+        sc["environment"].is_string() || sc["environment"].is_null(),
+        "environment is a path or null: {sc}"
+    );
+
+    let (err, text, _) = server.call("py_module_members", json!({"module": "json"}));
+    assert!(!err, "{text}");
+    for label in ["python_version:", "version_source:", "environment:"] {
+        assert!(
+            text.contains(label),
+            "py_module_members markdown missing {label}: {text}"
+        );
+    }
 }

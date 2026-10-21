@@ -17,6 +17,7 @@ use crate::fs;
 use crate::ruff::Diagnostic;
 
 pub use db::TyDb;
+pub use settings::{PythonTarget, version_info};
 
 /// Type-checks `path` (`.py`/`.pyi`/`.ipynb`) by reading it once through
 /// [`crate::fs`] and handing those bytes to [`check_snapshot`]. Callers that

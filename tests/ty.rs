@@ -66,6 +66,92 @@ fn ty_check_clean_file_has_no_diagnostics() {
     assert_eq!(value["diagnostic_count"], 0);
 }
 
+/// `ty_check` discloses the environment it targeted — which Python version,
+/// where it was measured, and the interpreter prefix — instead of silently
+/// assuming a version. A measured version carries no note; an unmeasurable one
+/// carries an honest `default fallback` note and `version_source: "unknown"`.
+#[test]
+fn ty_check_discloses_python_target() {
+    let dir = temp_dir("ty-check-disclose");
+    let path = dir.join("good.py");
+    std::fs::write(&path, "x: int = 1\n").unwrap();
+    let mut server = Server::start(&[]);
+
+    let (err, text, sc) = server.call("ty_check", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    let version = sc["python_version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("python_version disclosed: {sc}"));
+    assert!(
+        version.split('.').count() == 2,
+        "version should be major.minor: {sc}"
+    );
+    let source = sc["version_source"]
+        .as_str()
+        .unwrap_or_else(|| panic!("version_source disclosed: {sc}"));
+    assert!(!source.is_empty(), "version_source must not be empty: {sc}");
+    assert!(
+        sc["environment"].is_string() || sc["environment"].is_null(),
+        "environment is a path or null: {sc}"
+    );
+    if source == "unknown" {
+        let note = sc["note"]
+            .as_str()
+            .unwrap_or_else(|| panic!("unknown version must carry a note: {sc}"));
+        assert!(note.contains("default fallback"), "{note}");
+        assert!(note.contains("not measured"), "{note}");
+    } else {
+        assert!(
+            sc["note"].is_null(),
+            "measured version must not carry a note: {sc}"
+        );
+        assert!(
+            sc["environment"].is_string(),
+            "measured version implies a discovered environment: {sc}"
+        );
+    }
+
+    // Markdown rendering carries the same disclosure.
+    let (err, text, _) = server.call("ty_check", json!({"path": path}));
+    assert!(!err, "{text}");
+    for label in ["python_version:", "version_source:", "environment:"] {
+        assert!(text.contains(label), "markdown missing {label}: {text}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `version_info` is the library surface of the same disclosure.
+#[test]
+fn version_info_reports_the_targeted_environment() {
+    let dir = temp_dir("ty-version-info");
+    let target = ty::version_info(&dir, None).unwrap();
+    assert!(
+        target.python_version.split('.').count() == 2,
+        "version should be major.minor: {}",
+        target.python_version
+    );
+    assert!(!target.version_source.is_empty());
+    if target.version_source == "unknown" {
+        let note = target
+            .note
+            .as_deref()
+            .expect("unknown version must carry a note");
+        assert!(note.contains("default fallback"), "{note}");
+        assert!(note.contains("not measured"), "{note}");
+    } else {
+        assert!(
+            target.note.is_none(),
+            "measured version must not carry a note: {:?}",
+            target.note
+        );
+        assert!(
+            target.environment.is_some(),
+            "measured version implies a discovered environment"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 // ---- fixture-driven oracle + unit tests (library-level, mirror tests/analysis.rs) ----
 
 fn code(d: &tpmcp::ruff::Diagnostic) -> &str {
@@ -524,40 +610,48 @@ fn explicit_python_param_resolves_venv() {
 
 /// The discovered venv's `pyvenv.cfg` `version` key drives the checker's target
 /// Python version: PEP 695 `type X[T] = ...` (3.12+) parses under a 3.13 venv
-/// but is a syntax error under the 3.11 default, so the two checks pin both the
-/// venv-version adoption and the fallback.
+/// but is a syntax error under a 3.11 venv, so the two checks pin both
+/// directions of version adoption. (There is no silent 3.11 fallback to pin:
+/// an unmeasurable version is now disclosed, not assumed.)
 #[test]
 fn venv_python_version_drives_syntax() {
     let dir = temp_dir("ty-version");
-    let root = dir.join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    let venv = root.join(".venv");
-    std::fs::create_dir_all(site_packages_dir(&venv, "3.13")).unwrap();
-    std::fs::write(
-        venv.join("pyvenv.cfg"),
-        format!("home = {}\nversion = 3.13\n", root.display()),
-    )
-    .unwrap();
-
     let source = "type Alias[T] = list[T]\n";
 
-    // Under the 3.13 venv the PEP 695 statement parses.
-    let path = root.join("mod.py");
-    std::fs::write(&path, source).unwrap();
-    let diagnostics = ty::check_path(&path).unwrap();
+    // A 3.13 venv parses the PEP 695 statement.
+    let root313 = dir.join("root313");
+    std::fs::create_dir_all(&root313).unwrap();
+    let venv313 = root313.join(".venv");
+    std::fs::create_dir_all(site_packages_dir(&venv313, "3.13")).unwrap();
+    std::fs::write(
+        venv313.join("pyvenv.cfg"),
+        format!("home = {}\nversion = 3.13\n", root313.display()),
+    )
+    .unwrap();
+    let path313 = root313.join("mod.py");
+    std::fs::write(&path313, source).unwrap();
+    let diagnostics = ty::check_path(&path313).unwrap();
     assert!(
         !codes(&diagnostics).iter().any(|c| c == "invalid-syntax"),
         "PEP 695 syntax must parse under a 3.13 venv: {diagnostics:?}"
     );
 
-    // The same source with no venv ancestor falls back to the 3.11 default,
-    // where `type` parameters are a syntax error.
-    let plain = dir.join("plain.py");
-    std::fs::write(&plain, source).unwrap();
-    let diagnostics = ty::check_path(&plain).unwrap();
+    // A 3.11 venv rejects the same statement.
+    let root311 = dir.join("root311");
+    std::fs::create_dir_all(&root311).unwrap();
+    let venv311 = root311.join(".venv");
+    std::fs::create_dir_all(site_packages_dir(&venv311, "3.11")).unwrap();
+    std::fs::write(
+        venv311.join("pyvenv.cfg"),
+        format!("home = {}\nversion = 3.11\n", root311.display()),
+    )
+    .unwrap();
+    let path311 = root311.join("mod.py");
+    std::fs::write(&path311, source).unwrap();
+    let diagnostics = ty::check_path(&path311).unwrap();
     assert!(
         codes(&diagnostics).iter().any(|c| c == "invalid-syntax"),
-        "PEP 695 syntax must be a syntax error under the 3.11 default: {diagnostics:?}"
+        "PEP 695 syntax must be a syntax error under a 3.11 venv: {diagnostics:?}"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
