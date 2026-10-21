@@ -40,6 +40,7 @@ mod signature;
 
 use std::path::Path;
 
+use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast as ast;
@@ -51,7 +52,8 @@ use ty_python_semantic::types::ide_support::{
 use ty_python_semantic::{Db as SemanticDb, HasType, SemanticModel};
 
 use crate::error::Error;
-use crate::ty::TyDb;
+use crate::ty::cache::{CacheKey, with_db};
+use crate::ty::{DOCS_VIRTUAL_PATH, TyDb};
 
 use enrich::resolve_docstring;
 pub use members::{DocModule, DocModuleMember, resolve_module_members};
@@ -151,18 +153,38 @@ pub fn resolve_symbol_with_python(
     let segments = split_segments(symbol)?;
     let src_root = src_root.unwrap_or_else(|| Path::new("."));
 
-    // The first segment names a module to import, or a builtin to reference
-    // bare. Probing needs only the search paths (settings), so the throwaway
-    // database is cheap and shares the process-wide discovery cache.
-    let is_module =
-        TyDb::for_virtual_source_with_python(src_root, "", python)?.resolves_module(&segments[0]);
+    // The synthetic module is a few bytes per segment; docs never builds a deep
+    // AST, so the deferred drop guard is a no-op for this source and any small
+    // bound is fine.
+    with_db(
+        CacheKey::new(src_root, python),
+        symbol.len(),
+        || TyDb::for_src_root(src_root, python),
+        |db| {
+            // The first segment names a module to import, or a builtin to
+            // reference bare. Probing needs only the search paths (settings), so
+            // it shares the cached database: `resolves_module` never reads the
+            // virtual source.
+            let is_module = db.resolves_module(&segments[0]);
+            let source = build_source(&segments, is_module);
+            let file = db.serve_virtual(DOCS_VIRTUAL_PATH, &source);
+            resolve_on_db(db, file, &segments, is_module, symbol)
+        },
+    )
+}
 
-    let source = build_source(&segments, is_module);
-    let db = TyDb::for_virtual_source_with_python(src_root, &source, python)?;
-    let file = db.docs_file();
-    let program_file = SemanticDb::program_file(&db, file);
-    let model = SemanticModel::new(&db, program_file);
-    let parsed = parsed_module(&db, model.python_file()).load(&db);
+/// The resolution proper, against an already-built (cached) database whose
+/// virtual file holds the synthetic module for `symbol`.
+fn resolve_on_db(
+    db: &TyDb,
+    file: File,
+    segments: &[String],
+    is_module: bool,
+    symbol: &str,
+) -> Result<DocSymbol, Error> {
+    let program_file = SemanticDb::program_file(db, file);
+    let model = SemanticModel::new(db, program_file);
+    let parsed = parsed_module(db, model.python_file()).load(db);
     let env = model.program_environment();
 
     // The synthetic module's last statement is a call whose `func` is the
@@ -179,19 +201,19 @@ pub fn resolve_symbol_with_python(
     // Walk the intermediate hops first so a multi-segment dead-end is reported
     // at the failing segment, then resolve the terminal.
     let mut resolution = build_resolution(
-        &db,
+        db,
         &model,
         &env,
         parsed.suite(),
-        &segments,
+        segments,
         is_module,
         symbol,
     )?;
 
     let terminal = resolve_expr(&model, &call.func)?;
-    let candidates = rank_candidates(&db, &terminal);
+    let candidates = rank_candidates(db, &terminal);
     let first = candidates.first().cloned().ok_or_else(|| {
-        let receiver = receiver_type_of(&db, &env, &model, &call.func);
+        let receiver = receiver_type_of(db, &env, &model, &call.func);
         let segment = segments.last().map(String::as_str).unwrap_or(symbol);
         Error::analysis(format!(
             "symbol `{symbol}` did not resolve: `{segment}` has no definition on receiver `{receiver}`"
@@ -199,10 +221,10 @@ pub fn resolve_symbol_with_python(
     })?;
 
     let terminal_segment = segments.last().map(String::as_str).unwrap_or(symbol);
-    let kind = kind_of_resolved(&db, &first);
-    let resolved_name = resolved_name_of(&db, &first, terminal_segment);
-    let is_stub = is_stub_of(&db, &first);
-    let is_reexported = is_reexported_of(&db, &first);
+    let kind = kind_of_resolved(db, &first);
+    let resolved_name = resolved_name_of(db, &first, terminal_segment);
+    let is_stub = is_stub_of(db, &first);
+    let is_reexported = is_reexported_of(db, &first);
     resolution.push(format!("{terminal_segment} -> {kind} {symbol}"));
 
     // Structured signature. A class terminal renders its constructor (so the
@@ -219,7 +241,7 @@ pub fn resolve_symbol_with_python(
             .inferred_type(&model)
             .is_some_and(|ty| ty.as_union().is_some());
         let (signatures, return_type, parameters) =
-            callable_output(&db, &env, &details, &resolved_name);
+            callable_output(db, &env, &details, &resolved_name);
         (signatures, return_type, parameters, is_union)
     };
     let disambiguation = disambiguation_of(
@@ -230,10 +252,10 @@ pub fn resolve_symbol_with_python(
         is_reexported,
     );
 
-    let focus = first.focus_range(&db);
+    let focus = first.focus_range(db);
     let source_file = focus.file();
-    let definition_path = source_file.path(&db).clone();
-    let source_text = source_text(&db, source_file);
+    let definition_path = source_file.path(db).clone();
+    let source_text = source_text(db, source_file);
     let line_index = LineIndex::from_source_text(&source_text);
     let source_line = Some(line_index.line_index(focus.range().start()).get());
 
@@ -245,7 +267,7 @@ pub fn resolve_symbol_with_python(
         call.func
             .inferred_type(&model)
             .map(|ty| {
-                type_hierarchy_supertypes(&db, &env, ty)
+                type_hierarchy_supertypes(db, &env, ty)
                     .into_iter()
                     .map(|class| class.name.as_str().to_string())
                     .collect()
@@ -260,22 +282,22 @@ pub fn resolve_symbol_with_python(
     // CPython `Lib/*.py` source — and, when nothing has it, an honest note
     // instead of a silent `None`.
     let docstring = resolve_docstring(
-        &db,
+        db,
         &definition_path,
         &resolved_name,
         is_stub,
         first
-            .docstring(&db)
-            .or_else(|| first.implementation_docstring(&db)),
+            .docstring(db)
+            .or_else(|| first.implementation_docstring(db)),
     );
 
     let candidates = candidates
         .iter()
         .skip(1)
         .map(|resolved| DocCandidate {
-            resolved_name: resolved_name_of(&db, resolved, terminal_segment),
-            kind: kind_of_resolved(&db, resolved).to_string(),
-            source: source_of(&db, resolved),
+            resolved_name: resolved_name_of(db, resolved, terminal_segment),
+            kind: kind_of_resolved(db, resolved).to_string(),
+            source: source_of(db, resolved),
         })
         .collect();
 

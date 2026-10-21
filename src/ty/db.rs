@@ -37,7 +37,7 @@ pub(super) const NOTEBOOK_VIRTUAL_PATH: &str = "__tpmcp_ty_notebook__.py";
 /// resolves a dotted symbol through. Like [`NOTEBOOK_VIRTUAL_PATH`], a plain
 /// `.py` name keeps the source type `Python` and need not live under a search
 /// root: absolute imports already resolve against the configured search paths.
-const DOCS_VIRTUAL_PATH: &str = "__tpmcp_docs__.py";
+pub(crate) const DOCS_VIRTUAL_PATH: &str = "__tpmcp_docs__.py";
 
 /// One in-memory `.py` source the database serves through its [`System`],
 /// standing in for the temp file the old notebook path wrote to disk.
@@ -183,15 +183,11 @@ impl TyDb {
     /// resolve instead of reporting `unresolved-import`). `python` pins the
     /// environment explicitly; `None` falls back to the implicit discovery
     /// order in [`discover_settings`].
-    pub(super) fn new(
-        src_root: &SystemPath,
-        virtual_source: Option<VirtualSource>,
-        python: Option<&Path>,
-    ) -> Result<Self, Error> {
+    pub(super) fn new(src_root: &SystemPath, python: Option<&Path>) -> Result<Self, Error> {
         let vendored = ty_vendored::file_system().clone();
         let system = TySystem {
             inner: OsSystem::new(src_root.to_path_buf()),
-            virtual_source: virtual_source.map(Arc::new),
+            virtual_source: None,
         };
         let program_settings = discover_settings(src_root, python)?;
         let db = Self {
@@ -209,39 +205,39 @@ impl TyDb {
         Ok(db)
     }
 
-    /// Builds a database rooted at `src_root` whose single virtual file holds
-    /// `source`. The symbol resolver needs this to type-check a synthetic
-    /// module without materializing a `.py` next to the caller's code; it is
-    /// the notebook path's in-memory-source pattern reused for docs. `python`
-    /// pins the environment discovery (an interpreter or venv root) so
-    /// `py_docs` resolves third-party symbols against the caller's environment
-    /// the way `ty_check` does.
-    pub(crate) fn for_virtual_source_with_python(
-        src_root: &Path,
-        source: &str,
-        python: Option<&Path>,
-    ) -> Result<Self, Error> {
+    /// Builds a database rooted at `src_root` with no virtual source; the
+    /// caller supplies the in-memory source via [`TyDb::serve_virtual`] before
+    /// querying. `python` pins the environment discovery (an interpreter or
+    /// venv root), exactly as documented on [`TyDb::new`].
+    pub(crate) fn for_src_root(src_root: &Path, python: Option<&Path>) -> Result<Self, Error> {
         let src_root_sys = to_system_path(src_root).ok_or_else(|| {
             Error::invalid_input(format!(
                 "source root is not representable: {}",
                 src_root.display()
             ))
         })?;
-        Self::new(
-            src_root_sys.as_path(),
-            Some(VirtualSource {
-                path: SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string()),
-                content: Arc::from(source),
-            }),
-            python,
-        )
+        Self::new(src_root_sys.as_path(), python)
     }
 
-    /// The interned [`File`] of the virtual module
-    /// [`for_virtual_source_with_python`] serves.
-    pub(crate) fn docs_file(&self) -> File {
-        let path = SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string());
-        self.files().virtual_file(self, path.as_path()).file()
+    /// Serves `content` at the virtual `path`, replacing the database's single
+    /// in-memory virtual source, then returns the interned [`File`] to query
+    /// against. On first use the file is registered fresh; on reuse its
+    /// revision is bumped so any memoized parse of the previous source is
+    /// invalidated and the new bytes are read. Callers must set the source
+    /// before every query: the database holds at most one virtual source at a
+    /// time, so the previous one does not survive a cache hit.
+    pub(crate) fn serve_virtual(&mut self, path: &str, content: &str) -> File {
+        let path = SystemVirtualPathBuf::from(path.to_string());
+        self.system.virtual_source = Some(Arc::new(VirtualSource {
+            path: path.clone(),
+            content: Arc::from(content),
+        }));
+        let virtual_file = match self.files().try_virtual_file(path.as_path()) {
+            Some(virtual_file) => virtual_file,
+            None => self.files().virtual_file(self, path.as_path()),
+        };
+        virtual_file.sync(self);
+        virtual_file.file()
     }
 
     /// The interpreter's real stdlib directory (`<prefix>/lib/python3.X`), when

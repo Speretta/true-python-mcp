@@ -20,7 +20,8 @@ use ty_python_semantic::types::ide_support::{call_signature_details, constructor
 use ty_python_semantic::{Db as SemanticDb, SemanticModel};
 
 use crate::error::Error;
-use crate::ty::TyDb;
+use crate::ty::cache::{CacheKey, with_db};
+use crate::ty::{DOCS_VIRTUAL_PATH, TyDb};
 
 use super::enrich::resolve_docstring;
 use super::rank::{is_stub_of, kind_of_resolved, rank_candidates};
@@ -88,19 +89,75 @@ pub fn resolve_module_members(
 
     let src_root = src_root.unwrap_or_else(|| Path::new("."));
 
-    // ---- pass 1: enumerate members ----
+    // The synthetic module is a few bytes per member; docs never builds a deep
+    // AST, so the deferred drop guard is a no-op for this source.
+    with_db(
+        CacheKey::new(src_root, python),
+        module.len(),
+        || TyDb::for_src_root(src_root, python),
+        |db| {
+            // ---- pass 1: enumerate members ----
+            let (resolved_name, names, member_count, truncated) = enumerate_members(db, module)?;
 
+            // ---- pass 2: re-resolve each member ----
+
+            // One synthetic call per capped member, in a single module, so
+            // discovery and parsing happen once regardless of the member count.
+            let mut source = format!("import {module}\n");
+            for name in &names {
+                source.push_str(&format!("{module}.{name}()\n"));
+            }
+            let file = db.serve_virtual(DOCS_VIRTUAL_PATH, &source);
+            let program_file = SemanticDb::program_file(db, file);
+            let model = SemanticModel::new(db, program_file);
+            let parsed = parsed_module(db, model.python_file()).load(db);
+            let env = model.program_environment();
+
+            // The suite is `[import, name0(), name1(), ...]`; skip the import
+            // and pair each call with its member name in order.
+            let calls = parsed
+                .suite()
+                .iter()
+                .skip(1)
+                .filter_map(ast::Stmt::as_expr_stmt)
+                .map(|stmt| &stmt.value)
+                .filter_map(|value| value.as_call_expr());
+
+            let members = names
+                .iter()
+                .zip(calls)
+                .map(|(name, call)| resolve_member(db, &env, &model, name, call))
+                .collect();
+
+            Ok(DocModule {
+                module: module.to_string(),
+                resolved_name,
+                member_count,
+                truncated,
+                members,
+            })
+        },
+    )
+}
+
+/// Pass 1: list a module's members through the only public enumeration surface
+/// ty exposes — a `from module import *` completion — against the cached
+/// database, returning the deduplicated, ordered names plus the resolved module
+/// name and truncation facts.
+fn enumerate_members(
+    db: &mut TyDb,
+    module: &str,
+) -> Result<(String, Vec<String>, usize, bool), Error> {
     // `from module import *` is the only public way to list a module's members
     // (`all_members`/`Member` in ty are `pub(crate)`). The list ty returns is
     // every end-of-scope symbol — it is NOT filtered by `__all__` or
     // star-import privacy, so private (`_`-prefixed) and dunder names appear;
     // they are demoted to the tail of the ordering below.
     let probe_source = format!("from {module} import *\n");
-    let db = TyDb::for_virtual_source_with_python(src_root, &probe_source, python)?;
-    let file = db.docs_file();
-    let program_file = SemanticDb::program_file(&db, file);
-    let model = SemanticModel::new(&db, program_file);
-    let parsed = parsed_module(&db, model.python_file()).load(&db);
+    let file = db.serve_virtual(DOCS_VIRTUAL_PATH, &probe_source);
+    let program_file = SemanticDb::program_file(db, file);
+    let model = SemanticModel::new(db, program_file);
+    let parsed = parsed_module(db, model.python_file()).load(db);
 
     let resolved_name = match model.resolve_module(Some(module), 0) {
         Some(resolved) => resolved.name(model.db()).as_str().to_string(),
@@ -139,44 +196,7 @@ pub fn resolve_module_members(
     let truncated = member_count > MAX_MEMBERS;
     names.truncate(MAX_MEMBERS);
 
-    // ---- pass 2: re-resolve each member ----
-
-    // One synthetic call per capped member, in a single module, so discovery
-    // and parsing happen once regardless of the member count.
-    let mut source = format!("import {module}\n");
-    for name in &names {
-        source.push_str(&format!("{module}.{name}()\n"));
-    }
-    let db = TyDb::for_virtual_source_with_python(src_root, &source, python)?;
-    let file = db.docs_file();
-    let program_file = SemanticDb::program_file(&db, file);
-    let model = SemanticModel::new(&db, program_file);
-    let parsed = parsed_module(&db, model.python_file()).load(&db);
-    let env = model.program_environment();
-
-    // The suite is `[import, name0(), name1(), ...]`; skip the import and pair
-    // each call with its member name in order.
-    let calls = parsed
-        .suite()
-        .iter()
-        .skip(1)
-        .filter_map(ast::Stmt::as_expr_stmt)
-        .map(|stmt| &stmt.value)
-        .filter_map(|value| value.as_call_expr());
-
-    let members = names
-        .iter()
-        .zip(calls)
-        .map(|(name, call)| resolve_member(&db, &env, &model, name, call))
-        .collect();
-
-    Ok(DocModule {
-        module: module.to_string(),
-        resolved_name,
-        member_count,
-        truncated,
-        members,
-    })
+    Ok((resolved_name, names, member_count, truncated))
 }
 
 /// Resolves one member to its kind, one-line signature and docstring. A member
