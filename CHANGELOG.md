@@ -3,6 +3,30 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.2.2] - 2026-10-21
+
+### Added
+
+- report a class's superclasses in py_docs
+- enrich docstrings from the real CPython source
+- add py_module_members, a read-only ty-backed module member listing
+- deepen py_docs resolution, overloads, constructors and ranking
+- expose py_docs, a ty-backed read-only symbol docs tool
+- add a ty-backed symbol resolver for py_docs
+
+### Fixed
+
+- dedup candidates by definition identity and harden signature string parsing
+
+### Changed
+
+- note missing docstrings instead of a silent None
+- document py_docs and py_module_members in the README
+- rename fake_venv test helper to scaffold_venv
+- split ty, docs and cell into submodules under 500 lines
+- cover nested paths, overloads and constructors in py_docs
+- cover py_docs resolution over the wire
+
 ## [0.2.1] - 2026-10-21
 
 `ty_check` now resolves the project's virtual environment and ruff honors the
