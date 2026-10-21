@@ -23,7 +23,10 @@ use ruff_db::vendored::VendoredFileSystem;
 use ruff_notebook::{Notebook, NotebookError, NotebookIndex};
 use ruff_python_ast::PythonVersion;
 use ruff_source_file::{LineColumn, LineIndex, OneIndexed};
-use ty_module_resolver::{Db as ModuleResolverDb, FallibleStrategy, SearchPathSettings};
+use ty_module_resolver::{
+    Db as ModuleResolverDb, FallibleStrategy, ModuleName, SearchPathSettings,
+    resolve_module_confident,
+};
 use ty_python_core::Db as PythonCoreDb;
 use ty_python_core::ProgramFile;
 use ty_python_core::platform::PythonPlatform;
@@ -46,6 +49,12 @@ use crate::ruff::{Diagnostic, LineCol};
 /// imports already resolve against the notebook's parent directory, which is
 /// the search root.
 const NOTEBOOK_VIRTUAL_PATH: &str = "__tpmcp_ty_notebook__.py";
+
+/// The virtual path of the synthetic module [`crate::docs::resolve_symbol`]
+/// resolves a dotted symbol through. Like [`NOTEBOOK_VIRTUAL_PATH`], a plain
+/// `.py` name keeps the source type `Python` and need not live under a search
+/// root: absolute imports already resolve against the configured search paths.
+const DOCS_VIRTUAL_PATH: &str = "__tpmcp_docs__.py";
 
 /// Sources larger than this are refused before the checker recurses: the type
 /// check walks the semantic index on the small worker stack, and a pathological
@@ -222,6 +231,46 @@ impl TyDb {
             .search_paths
             .try_register_static_roots(&db);
         Ok(db)
+    }
+
+    /// Builds a database rooted at `src_root` whose single virtual file holds
+    /// `source`. The symbol resolver needs this to type-check a synthetic
+    /// module without materializing a `.py` next to the caller's code; it is
+    /// the notebook path's in-memory-source pattern reused for docs.
+    pub(crate) fn for_virtual_source(src_root: &Path, source: &str) -> Result<Self, Error> {
+        let src_root_sys = to_system_path(src_root).ok_or_else(|| {
+            Error::invalid_input(format!(
+                "source root is not representable: {}",
+                src_root.display()
+            ))
+        })?;
+        Self::new(
+            src_root_sys.as_path(),
+            Some(VirtualSource {
+                path: SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string()),
+                content: Arc::from(source),
+            }),
+            None,
+        )
+    }
+
+    /// The interned [`File`] of the virtual module [`for_virtual_source`] serves.
+    pub(crate) fn docs_file(&self) -> File {
+        let path = SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string());
+        self.files().virtual_file(self, path.as_path()).file()
+    }
+
+    /// Whether `name` resolves to an importable module in this database's
+    /// search paths. The symbol resolver probes this to decide whether a
+    /// dotted symbol's first segment is an import (vs a builtin name, which
+    /// must be referenced bare so the builtins fallback can find it).
+    pub(crate) fn resolves_module(&self, name: &str) -> bool {
+        let Some(module_name) = ModuleName::new(name) else {
+            return false;
+        };
+        let program = <Self as ProgramDb>::program(self);
+        let environment = program.resolver_environment(self);
+        resolve_module_confident(self, environment, &module_name).is_some()
     }
 }
 

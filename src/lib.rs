@@ -13,6 +13,7 @@
 //! Tool implementations live in `tools/` and are wired into the server's tool
 //! router; each module is self-contained and stays under 500 lines.
 
+pub mod docs;
 pub mod error;
 pub mod fs;
 pub mod notebook;
