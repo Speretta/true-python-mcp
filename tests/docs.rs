@@ -483,3 +483,68 @@ fn missing_docstring_note_over_the_wire() {
     assert!(note.contains("no docstring"), "{note}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A first-party function whose docstring embeds doctest examples surfaces them
+/// in `doctest_examples`, split per `>>>` prompt with continuations and
+/// expected output grouped and leading indentation normalized away.
+#[test]
+fn resolves_function_doctest() {
+    let dir = temp_dir("docs-doctest");
+    std::fs::write(
+        dir.join("mymod.py"),
+        "def add(a, b):\n    \"\"\"Add two numbers.\n\n    >>> add(1, 2)\n    3\n    \"\"\"\n    return a + b\n",
+    )
+    .unwrap();
+    let symbol = resolve_symbol("mymod.add", Some(&dir)).unwrap();
+    assert_eq!(symbol.kind, "function");
+    assert_eq!(symbol.doctest_examples, vec![">>> add(1, 2)\n3"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A docstring with no doctest produces an empty `doctest_examples` — an honest
+/// empty list, not an error and not a note.
+#[test]
+fn docstring_without_doctest_is_empty_list() {
+    let dir = temp_dir("docs-no-doctest");
+    std::fs::write(
+        dir.join("mymod.py"),
+        "def no_examples():\n    \"\"\"Just prose.\"\"\"\n    return 1\n",
+    )
+    .unwrap();
+    let symbol = resolve_symbol("mymod.no_examples", Some(&dir)).unwrap();
+    assert!(symbol.doctest_examples.is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The doctest examples reach the wire in both the markdown (`doctests:` section)
+/// and JSON (`doctest_examples`) renderings.
+#[test]
+fn py_docs_doctest_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let dir = temp_dir("docs-doctest-wire");
+    std::fs::write(
+        dir.join("mymod.py"),
+        "def add(a, b):\n    \"\"\"Add two numbers.\n\n    >>> add(1, 2)\n    3\n    \"\"\"\n    return a + b\n",
+    )
+    .unwrap();
+
+    let (err, text, sc) = server.call(
+        "py_docs",
+        json!({"symbol": "mymod.add", "path": dir.to_str().unwrap(), "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let doctests = sc["doctest_examples"]
+        .as_array()
+        .unwrap_or_else(|| panic!("doctest_examples missing: {sc}"));
+    assert_eq!(doctests.len(), 1, "{sc}");
+    assert_eq!(doctests[0], ">>> add(1, 2)\n3");
+
+    let (err, text, _) = server.call(
+        "py_docs",
+        json!({"symbol": "mymod.add", "path": dir.to_str().unwrap()}),
+    );
+    assert!(!err, "{text}");
+    assert!(text.contains("doctests:"), "{text}");
+    assert!(text.contains(">>> add(1, 2)"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

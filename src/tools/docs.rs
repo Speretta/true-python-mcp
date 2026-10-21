@@ -197,6 +197,17 @@ fn docs_markdown(symbol: &str, resolved: &DocSymbol) -> String {
             }
         }
     }
+    if !resolved.doctest_examples.is_empty() {
+        out.push_str("doctests:\n");
+        for (index, example) in resolved.doctest_examples.iter().enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
+            for line in example.lines() {
+                let _ = writeln!(out, "  {line}");
+            }
+        }
+    }
     match &resolved.source_path {
         Some(path) => {
             let line = resolved
@@ -241,6 +252,7 @@ fn docs_json(symbol: &str, resolved: &DocSymbol) -> serde_json::Value {
         "parameters": resolved.parameters,
         "docstring": resolved.docstring,
         "docstring_source": resolved.docstring_source,
+        "doctest_examples": resolved.doctest_examples,
         "note": resolved.note,
         "bases": resolved.bases,
         "source": resolved.source_path,

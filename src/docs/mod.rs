@@ -32,6 +32,7 @@
 //! entry per segment, so a dead-end is reported at the failing segment with its
 //! receiver type — never a silent wrong answer.
 
+mod doctest;
 mod enrich;
 mod members;
 mod rank;
@@ -53,6 +54,7 @@ use ty_python_semantic::{Db as SemanticDb, HasType, SemanticModel};
 use crate::error::Error;
 use crate::ty::TyDb;
 
+use doctest::extract_doctests;
 use enrich::resolve_docstring;
 pub use members::{DocModule, DocModuleMember, resolve_module_members};
 use rank::{
@@ -108,6 +110,9 @@ pub struct DocSymbol {
     pub docstring: Option<String>,
     /// Where the docstring came from: `source`, `stub`, or `none`.
     pub docstring_source: &'static str,
+    /// The doctest examples embedded in the docstring, one per `>>>` prompt
+    /// (empty when the docstring has none — an honest empty list).
+    pub doctest_examples: Vec<String>,
     /// When the docstring is missing, a short human-readable note explaining
     /// why and what was looked at — never a silent `None`.
     pub note: Option<String>,
@@ -269,6 +274,14 @@ pub fn resolve_symbol_with_python(
             .or_else(|| first.implementation_docstring(&db)),
     );
 
+    // Doctest examples ride on the docstring (however it was sourced) and are
+    // extracted here, once, so the renderers do no string scanning.
+    let doctest_examples = docstring
+        .docstring
+        .as_deref()
+        .map(extract_doctests)
+        .unwrap_or_default();
+
     let candidates = candidates
         .iter()
         .skip(1)
@@ -287,6 +300,7 @@ pub fn resolve_symbol_with_python(
         parameters,
         docstring: docstring.docstring,
         docstring_source: docstring.source,
+        doctest_examples,
         note: docstring.note,
         bases,
         source_path: Some(definition_path.as_str().to_string()),
