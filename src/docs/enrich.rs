@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use ruff_db::files::FilePath;
 use ruff_db::system::{SystemPath, SystemPathBuf};
@@ -160,11 +160,11 @@ fn extract_docstring(source_path: &SystemPath, resolved_name: &str) -> Option<St
 /// the source path. Stdlib files are read-only for the process lifetime, so a
 /// stale entry is harmless; the cache keeps `py_module_members` from re-reading
 /// the same `Lib/*.py` once per member.
-type SourceDocstrings = Mutex<HashMap<PathBuf, Arc<HashMap<String, String>>>>;
+type SourceDocstrings = RwLock<HashMap<PathBuf, Arc<HashMap<String, String>>>>;
 
 fn source_docstrings(path: &Path) -> Arc<HashMap<String, String>> {
     if let Some(docstrings) = source_docstrings_cache()
-        .lock()
+        .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(path)
     {
@@ -173,7 +173,7 @@ fn source_docstrings(path: &Path) -> Arc<HashMap<String, String>> {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let docstrings = Arc::new(parse_docstrings(&text));
     source_docstrings_cache()
-        .lock()
+        .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(path.to_path_buf(), docstrings.clone());
     docstrings
@@ -181,7 +181,7 @@ fn source_docstrings(path: &Path) -> Arc<HashMap<String, String>> {
 
 fn source_docstrings_cache() -> &'static SourceDocstrings {
     static CACHE: OnceLock<SourceDocstrings> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Parses one CPython source file into a `name -> docstring` map over every

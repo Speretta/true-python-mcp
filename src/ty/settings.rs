@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use ruff_db::system::{OsSystem, System, SystemPath, SystemPathBuf};
 use ruff_python_ast::PythonVersion;
@@ -21,7 +21,7 @@ use super::db::{TySystem, to_system_path};
 type SettingsCacheKey = (PathBuf, Option<PathBuf>);
 
 /// Process-wide cache of the discovery result, keyed by [`SettingsCacheKey`].
-type SettingsCache = Mutex<HashMap<SettingsCacheKey, Arc<ProgramSettings>>>;
+type SettingsCache = RwLock<HashMap<SettingsCacheKey, Arc<ProgramSettings>>>;
 
 /// Process-wide cache of the discovery result, keyed by the checked file's
 /// parent directory (the source root) and the explicit `python` override (if
@@ -34,7 +34,7 @@ type SettingsCache = Mutex<HashMap<SettingsCacheKey, Arc<ProgramSettings>>>;
 /// collide on one entry.
 fn settings_cache() -> &'static SettingsCache {
     static CACHE: OnceLock<SettingsCache> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Resolve the [`ProgramSettings`] for a file rooted at `src_root`, optionally
@@ -54,7 +54,7 @@ pub(super) fn discover_settings(
     // A poisoned lock still guards a valid map: the only mutation is a single
     // insert under the lock, which cannot leave the map inconsistent.
     if let Some(settings) = settings_cache()
-        .lock()
+        .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&key)
     {
@@ -103,7 +103,7 @@ pub(super) fn discover_settings(
     });
 
     settings_cache()
-        .lock()
+        .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(key, settings.clone());
     Ok(settings)
