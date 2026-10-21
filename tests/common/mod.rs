@@ -5,7 +5,7 @@
 
 pub mod server;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Unique temp dir for one test tag: pid + a hash of the tag, cleared and
 /// recreated on every call.
@@ -117,4 +117,45 @@ pub fn run_ty(ty: &str, args: &[&str]) -> String {
         .output()
         .expect("spawn ty binary");
     String::from_utf8(output.stdout).expect("utf-8 output")
+}
+
+// ---- virtual-environment scaffold ----
+
+/// The on-disk site-packages path for a scaffolded venv, per platform: Windows
+/// puts it at `Lib/site-packages` (no version component), POSIX at
+/// `lib/pythonX.Y/site-packages`. ty's discovery scans for these layouts, so a
+/// fixture that only exists in the POSIX shape breaks the Windows CI.
+pub fn site_packages_dir(venv: &Path, version: &str) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Lib/site-packages")
+    } else {
+        venv.join(format!("lib/python{version}/site-packages"))
+    }
+}
+
+/// Create a minimal on-disk scaffold for a virtual environment at
+/// `root/<name>`: a `pyvenv.cfg` marker plus a `site-packages/<pkg>/__init__.py`
+/// holding `body`, in the platform layout. ty only needs the on-disk shape — a
+/// `pyvenv.cfg` and a resolvable `site-packages` — to discover the environment;
+/// it never runs the (absent) interpreter. The `home` key is required by the
+/// `pyvenv.cfg` parser but its target is never consulted because
+/// `include-system-site-packages` is absent, so it just has to be an existing
+/// directory.
+pub fn scaffold_venv_pkg(root: &Path, name: &str, pkg: &str, body: &str) -> PathBuf {
+    let venv = root.join(name);
+    let site = site_packages_dir(&venv, "3.11");
+    std::fs::create_dir_all(site.join(pkg)).unwrap();
+    std::fs::write(site.join(pkg).join("__init__.py"), body).unwrap();
+    std::fs::write(
+        venv.join("pyvenv.cfg"),
+        format!("home = {}\n", root.display()),
+    )
+    .unwrap();
+    venv
+}
+
+/// [`scaffold_venv_pkg`] with a single-constant body — the original scaffold
+/// shape `tests/ty.rs` relies on.
+pub fn scaffold_venv(root: &Path, name: &str, pkg: &str) -> PathBuf {
+    scaffold_venv_pkg(root, name, pkg, "SOME_CONSTANT = 1\n")
 }

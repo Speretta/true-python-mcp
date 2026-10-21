@@ -7,9 +7,9 @@ mod common;
 
 use std::path::Path;
 
-use common::ground_truth_python;
 use common::server::Server;
 use common::temp_dir;
+use common::{ground_truth_python, scaffold_venv_pkg};
 use serde_json::json;
 use tpmcp::docs::{resolve_module_members, resolve_symbol, resolve_symbol_with_python};
 
@@ -546,5 +546,66 @@ fn py_docs_doctest_over_the_wire() {
     assert!(!err, "{text}");
     assert!(text.contains("doctests:"), "{text}");
     assert!(text.contains(">>> add(1, 2)"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `py_docs` with `python` pinned to a scaffolded venv resolves a third-party
+/// symbol from its site-packages over the wire: the source docstring is used
+/// directly (`docstring_source: "source"`), the kind is a function, and the
+/// signature names the annotated parameter.
+#[test]
+fn py_docs_python_anchor_resolves_third_party_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let dir = temp_dir("docs-thirdpkg-py");
+    let venv = scaffold_venv_pkg(
+        &dir,
+        ".venv",
+        "thirdpkg",
+        "def greet(name: str) -> str:\n    \"\"\"Greet.\"\"\"\n    return name\n",
+    );
+
+    let (err, text, sc) = server.call(
+        "py_docs",
+        json!({"symbol": "thirdpkg.greet", "python": venv.to_str().unwrap(), "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["kind"], "function", "{sc}");
+    assert_eq!(sc["docstring_source"], "source", "{sc}");
+    let signature = sc["signatures"][0].as_str().unwrap();
+    assert!(signature.contains("greet"), "{signature}");
+    assert!(signature.contains("name"), "{signature}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `py_module_members` with `python` pinned to a scaffolded venv enumerates a
+/// third-party module's members over the wire.
+#[test]
+fn py_module_members_python_anchor_resolves_third_party_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let dir = temp_dir("docs-thirdpkg-members");
+    let venv = scaffold_venv_pkg(
+        &dir,
+        ".venv",
+        "thirdpkg",
+        "def greet(name: str) -> str:\n    \"\"\"Greet.\"\"\"\n    return name\n",
+    );
+
+    let (err, text, sc) = server.call(
+        "py_module_members",
+        json!({"module": "thirdpkg", "python": venv.to_str().unwrap(), "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["resolved_name"], "thirdpkg", "{sc}");
+    let members = sc["members"].as_array().unwrap();
+    let greet = members
+        .iter()
+        .find(|member| member["name"] == "greet")
+        .unwrap_or_else(|| panic!("greet missing from members: {sc}"));
+    assert_eq!(greet["kind"], "function");
+    assert!(
+        greet["signature"].as_str().unwrap().contains("name"),
+        "{}",
+        greet["signature"]
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
