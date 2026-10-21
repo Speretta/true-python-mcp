@@ -233,5 +233,25 @@ for stack in $stacks; do
     done
 done
 
+# context7 (remote MCP, HTTP): latency-only, no container. Needs a secret API
+# key; skipped automatically when it is absent so the local Docker benchmark
+# keeps working without it. The key is read from CONTEXT7_TCP_MCP_BENCH_KEY
+# only (never hardcoded, never committed).
+rm -rf results/context7
+if [ -n "${CONTEXT7_TCP_MCP_BENCH_KEY:-}" ]; then
+    echo "-- measuring context7 (remote MCP)"
+    mode="normal"
+    if $fast; then mode="fast"; fi
+    n=1
+    while [ "$n" -le "$runs" ]; do
+        CONTEXT7_TCP_MCP_BENCH_KEY="$CONTEXT7_TCP_MCP_BENCH_KEY" BENCH_MODE="$mode" \
+            python3 context7_measure.py --run "$n" --out results/context7 \
+            || echo "  (context7 run failed, continuing)"
+        n=$((n + 1))
+    done
+else
+    echo "-- context7 skipped: CONTEXT7_TCP_MCP_BENCH_KEY not set"
+fi
+
 echo
 python3 render.py --print-summary results/ || true

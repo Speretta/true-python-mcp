@@ -48,6 +48,8 @@ jobs:
           cp target/x86_64-unknown-linux-musl/release/tpmcp bench/tpmcp/tpmcp
 
       - name: Measure every stack
+        env:
+          CONTEXT7_TCP_MCP_BENCH_KEY: ${{ secrets.CONTEXT7_TCP_MCP_BENCH_KEY }}
         run: |
           set -euo pipefail
           flags="--runs ${{ inputs.runs }}"
