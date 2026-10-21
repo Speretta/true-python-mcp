@@ -8,6 +8,7 @@
 
 pub mod analysis;
 pub mod cell;
+pub mod docs;
 pub mod files;
 pub mod notebook;
 pub mod ty;

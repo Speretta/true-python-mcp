@@ -236,8 +236,15 @@ impl TyDb {
     /// Builds a database rooted at `src_root` whose single virtual file holds
     /// `source`. The symbol resolver needs this to type-check a synthetic
     /// module without materializing a `.py` next to the caller's code; it is
-    /// the notebook path's in-memory-source pattern reused for docs.
-    pub(crate) fn for_virtual_source(src_root: &Path, source: &str) -> Result<Self, Error> {
+    /// the notebook path's in-memory-source pattern reused for docs. `python`
+    /// pins the environment discovery (an interpreter or venv root) so
+    /// `py_docs` resolves third-party symbols against the caller's environment
+    /// the way `ty_check` does.
+    pub(crate) fn for_virtual_source_with_python(
+        src_root: &Path,
+        source: &str,
+        python: Option<&Path>,
+    ) -> Result<Self, Error> {
         let src_root_sys = to_system_path(src_root).ok_or_else(|| {
             Error::invalid_input(format!(
                 "source root is not representable: {}",
@@ -250,11 +257,12 @@ impl TyDb {
                 path: SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string()),
                 content: Arc::from(source),
             }),
-            None,
+            python,
         )
     }
 
-    /// The interned [`File`] of the virtual module [`for_virtual_source`] serves.
+    /// The interned [`File`] of the virtual module
+    /// [`for_virtual_source_with_python`] serves.
     pub(crate) fn docs_file(&self) -> File {
         let path = SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string());
         self.files().virtual_file(self, path.as_path()).file()

@@ -25,7 +25,8 @@ impl Tpmcp {
         let mut router = Tpmcp::notebook_router()
             + Tpmcp::cell_router()
             + Tpmcp::analysis_router()
-            + Tpmcp::ty_router();
+            + Tpmcp::ty_router()
+            + Tpmcp::docs_router();
         if file_tools {
             router += Tpmcp::files_router();
         }
