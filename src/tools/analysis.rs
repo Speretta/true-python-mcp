@@ -65,11 +65,12 @@ pub struct NotebookCheckArgs {
 impl Tpmcp {
     #[tool(
         title = "Ruff Check",
-        description = "Lint a Python file or Jupyter notebook with ruff (uses the project's \
-                       ruff/pyproject config). Notebook diagnostics carry a 0-based `cell` \
-                       index and a cell-relative line, so they map directly onto the cell \
-                       tools. Responses report the current revision; set fix=true with that \
-                       revision to apply safe fixes in place.",
+        description = "Lint a Python file or Jupyter notebook with ruff (uses the nearest \
+                       project ruff/pyproject config, falling back to the global user config). \
+                       Notebook diagnostics carry a 0-based `cell` index and a cell-relative \
+                       line, so they map directly onto the cell tools. Responses report the \
+                       current revision; set fix=true with that revision to apply safe fixes in \
+                       place.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

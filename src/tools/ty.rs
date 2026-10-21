@@ -40,10 +40,14 @@ impl Tpmcp {
         title = "Type Check",
         description = "Type-check a Python file or Jupyter notebook with Astral's ty (compiled \
                        in, no interpreter, no subprocess). Verifies types against annotations, \
-                       imports and the standard library. Notebook diagnostics carry a 0-based \
-                       `cell` index and a cell-relative line. marimo .py files are checked as \
-                       plain Python (their cells are untyped defs, so cross-cell types are not \
-                       statically visible). Reports the current revision; read-only.",
+                       imports and the standard library. Pass `python` to check against a \
+                       specific interpreter or virtual environment (resolves its site-packages); \
+                       omit to auto-discover the environment (VIRTUAL_ENV, CONDA_PREFIX, a \
+                       `.venv`/`venv` ancestor walk, then the system Python). Notebook \
+                       diagnostics carry a 0-based `cell` index and a cell-relative line. marimo \
+                       .py files are checked as plain Python (their cells are untyped defs, so \
+                       cross-cell types are not statically visible). Reports the current \
+                       revision; read-only.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

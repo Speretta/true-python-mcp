@@ -116,9 +116,9 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `cell_set_metadata` | Replaces one Jupyter cell's metadata (papermill tags, slideshow settings); the previous value comes back in the answer. |
 | `cell_clear_outputs` | Empties the outputs of Jupyter cells. |
 | `notebook_check` | Finds problems without changing anything: a broken notebook structure, merge conflict marks, or marimo graph errors (two cells defining the same name, a cycle). |
-| `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file. With `fix: true` it repairs the safe ones. |
+| `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file (uses the nearest project ruff/pyproject config, falling back to the global user config). With `fix: true` it repairs the safe ones. |
 | `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
-| `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in — no interpreter, no subprocess). Notebook diagnostics carry a 0-based `cell` index. |
+| `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in — no interpreter, no subprocess). Pass `python` to check against a specific venv; otherwise auto-discovers it. Notebook diagnostics carry a 0-based `cell` index. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). |
 
 Notebook outputs, execution counts, and metadata keep their values, and
