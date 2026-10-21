@@ -421,16 +421,28 @@ fn cached_settings_still_read_fresh_bytes() {
 
 // ---- venv discovery (environment resolution) ----
 
+/// The on-disk site-packages path for a fake venv, per platform: Windows puts
+/// it at `Lib/site-packages` (no version component), POSIX at
+/// `lib/pythonX.Y/site-packages`. ty's discovery scans for these layouts, so a
+/// fixture that only exists in the POSIX shape breaks the Windows CI.
+fn site_packages_dir(venv: &Path, version: &str) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Lib/site-packages")
+    } else {
+        venv.join(format!("lib/python{version}/site-packages"))
+    }
+}
+
 /// Create a minimal fake virtual environment at `root/<name>`: a `pyvenv.cfg`
-/// marker plus a `lib/python3.11/site-packages/<pkg>/__init__.py`. ty only
-/// needs the on-disk shape — a `pyvenv.cfg` and a resolvable `site-packages` —
-/// to discover the environment; it never runs the (absent) interpreter. The
-/// `home` key is required by the `pyvenv.cfg` parser but its target is never
-/// consulted because `include-system-site-packages` is absent, so it just has
-/// to be an existing directory.
+/// marker plus a `site-packages/<pkg>/__init__.py` in the platform layout. ty
+/// only needs the on-disk shape — a `pyvenv.cfg` and a resolvable
+/// `site-packages` — to discover the environment; it never runs the (absent)
+/// interpreter. The `home` key is required by the `pyvenv.cfg` parser but its
+/// target is never consulted because `include-system-site-packages` is absent,
+/// so it just has to be an existing directory.
 fn fake_venv(root: &Path, name: &str, pkg: &str) -> PathBuf {
     let venv = root.join(name);
-    let site = venv.join("lib/python3.11/site-packages");
+    let site = site_packages_dir(&venv, "3.11");
     std::fs::create_dir_all(site.join(pkg)).unwrap();
     std::fs::write(site.join(pkg).join("__init__.py"), "SOME_CONSTANT = 1\n").unwrap();
     std::fs::write(
@@ -519,7 +531,7 @@ fn venv_python_version_drives_syntax() {
     let root = dir.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let venv = root.join(".venv");
-    std::fs::create_dir_all(venv.join("lib/python3.13/site-packages")).unwrap();
+    std::fs::create_dir_all(site_packages_dir(&venv, "3.13")).unwrap();
     std::fs::write(
         venv.join("pyvenv.cfg"),
         format!("home = {}\nversion = 3.13\n", root.display()),
