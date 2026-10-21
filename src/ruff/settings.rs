@@ -21,9 +21,16 @@
 //! safe. A config we cannot stat for mtime simply falls back to a fresh,
 //! uncached build rather than risking a stale entry.
 //!
-//! Future item (out of scope for now): `RUFF_*` environment variables. The
-//! ruff CLI layers `RUFF_*` overrides on top of the file tiers; that surface
-//! is large and deliberately not implemented here.
+//! Environment variables are deliberately not read here. The real `RUFF_*`
+//! variables are `RUFF_OUTPUT_FORMAT`, `RUFF_OUTPUT_FILE`, `RUFF_NO_CACHE`,
+//! `RUFF_CACHE_DIR`, and `FORCE_COLOR`/`NO_COLOR` — and none of them apply to
+//! tpmcp: it renders diagnostics itself (so the CLI's output format and output
+//! file are irrelevant), it keeps no on-disk ruff cache (so there is no cache
+//! to disable or relocate), and it emits no ANSI (so there is no color to force
+//! or suppress). The `RUFF_CONFIG`, `RUFF_LINE_LENGTH` and `RUFF_TARGET_VERSION`
+//! names that *would* matter for lint behavior do not exist as environment
+//! variables in ruff — those knobs live in config files only, and this module
+//! already resolves the config-file tiers.
 
 use std::collections::HashMap;
 use std::fs::Metadata;
