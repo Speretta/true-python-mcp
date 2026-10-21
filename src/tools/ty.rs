@@ -23,6 +23,12 @@ use crate::ty;
 pub struct TyCheckArgs {
     /// Path to a .py/.pyi file or a .ipynb notebook to type-check.
     pub path: PathBuf,
+    /// Optional path to a Python interpreter or a virtual-environment root to
+    /// type-check against (resolves its site-packages). Omit to auto-discover
+    /// the environment: VIRTUAL_ENV, CONDA_PREFIX, then a `.venv`/`venv`
+    /// ancestor walk, then the system Python.
+    #[serde(default)]
+    pub python: Option<PathBuf>,
     /// Result format, "markdown" (default) or "json".
     #[serde(default)]
     pub format: Format,
@@ -54,7 +60,8 @@ impl Tpmcp {
             // revision and the bytes the checker parses, so a notebook's
             // diagnostics are computed from exactly these bytes.
             let snapshot = fs::read(&args.path)?;
-            let diagnostics = ty::check_snapshot(&args.path, &snapshot)?;
+            let diagnostics =
+                ty::check_snapshot_with_python(&args.path, &snapshot, args.python.as_deref())?;
             Ok(respond(
                 args.format,
                 || ty_markdown(&args.path, &snapshot.revision, &diagnostics),
