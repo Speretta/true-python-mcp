@@ -28,7 +28,6 @@ use ruff_python_ast::{PySourceType, SourceType};
 use ruff_python_formatter::format_module_source;
 use ruff_text_size::{TextLen, TextRange, TextSize};
 use ruff_workspace::Settings;
-use rustc_hash::FxHashMap;
 
 use crate::error::Error;
 use crate::fs;
@@ -186,11 +185,7 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
         }
     };
 
-    let mut notebook_indexes = FxHashMap::default();
-    if let Some(index) = pass.notebook_index {
-        notebook_indexes.insert(path.to_string_lossy().to_string(), index);
-    }
-    let diagnostics = map_diagnostics(&pass.diagnostics, &notebook_indexes)?;
+    let diagnostics = map_diagnostics(&pass.diagnostics, path, pass.notebook_index)?;
     Ok(CheckOutcome {
         diagnostics,
         changed: pass.changed,

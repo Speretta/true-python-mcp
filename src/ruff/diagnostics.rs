@@ -6,6 +6,8 @@
 //! ruff internals. The raw wire shape is deliberately tolerant: every field
 //! is optional.
 
+use std::path::Path;
+
 use ruff_db::diagnostic::{Diagnostic as RuffDiagnostic, DisplayDiagnosticConfig};
 use ruff_linter::message::{EmitterContext, render_diagnostics};
 use ruff_linter::settings::types::OutputFormat;
@@ -48,10 +50,18 @@ pub struct Diagnostic {
 /// parse them into our stable [`Diagnostic`] shape.
 pub(super) fn map_diagnostics(
     diagnostics: &[RuffDiagnostic],
-    notebook_indexes: &FxHashMap<String, NotebookIndex>,
+    path: &Path,
+    notebook_index: Option<NotebookIndex>,
 ) -> Result<Vec<Diagnostic>, Error> {
+    // ruff maps notebook offsets back to cells by looking the file's name up in
+    // a notebook-index map; a single check lints at most one notebook (the file
+    // itself), so the map has at most one entry, built only for notebooks.
+    let notebook_indexes: FxHashMap<String, NotebookIndex> = notebook_index
+        .into_iter()
+        .map(|index| (path.to_string_lossy().into_owned(), index))
+        .collect();
     let mut buffer = Vec::new();
-    let context = EmitterContext::new(notebook_indexes);
+    let context = EmitterContext::new(&notebook_indexes);
     let config = DisplayDiagnosticConfig::new("ruff")
         .color(false)
         .with_show_fix_status(true);
