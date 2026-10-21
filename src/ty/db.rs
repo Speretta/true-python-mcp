@@ -1,0 +1,347 @@
+use std::path::Path;
+use std::sync::Arc;
+
+use ruff_db::Db as SourceDb;
+use ruff_db::diagnostic::Diagnostic as TyDiagnostic;
+use ruff_db::files::{File, Files};
+use ruff_db::system::walk_directory::WalkDirectoryBuilder;
+use ruff_db::system::{
+    DirectoryEntry, Metadata, OsSystem, System, SystemPath, SystemPathBuf, SystemVirtualPath,
+    SystemVirtualPathBuf, WhichResult, WritableSystem,
+};
+use ruff_db::vendored::VendoredFileSystem;
+use ruff_notebook::{Notebook, NotebookError};
+use ty_module_resolver::{Db as ModuleResolverDb, ModuleName, resolve_module_confident};
+use ty_python_core::Db as PythonCoreDb;
+use ty_python_core::ProgramFile;
+use ty_python_core::program::{Program, ProgramSettings};
+use ty_python_semantic::dependency::DependencyMetadata;
+use ty_python_semantic::lint::{LintRegistry, RuleSelection};
+use ty_python_semantic::{
+    AnalysisSettings, Db as SemanticDb, PythonVersionWithSource, check_file_unwrap,
+    default_lint_registry,
+};
+
+use crate::error::Error;
+
+use super::settings::discover_settings;
+
+/// The virtual path of a notebook's concatenated cell source. A plain `.py`
+/// name keeps the source type `Python` (a `.ipynb` virtual path would be
+/// re-read as a notebook), and it need not live under a search root: absolute
+/// imports already resolve against the notebook's parent directory, which is
+/// the search root.
+pub(super) const NOTEBOOK_VIRTUAL_PATH: &str = "__tpmcp_ty_notebook__.py";
+
+/// The virtual path of the synthetic module [`crate::docs::resolve_symbol`]
+/// resolves a dotted symbol through. Like [`NOTEBOOK_VIRTUAL_PATH`], a plain
+/// `.py` name keeps the source type `Python` and need not live under a search
+/// root: absolute imports already resolve against the configured search paths.
+const DOCS_VIRTUAL_PATH: &str = "__tpmcp_docs__.py";
+
+/// One in-memory `.py` source the database serves through its [`System`],
+/// standing in for the temp file the old notebook path wrote to disk.
+#[derive(Debug, Clone)]
+pub(super) struct VirtualSource {
+    pub(super) path: SystemVirtualPathBuf,
+    pub(super) content: Arc<str>,
+}
+
+/// [`OsSystem`] plus a single in-memory virtual file, so a notebook's
+/// concatenated cell source is type-checked without materializing a temp `.py`
+/// next to it (a read-only tool must not write into the caller's tree).
+#[derive(Debug, Clone)]
+pub(super) struct TySystem {
+    pub(super) inner: OsSystem,
+    pub(super) virtual_source: Option<Arc<VirtualSource>>,
+}
+
+impl System for TySystem {
+    fn path_metadata(&self, path: &SystemPath) -> std::io::Result<Metadata> {
+        self.inner.path_metadata(path)
+    }
+
+    fn canonicalize_path(&self, path: &SystemPath) -> std::io::Result<SystemPathBuf> {
+        self.inner.canonicalize_path(path)
+    }
+
+    fn is_same_file(&self, first: &SystemPath, second: &SystemPath) -> std::io::Result<bool> {
+        self.inner.is_same_file(first, second)
+    }
+
+    fn which(&self, binary_name: &str) -> WhichResult {
+        self.inner.which(binary_name)
+    }
+
+    fn read_to_string(&self, path: &SystemPath) -> std::io::Result<String> {
+        self.inner.read_to_string(path)
+    }
+
+    fn read_to_notebook(&self, path: &SystemPath) -> std::result::Result<Notebook, NotebookError> {
+        self.inner.read_to_notebook(path)
+    }
+
+    fn read_virtual_path_to_string(&self, path: &SystemVirtualPath) -> std::io::Result<String> {
+        match &self.virtual_source {
+            Some(source) if source.path.as_path() == path => Ok(source.content.to_string()),
+            _ => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        }
+    }
+
+    fn read_virtual_path_to_notebook(
+        &self,
+        _path: &SystemVirtualPath,
+    ) -> std::result::Result<Notebook, NotebookError> {
+        Err(NotebookError::from(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )))
+    }
+
+    fn current_directory(&self) -> &SystemPath {
+        self.inner.current_directory()
+    }
+
+    fn user_config_directory(&self) -> Option<SystemPathBuf> {
+        self.inner.user_config_directory()
+    }
+
+    fn cache_dir(&self) -> Option<SystemPathBuf> {
+        self.inner.cache_dir()
+    }
+
+    fn read_directory(
+        &self,
+        path: &SystemPath,
+    ) -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<DirectoryEntry>> + '_>> {
+        self.inner.read_directory(path)
+    }
+
+    fn walk_directory(&self, path: &SystemPath) -> WalkDirectoryBuilder {
+        self.inner.walk_directory(path)
+    }
+
+    // Delegated, not defaulted, because site-packages discovery reads env vars
+    // (VIRTUAL_ENV, CONDA_*); a silent NotPresent here would disable discovery.
+    fn env_var(&self, name: &str) -> std::result::Result<String, std::env::VarError> {
+        self.inner.env_var(name)
+    }
+
+    fn as_writable(&self) -> Option<&dyn WritableSystem> {
+        self.inner.as_writable()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn dyn_clone(&self) -> Box<dyn System> {
+        Box::new(self.clone())
+    }
+}
+
+/// Hand-assembled salsa database (stands in for the unpublished ty_project Db).
+#[salsa::db]
+#[derive(Clone)]
+pub struct TyDb {
+    storage: salsa::Storage<Self>,
+    files: Files,
+    system: TySystem,
+    vendored: VendoredFileSystem,
+    program_settings: Arc<ProgramSettings>,
+    rule_selection: Arc<RuleSelection>,
+    analysis_settings: Arc<AnalysisSettings>,
+}
+
+/// Provides the interned `Program` query, mirroring ty_python_core's
+/// (testing-gated) `TestProgramDb` pattern since `program` is not part of any
+/// published trait.
+#[salsa::db]
+pub trait ProgramDb: SemanticDb {
+    fn program_settings(&self) -> &ProgramSettings;
+
+    fn program(&self) -> Program<'_>
+    where
+        Self: Sized,
+    {
+        program_inner(self)
+    }
+}
+
+#[salsa::tracked(returns(copy))]
+fn program_inner(db: &dyn ProgramDb) -> Program<'_> {
+    Program::from_settings(db, db.program_settings())
+}
+
+impl TyDb {
+    /// Builds a database rooted at `src_root` (first-party modules) with the
+    /// vendored typeshed stdlib, and the site-packages of the python
+    /// environment discovered next to it (so third-party types like `numpy`
+    /// resolve instead of reporting `unresolved-import`). `python` pins the
+    /// environment explicitly; `None` falls back to the implicit discovery
+    /// order in [`discover_settings`].
+    pub(super) fn new(
+        src_root: &SystemPath,
+        virtual_source: Option<VirtualSource>,
+        python: Option<&Path>,
+    ) -> Result<Self, Error> {
+        let vendored = ty_vendored::file_system().clone();
+        let system = TySystem {
+            inner: OsSystem::new(src_root.to_path_buf()),
+            virtual_source: virtual_source.map(Arc::new),
+        };
+        let program_settings = discover_settings(src_root, python)?;
+        let db = Self {
+            storage: salsa::Storage::new(None),
+            files: Files::default(),
+            system,
+            vendored,
+            program_settings,
+            rule_selection: Arc::new(RuleSelection::from_registry(default_lint_registry())),
+            analysis_settings: Arc::new(AnalysisSettings::default()),
+        };
+        db.program_settings
+            .search_paths
+            .try_register_static_roots(&db);
+        Ok(db)
+    }
+
+    /// Builds a database rooted at `src_root` whose single virtual file holds
+    /// `source`. The symbol resolver needs this to type-check a synthetic
+    /// module without materializing a `.py` next to the caller's code; it is
+    /// the notebook path's in-memory-source pattern reused for docs. `python`
+    /// pins the environment discovery (an interpreter or venv root) so
+    /// `py_docs` resolves third-party symbols against the caller's environment
+    /// the way `ty_check` does.
+    pub(crate) fn for_virtual_source_with_python(
+        src_root: &Path,
+        source: &str,
+        python: Option<&Path>,
+    ) -> Result<Self, Error> {
+        let src_root_sys = to_system_path(src_root).ok_or_else(|| {
+            Error::invalid_input(format!(
+                "source root is not representable: {}",
+                src_root.display()
+            ))
+        })?;
+        Self::new(
+            src_root_sys.as_path(),
+            Some(VirtualSource {
+                path: SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string()),
+                content: Arc::from(source),
+            }),
+            python,
+        )
+    }
+
+    /// The interned [`File`] of the virtual module
+    /// [`for_virtual_source_with_python`] serves.
+    pub(crate) fn docs_file(&self) -> File {
+        let path = SystemVirtualPathBuf::from(DOCS_VIRTUAL_PATH.to_string());
+        self.files().virtual_file(self, path.as_path()).file()
+    }
+
+    /// Whether `name` resolves to an importable module in this database's
+    /// search paths. The symbol resolver probes this to decide whether a
+    /// dotted symbol's first segment is an import (vs a builtin name, which
+    /// must be referenced bare so the builtins fallback can find it).
+    pub(crate) fn resolves_module(&self, name: &str) -> bool {
+        let Some(module_name) = ModuleName::new(name) else {
+            return false;
+        };
+        let program = <Self as ProgramDb>::program(self);
+        let environment = program.resolver_environment(self);
+        resolve_module_confident(self, environment, &module_name).is_some()
+    }
+}
+
+#[salsa::db]
+impl SourceDb for TyDb {
+    fn vendored(&self) -> &VendoredFileSystem {
+        &self.vendored
+    }
+
+    fn system(&self) -> &dyn System {
+        &self.system
+    }
+
+    fn files(&self) -> &Files {
+        &self.files
+    }
+}
+
+#[salsa::db]
+impl ModuleResolverDb for TyDb {}
+
+#[salsa::db]
+impl PythonCoreDb for TyDb {
+    fn should_check_file(&self, file: File) -> bool {
+        !file.path(self).is_vendored_path()
+    }
+}
+
+#[salsa::db]
+impl ProgramDb for TyDb {
+    fn program_settings(&self) -> &ProgramSettings {
+        &self.program_settings
+    }
+}
+
+#[salsa::db]
+impl SemanticDb for TyDb {
+    fn check_file(&self, file: File) -> Vec<TyDiagnostic> {
+        if !PythonCoreDb::should_check_file(self, file) {
+            return Vec::new();
+        }
+        check_file_unwrap(self, self.program_file(file))
+    }
+
+    fn program_file(&self, file: File) -> ProgramFile<'_> {
+        ProgramDb::program(self).program_file(self, file)
+    }
+
+    fn python_version_with_source(&self, _file: File) -> &PythonVersionWithSource {
+        &self.program_settings.python_version
+    }
+
+    fn rule_selection(&self, _file: File) -> &RuleSelection {
+        &self.rule_selection
+    }
+
+    fn lint_registry(&self) -> &LintRegistry {
+        default_lint_registry()
+    }
+
+    fn analysis_settings(&self, _file: File) -> &AnalysisSettings {
+        &self.analysis_settings
+    }
+
+    fn dependency_metadata(&self, _file: File) -> Option<&DependencyMetadata> {
+        None
+    }
+
+    fn verbose(&self) -> bool {
+        false
+    }
+
+    fn is_open_file(&self, _file: File) -> bool {
+        false
+    }
+
+    fn dyn_clone(&self) -> Box<dyn SemanticDb> {
+        Box::new(self.clone())
+    }
+}
+
+#[salsa::db]
+impl salsa::Database for TyDb {}
+
+/// std `Path` and ty's `SystemPath` are two address spaces; this is the single
+/// conversion between them, failing when the path is not representable.
+pub(super) fn to_system_path(path: &Path) -> Option<SystemPathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
+    SystemPath::from_std_path(&absolute).map(SystemPath::to_path_buf)
+}
