@@ -281,7 +281,8 @@ fn discover_settings(
     };
     let vendored = ty_vendored::file_system().clone();
     let mut search_path_settings = SearchPathSettings::new(vec![src_root.to_path_buf()]);
-    if let Some(environment) = discover_environment(src_root, python, &system)? {
+    let environment = discover_environment(src_root, python, &system)?;
+    if let Some(environment) = &environment {
         search_path_settings.site_packages_paths = environment
             .site_packages_paths(&system)
             .map_err(|error| Error::analysis(format!("site-packages discovery failed: {error}")))?
@@ -290,11 +291,20 @@ fn discover_settings(
     let search_paths = search_path_settings
         .to_search_paths(&system, &vendored, &FallibleStrategy)
         .map_err(|error| Error::analysis(format!("invalid search paths: {error}")))?;
-    let settings = Arc::new(ProgramSettings {
-        python_version: PythonVersionWithSource {
+    // Target the discovered environment's Python version: a venv's `pyvenv.cfg`
+    // records the interpreter version that created it, and that grammar is what
+    // the checker must accept. A system environment has no such metadata, so it
+    // falls back to the 3.11 default the CLI would use.
+    let python_version = environment
+        .as_ref()
+        .and_then(|env| env.python_version_from_metadata())
+        .cloned()
+        .unwrap_or_else(|| PythonVersionWithSource {
             version: PythonVersion::default(),
             source: PythonVersionSource::default(),
-        },
+        });
+    let settings = Arc::new(ProgramSettings {
+        python_version,
         python_platform: PythonPlatform::default(),
         search_paths,
         python_environment: Ok(None),

@@ -509,6 +509,47 @@ fn explicit_python_param_resolves_venv() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The discovered venv's `pyvenv.cfg` `version` key drives the checker's target
+/// Python version: PEP 695 `type X[T] = ...` (3.12+) parses under a 3.13 venv
+/// but is a syntax error under the 3.11 default, so the two checks pin both the
+/// venv-version adoption and the fallback.
+#[test]
+fn venv_python_version_drives_syntax() {
+    let dir = temp_dir("ty-version");
+    let root = dir.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let venv = root.join(".venv");
+    std::fs::create_dir_all(venv.join("lib/python3.13/site-packages")).unwrap();
+    std::fs::write(
+        venv.join("pyvenv.cfg"),
+        format!("home = {}\nversion = 3.13\n", root.display()),
+    )
+    .unwrap();
+
+    let source = "type Alias[T] = list[T]\n";
+
+    // Under the 3.13 venv the PEP 695 statement parses.
+    let path = root.join("mod.py");
+    std::fs::write(&path, source).unwrap();
+    let diagnostics = ty::check_path(&path).unwrap();
+    assert!(
+        !codes(&diagnostics).iter().any(|c| c == "invalid-syntax"),
+        "PEP 695 syntax must parse under a 3.13 venv: {diagnostics:?}"
+    );
+
+    // The same source with no venv ancestor falls back to the 3.11 default,
+    // where `type` parameters are a syntax error.
+    let plain = dir.join("plain.py");
+    std::fs::write(&plain, source).unwrap();
+    let diagnostics = ty::check_path(&plain).unwrap();
+    assert!(
+        codes(&diagnostics).iter().any(|c| c == "invalid-syntax"),
+        "PEP 695 syntax must be a syntax error under the 3.11 default: {diagnostics:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 // VIRTUAL_ENV / CONDA_PREFIX precedence is not unit-tested here: `set_var` is
 // `unsafe` in edition 2024 and races under `nextest`'s process-per-test model.
 // The VIRTUAL_ENV and conda branches are instead exercised indirectly by
