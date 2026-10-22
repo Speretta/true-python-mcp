@@ -287,6 +287,19 @@ impl AnyNotebook {
             Self::Marimo(notebook) => notebook.ensure_mo_definition(),
         }
     }
+
+    /// After a marimo app-cell body edit, refresh the edited cells' `return`
+    /// and signature to what marimo's serializer would write, so the file
+    /// never carries a stale-return/stale-signature finding. `before` is the
+    /// edited cell's source before the edit (`None` for an insert); the
+    /// recompute is skipped when the edit left the cell's defs/refs unchanged.
+    /// A no-op for Jupyter notebooks.
+    pub fn canonicalize_after_edit(&mut self, index: usize, before: Option<&str>) {
+        match self {
+            Self::Jupyter(_) => {}
+            Self::Marimo(notebook) => notebook.canonicalize_after_edit(index, before),
+        }
+    }
 }
 
 /// Infer the notebook format from a file extension: `.ipynb` is Jupyter,

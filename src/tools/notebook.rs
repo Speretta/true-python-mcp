@@ -381,7 +381,7 @@ fn canonicalize_new_notebook(notebook: &mut AnyNotebook) -> Result<Vec<String>, 
         AnyNotebook::Jupyter(_) => Ok(Vec::new()),
         AnyNotebook::Marimo(marimo) => {
             let warning = marimo.ensure_mo_definition()?;
-            marimo.canonicalize_generated_cells();
+            marimo.canonicalize_edited_cells();
             Ok(warning.into_iter().collect())
         }
     }

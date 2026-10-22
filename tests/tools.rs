@@ -478,6 +478,45 @@ fn marimo_tools_over_the_wire() {
     assert!(text.contains("Use colon syntax"), "{text}");
 }
 
+/// Editing a marimo cell autonomously rewrites that cell's `return` and
+/// signature to what marimo's serializer would write: dropping cell 0's only
+/// reference empties its parameter list, so a check afterwards finds no stale
+/// drift (the cross-cell return ripple is covered in tests/marimo.rs).
+#[test]
+fn marimo_edit_canonicalizes_the_edited_cell() {
+    let dir = temp_dir("marimo-canon");
+    let path = dir.join("app.py");
+    let mut server = Server::start(&[]);
+
+    // Cell 0 references `b`, which nothing defines, so it takes `b` as a
+    // parameter.
+    let (err, text, sc) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [
+            {"cell_type": "code", "source": "a = b + 1\n"},
+        ], "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let revision = sc["revision"].as_str().unwrap().to_string();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("def _(b):"), "{content}");
+
+    // Editing cell 0 to drop the reference empties its signature.
+    let (err, text, _) = server.call(
+        "cell_set_source",
+        json!({"path": path, "cell": 0, "source": "a = 1\n", "revision": revision}),
+    );
+    assert!(!err, "{text}");
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("def _(b):"), "b is gone: {content}");
+    assert!(content.contains("def _():"), "{content}");
+
+    // The rewrite left no stale drift behind.
+    let (err, _, sc) = server.call("notebook_check", json!({"path": path, "format": "json"}));
+    assert!(!err);
+    assert_eq!(sc["findings"].as_array().unwrap().len(), 0, "{sc}");
+}
+
 /// The wave-3 read parameters over the wire: outline, query, diagnostics.
 #[test]
 fn read_parameters_outline_query_diagnostics() {

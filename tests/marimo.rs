@@ -7,7 +7,7 @@
 mod common;
 
 use common::{ground_truth_python, marimo_fixture, run_python, synthetic_marimo};
-use tpmcp::notebook::{Notebook, open};
+use tpmcp::notebook::{Format, Notebook, open};
 
 /// Every marimo fixture: the hand-picked files plus the shipped tutorials.
 fn corpus() -> Vec<std::path::PathBuf> {
@@ -116,6 +116,61 @@ fn editing_one_cell_preserves_the_others() {
     assert!(serialized.contains("return (x,)"));
     // Still a valid marimo file.
     assert!(open(&serialized).is_ok());
+}
+
+/// Canonicalization shares the drift checker's name sets: a name bound by a
+/// read-only `@app.function`/`@app.class_definition` block is a toplevel name,
+/// so a cell that references it never takes it as a signature parameter after
+/// an edit (the pre-shared-helper canonicalizer dropped this filter).
+#[test]
+fn canonicalize_excludes_toplevel_names_from_signatures() {
+    let src = concat!(
+        "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n",
+        "@app.function\ndef helper():\n    return 1\n\n\n",
+        "@app.cell\ndef _():\n    y = 1\n    return\n\n\n",
+        "if __name__ == \"__main__\":\n    app.run()\n",
+    );
+    let mut notebook = open(src).unwrap();
+    notebook.set_source(1, "y = helper()").unwrap();
+    notebook.canonicalize_after_edit(1, Some("y = 1"));
+    let serialized = notebook.serialize();
+    assert!(serialized.contains("y = helper()"), "{serialized}");
+    assert!(
+        !serialized.contains("def _(helper):"),
+        "toplevel names are not signature parameters: {serialized}"
+    );
+    assert!(serialized.contains("def _():"), "{serialized}");
+    // The rewritten file carries no stale drift.
+    let findings = notebook.check();
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+/// Canonicalizing one edited cell ripples into the returns of the other cells
+/// it affects: dropping cell 0's reference to `z` empties cell 1's `return
+/// (z,)`, because `z` is no longer referenced by any cell. Both cells are
+/// edited (the shape every built notebook has), so the rewrite reaches them.
+#[test]
+fn cross_cell_ripple_updates_the_defining_cells_return() {
+    let mut notebook = tpmcp::notebook::create(Format::Marimo);
+    notebook.insert(0, "code", "print(z)\n").unwrap();
+    notebook.insert(1, "code", "z = 42\n").unwrap();
+    let _ = notebook.ensure_mo_definition();
+    notebook.canonicalize_after_edit(0, None);
+    // Cell 0 references `z`, so the cell that defines it returns it.
+    assert!(notebook.serialize().contains("return (z,)"));
+
+    // Editing cell 0 to stop referencing `z` empties cell 1's return.
+    let before = notebook.cells()[0].source_text().into_owned();
+    notebook.set_source(0, "print('hi')\n").unwrap();
+    notebook.canonicalize_after_edit(0, Some(&before));
+    let serialized = notebook.serialize();
+    assert!(
+        !serialized.contains("return (z,)"),
+        "z is no longer referenced: {serialized}"
+    );
+    // The rewrite left no stale drift behind.
+    let findings = notebook.check();
+    assert!(findings.is_empty(), "{findings:?}");
 }
 
 #[test]
