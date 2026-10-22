@@ -27,10 +27,13 @@ pub const MARIMO_VERSION: &str = "0.25.2";
 const MO_IMPORT: &str = "import marimo as mo";
 
 impl MarimoNotebook {
-    /// A new empty marimo notebook (header + run guard, no cells).
-    pub(crate) fn create() -> Self {
+    /// A new empty marimo notebook (header + run guard, no cells). When
+    /// `dependencies` or `requires_python` is supplied, a PEP 723
+    /// `# /// script` block is emitted above `import marimo`.
+    pub(crate) fn create(dependencies: Option<&[String]>, requires_python: Option<&str>) -> Self {
+        let header = pep723_header(dependencies, requires_python).unwrap_or_default();
         let head = format!(
-            "import marimo\n\n__generated_with = \"{MARIMO_VERSION}\"\napp = marimo.App()\n"
+            "{header}import marimo\n\n__generated_with = \"{MARIMO_VERSION}\"\napp = marimo.App()\n"
         );
         Self {
             cells: Vec::new(),
@@ -283,9 +286,49 @@ fn app_configuration(text: &str) -> Option<String> {
     (!arguments.is_empty()).then(|| arguments.to_string())
 }
 
+/// The PEP 723 inline-metadata header a created marimo file carries when the
+/// caller supplies `dependencies` or `requires_python`. Emitted above
+/// `import marimo`, matching marimo's own serializer (`tomlkit.dumps` wrapped
+/// in the `# /// script` markers): a double-quoted `requires-python`, a
+/// single-line double-quoted `dependencies` array, the closing marker, and the
+/// one blank line marimo writes between the header and the import. `None`
+/// when neither is supplied, so the default scaffold stays byte-identical.
+fn pep723_header(dependencies: Option<&[String]>, requires_python: Option<&str>) -> Option<String> {
+    if dependencies.is_none() && requires_python.is_none() {
+        return None;
+    }
+    let mut lines = vec!["# /// script".to_string()];
+    if let Some(python) = requires_python {
+        lines.push(format!("# requires-python = {}", toml_string(python)));
+    }
+    if let Some(deps) = dependencies {
+        let quoted: Vec<String> = deps.iter().map(|dep| toml_string(dep)).collect();
+        lines.push(format!("# dependencies = [{}]", quoted.join(", ")));
+    }
+    lines.push("# ///".to_string());
+    Some(format!("{}\n\n", lines.join("\n")))
+}
+
+/// Quote a value for a double-quoted TOML basic string: escape `\` and `"`,
+/// the only escapes a PEP 723 dependency spec or version range can contain.
+fn toml_string(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 /// Lines of the standard file scaffold: the imports, the version stamp, the
-/// app declaration and the run guard. Everything else in a literal segment
-/// is user content a conversion would leave behind.
+/// app declaration, the run guard and the PEP 723 header marimo writes above
+/// the import. Everything else in a literal segment is user content a
+/// conversion would leave behind.
 fn is_scaffold_line(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed == "import marimo"
@@ -293,6 +336,14 @@ fn is_scaffold_line(line: &str) -> bool {
         || trimmed.starts_with("app = marimo.App")
         || trimmed.starts_with("if __name__")
         || trimmed == "app.run()"
+        // A PEP 723 inline-metadata block. The closing `# ///` is also the
+        // prefix of the opening `# /// script`, so match the opening form
+        // first; `# requires-python =` and `# dependencies =` cover the
+        // single-line key/value shape this project emits.
+        || trimmed == "# /// script"
+        || trimmed == "# ///"
+        || trimmed.starts_with("# requires-python =")
+        || trimmed.starts_with("# dependencies =")
 }
 
 /// One literal line shortened for a warning message (byte-safe).

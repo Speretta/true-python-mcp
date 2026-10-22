@@ -105,6 +105,16 @@ pub struct NotebookCreateArgs {
     /// "marimo" (not valid for a .md export target).
     #[serde(default)]
     pub notebook_format: Option<NotebookFormat>,
+    /// PEP 723 dependencies for a fresh marimo notebook: each entry is a
+    /// dependency spec (e.g. "numpy" or "pandas>=2"). Emitted in a
+    /// `# /// script` block above `import marimo`. marimo targets only;
+    /// Jupyter targets and from_path conversions reject it.
+    #[serde(default)]
+    pub dependencies: Option<Vec<String>>,
+    /// PEP 723 `requires-python` spec for a fresh marimo notebook (e.g.
+    /// ">=3.12"), emitted in the same `# /// script` block.
+    #[serde(default)]
+    pub requires_python: Option<String>,
     /// Result format, "markdown" (default) or "json".
     #[serde(default)]
     pub format: Format,
@@ -180,6 +190,13 @@ impl Tpmcp {
                     "from_path and cells are mutually exclusive",
                 ));
             }
+            let has_pep723 = args.dependencies.is_some() || args.requires_python.is_some();
+            if has_pep723 && args.from_path.is_some() {
+                return Err(Error::invalid_input(
+                    "dependencies and requires_python apply only to a fresh marimo notebook; \
+                     they cannot be combined with from_path",
+                ));
+            }
             if args.from_path.is_none() && has_extension(&args.path, "md") {
                 return Err(Error::invalid_input("a .md target requires from_path"));
             }
@@ -201,7 +218,16 @@ impl Tpmcp {
                             ))
                         })?,
                     };
-                    let mut notebook = notebook::create(format);
+                    if has_pep723 && format != NotebookFormat::Marimo {
+                        return Err(Error::invalid_input(
+                            "dependencies and requires_python apply only to marimo notebooks",
+                        ));
+                    }
+                    let mut notebook = notebook::create_with_dependencies(
+                        format,
+                        args.dependencies.as_deref(),
+                        args.requires_python.as_deref(),
+                    );
                     for new_cell in args.cells.unwrap_or_default() {
                         let index = notebook.cells().len();
                         notebook.insert(index, new_cell.cell_type.as_str(), &new_cell.source)?;

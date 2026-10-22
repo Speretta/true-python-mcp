@@ -467,6 +467,54 @@ fn conversion_warnings_cover_the_silent_classes() {
     );
 }
 
+/// A PEP 723 `# /// script` header is marimo scaffold, not stray user
+/// content: converting a file whose only top-level literals are the header
+/// and the standard scaffold produces no "top-level lines outside cells"
+/// warning.
+#[test]
+fn pep723_header_is_not_stray_content() {
+    let dir = temp_dir("convert-pep723");
+    let mut server = Server::start(&[]);
+    let source = dir.join("pep723.py");
+    std::fs::write(
+        &source,
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = ["marimo"]
+# ///
+
+import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App()
+
+
+@app.cell
+def _():
+    x = 1
+    return (x,)
+
+
+if __name__ == "__main__":
+    app.run()
+"#,
+    )
+    .unwrap();
+
+    let (err, text, created) = server.call(
+        "notebook_create",
+        json!({"path": dir.join("pep723.ipynb"), "from_path": source, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let warnings = warnings_of(&created);
+    assert!(
+        !warnings
+            .iter()
+            .any(|warning| warning.contains("top-level lines outside cells")),
+        "the PEP 723 header is scaffold, not stray content: {warnings:?}"
+    );
+}
+
 /// EC-6: a code cell containing a ``` fence exports inside a longer fence,
 /// so the markdown document stays intact.
 #[test]

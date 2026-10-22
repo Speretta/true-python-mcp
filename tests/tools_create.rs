@@ -189,3 +189,111 @@ fn notebook_format_overrides_extension() {
     assert!(raw.contains("@app.cell"), "{raw}");
     assert!(raw.contains("app.run()"), "{raw}");
 }
+
+/// `dependencies` + `requires_python` emit a PEP 723 `# /// script` block
+/// above `import marimo` (marimo's single-line serializer shape), the file
+/// still opens as a healthy marimo notebook, and the block is absent from the
+/// default scaffold.
+#[test]
+fn create_with_pep723_header_emits_block() {
+    let dir = temp_dir("pep723-create");
+    let mut server = Server::start(&[]);
+    let target = dir.join("app.py");
+    let (err, text, sc) = server.call(
+        "notebook_create",
+        json!({"path": target, "format": "json",
+               "requires_python": ">=3.12",
+               "dependencies": ["marimo", "wigglystuff==0.5.0"],
+               "cells": [{"cell_type": "code", "source": "x = 1\n"}]}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["cell_count"], 1);
+    let raw = std::fs::read_to_string(&target).unwrap();
+    assert!(
+        raw.starts_with(
+            "# /// script\n# requires-python = \">=3.12\"\n\
+             # dependencies = [\"marimo\", \"wigglystuff==0.5.0\"]\n# ///\n\nimport marimo\n"
+        ),
+        "PEP 723 header precedes import marimo: {raw}"
+    );
+
+    // The header is part of the recognized file, not a parse error.
+    let (err, text, read) = server.call("notebook_read", json!({"path": target, "format": "json"}));
+    assert!(!err, "{text}");
+    assert_eq!(read["cell_count"], 1);
+
+    // The default scaffold stays untouched: no block when neither is given.
+    let plain = dir.join("plain.py");
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": plain, "format": "json",
+               "cells": [{"cell_type": "code", "source": "x = 1\n"}]}),
+    );
+    assert!(!err, "{text}");
+    let plain_raw = std::fs::read_to_string(&plain).unwrap();
+    assert!(plain_raw.starts_with("import marimo\n"), "{plain_raw}");
+    assert!(!plain_raw.contains("# ///"), "{plain_raw}");
+}
+
+/// The PEP 723 args are marimo-create-only: Jupyter targets and `from_path`
+/// conversions refuse them instead of silently dropping the metadata.
+#[test]
+fn pep723_args_reject_non_marimo_targets() {
+    let dir = temp_dir("pep723-reject");
+    let mut server = Server::start(&[]);
+
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": dir.join("nb.ipynb"), "dependencies": ["marimo"]}),
+    );
+    assert!(err && text.contains("only to marimo"), "{text}");
+
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": dir.join("from.py"), "from_path": "tests/data/vscode_sample.ipynb",
+               "requires_python": ">=3.12"}),
+    );
+    assert!(
+        err && text.contains("cannot be combined with from_path"),
+        "{text}"
+    );
+}
+
+/// The emitted block byte-matches real marimo's own PEP 723 serializer
+/// (`tomlkit.dumps` wrapped in `# /// script` markers), parses back to the
+/// same manifest, and that manifest equals the real fixture
+/// `tutorials/external_dependencies.py`'s — pinning the format against both
+/// the installed marimo and a shipped marimo fixture.
+#[test]
+fn pep723_header_matches_marimos_serializer() {
+    let dir = temp_dir("pep723-oracle");
+    let mut server = Server::start(&[]);
+    let target = dir.join("app.py");
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": target, "format": "json",
+               "requires_python": ">=3.12",
+               "dependencies": ["marimo", "wigglystuff==0.5.0"]}),
+    );
+    assert!(!err, "{text}");
+
+    let Some(python) = ground_truth_python() else {
+        return;
+    };
+    const CHECK: &str = r#"
+import sys, tomlkit
+from pathlib import Path
+from marimo._environments.script_metadata import loads, wrap_block
+path = sys.argv[1]
+manifest = loads(open(path).read())
+fixture = loads(Path("tests/data/marimo/tutorials/external_dependencies.py").read_text())
+assert manifest == fixture, (manifest, fixture)
+assert manifest == {"requires-python": ">=3.12", "dependencies": ["marimo", "wigglystuff==0.5.0"]}, manifest
+block = wrap_block(tomlkit.dumps(manifest))
+text = open(path).read()
+assert text.startswith(block + "\n\nimport marimo"), text[:200]
+print("ok")
+"#;
+    let report = run_python(&python, CHECK, &[target.to_str().unwrap()]);
+    assert!(report.contains("ok"), "{report}");
+}
