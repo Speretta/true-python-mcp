@@ -18,9 +18,9 @@ pub struct Tpmcp {
 impl Tpmcp {
     /// Build the server.
     ///
-    /// `file_tools` toggles the generic `py_read`/`py_write`/`py_edit` tools,
-    /// which are off by default because coding hosts already ship native file
-    /// tools.
+    /// `file_tools` toggles the generic `py_read`/`py_write`/`py_edit`/
+    /// `stream_copy` tools, which are off by default because coding hosts
+    /// already ship native file tools.
     pub fn new(file_tools: bool) -> Self {
         let mut router = Tpmcp::notebook_router()
             + Tpmcp::cell_router()

@@ -12,7 +12,9 @@ use crate::fs;
 use crate::notebook::{Cell, Notebook};
 use crate::render::{self, Detail, WithOutputs};
 use crate::server::Tpmcp;
-use crate::tools::{apply_edit, blocking, check_cell_index, mutation_result, with_notebook};
+use crate::tools::{
+    apply_edit, blocking, check_cell_index, mutation_result, resolve_text_or_file, with_notebook,
+};
 
 mod args;
 
@@ -73,8 +75,10 @@ impl Tpmcp {
         title = "Set Cell Source",
         description = "Set a notebook cell's source: the whole cell, or just the 1-based \
                        inclusive line range start_line..=end_line (use notebook_read with \
-                       detail=full to see line numbers). Returns the new cell source and \
-                       revision. Outputs and metadata are preserved.",
+                       detail=full to see line numbers). Provide the source inline, or via \
+                       source_file to stream a large payload from disk without round-tripping \
+                       it through your context. Returns the new cell source and revision. \
+                       Outputs and metadata are preserved.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -87,19 +91,26 @@ impl Tpmcp {
         Parameters(args): Parameters<CellSetSourceArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
+            let incoming = resolve_text_or_file(
+                args.source,
+                args.source_file.as_deref(),
+                "source",
+                "source_file",
+            )?;
             let ((cell_type, source), new_revision) =
                 with_notebook(&args.path, &args.revision, |notebook| {
                     check_cell_index(notebook, args.cell)?;
                     let updated = match (args.start_line, args.end_line) {
-                        // args is owned and no later step needs source: move it.
-                        (None, None) => args.source,
+                        // incoming is owned and no later step needs it here:
+                        // move it into the whole-cell replacement.
+                        (None, None) => incoming,
                         (Some(start), Some(end)) => {
                             let current = notebook.cells()[args.cell].source_text();
                             fs::replace_line_range(
                                 &current,
                                 start,
                                 end,
-                                &fs::logical_lines(&args.source),
+                                &fs::logical_lines(&incoming),
                             )
                             .map_err(|message| {
                                 Error::invalid_input(format!("cell {}: {message}", args.cell))
@@ -140,7 +151,9 @@ impl Tpmcp {
         title = "Insert Cell",
         description = "Insert a new cell of type cell_type (code, markdown, raw) into a \
                        notebook at a 0-based index; omit index to append at the end. source \
-                       may be empty. Returns the new revision.",
+                       may be empty; pass source_file instead to stream a large payload from \
+                       disk without round-tripping it through your context. Returns the new \
+                       revision.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -153,11 +166,23 @@ impl Tpmcp {
         Parameters(args): Parameters<CellInsertArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
+            // cell_insert allows an empty source (unlike cell_set_source), so
+            // neither param set is a valid empty cell, not an error.
+            let source = match (args.source, args.source_file) {
+                (Some(_), Some(_)) => {
+                    return Err(Error::invalid_input(
+                        "source and source_file are mutually exclusive",
+                    ));
+                }
+                (Some(text), None) => text,
+                (None, Some(path)) => fs::read(&path)?.content,
+                (None, None) => String::new(),
+            };
             let markdown = args.cell_type.as_str() == "markdown";
             let ((index, warning), new_revision) =
                 with_notebook(&args.path, &args.revision, |notebook| {
                     let index = args.index.unwrap_or(notebook.cells().len());
-                    notebook.insert(index, args.cell_type.as_str(), &args.source)?;
+                    notebook.insert(index, args.cell_type.as_str(), &source)?;
                     let warning = if markdown {
                         notebook.ensure_mo_definition()?
                     } else {

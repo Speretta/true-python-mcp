@@ -38,7 +38,13 @@ pub struct CellSetSourceArgs {
     /// 0-based cell index (see notebook_read).
     pub cell: usize,
     /// New source: the whole cell, or the replacement for start_line..=end_line.
-    pub source: String,
+    /// Mutually exclusive with source_file.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Read the new source from this file instead (the stream path for huge
+    /// payloads); mutually exclusive with source.
+    #[serde(default)]
+    pub source_file: Option<PathBuf>,
     /// First 1-based line to replace; requires end_line. Omit both to
     /// replace the entire cell source.
     #[serde(default)]
@@ -62,9 +68,14 @@ pub struct CellInsertArgs {
     pub index: Option<usize>,
     /// Type of the new cell.
     pub cell_type: CellType,
-    /// Initial source for the new cell.
+    /// Initial source for the new cell (may be empty). Mutually exclusive
+    /// with source_file.
     #[serde(default)]
-    pub source: String,
+    pub source: Option<String>,
+    /// Read the initial source from this file instead (the stream path for
+    /// huge payloads); mutually exclusive with source.
+    #[serde(default)]
+    pub source_file: Option<PathBuf>,
     /// Current file revision (from notebook_read or a previous mutation).
     pub revision: String,
     /// Result format, "markdown" (default) or "json".

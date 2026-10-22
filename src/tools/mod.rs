@@ -89,6 +89,29 @@ pub fn check_cell_index(notebook: &AnyNotebook, cell: usize) -> Result<(), Error
     crate::notebook::check_index(notebook.cells().len(), cell)
 }
 
+/// Resolve a text payload given either inline or as a path to a file to
+/// read (the "stream" path for huge content): exactly one must be set. When
+/// `file` is set the bytes are read by [`fs::read`] — sharing its size cap
+/// and UTF-8 check — instead of trusting the inline text, so a large blob
+/// never round-trips through the caller's context.
+pub fn resolve_text_or_file(
+    inline: Option<String>,
+    file: Option<&Path>,
+    inline_name: &str,
+    file_name: &str,
+) -> Result<String, Error> {
+    match (inline, file) {
+        (Some(_), Some(_)) => Err(Error::invalid_input(format!(
+            "{inline_name} and {file_name} are mutually exclusive"
+        ))),
+        (Some(text), None) => Ok(text),
+        (None, Some(path)) => Ok(fs::read(path)?.content),
+        (None, None) => Err(Error::invalid_input(format!(
+            "provide either {inline_name} or {file_name}"
+        ))),
+    }
+}
+
 /// Shared logic of the surgical edit tools (`cell_edit`, `py_edit`):
 /// identical-string rejection, uniqueness enforcement, and the replacement.
 /// `context` names the edited region in error messages ("cell 3", "file").

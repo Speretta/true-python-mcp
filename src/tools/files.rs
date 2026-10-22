@@ -19,7 +19,7 @@ use crate::error::Error;
 use crate::fs;
 use crate::render::{self, Format};
 use crate::server::Tpmcp;
-use crate::tools::{apply_edit, blocking, mutation_result, respond};
+use crate::tools::{apply_edit, blocking, mutation_result, resolve_text_or_file, respond};
 
 /// Maximum lines rendered in markdown when no explicit range is given.
 const MAX_RENDER_LINES: usize = 2000;
@@ -43,12 +43,28 @@ pub struct PyReadArgs {
 pub struct PyWriteArgs {
     /// Path to write.
     pub path: PathBuf,
-    /// Full new file content.
-    pub content: String,
+    /// Full new file content; mutually exclusive with from_path.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Read the full new content from this file instead (the stream path for
+    /// huge payloads); mutually exclusive with content.
+    #[serde(default)]
+    pub from_path: Option<PathBuf>,
     /// Current revision to overwrite an existing file; omit to create a new
     /// file (fails if it already exists).
     #[serde(default)]
     pub revision: Option<String>,
+    /// Result format, "markdown" (default) or "json".
+    #[serde(default)]
+    pub format: Format,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StreamCopyArgs {
+    /// Path of the source file to copy from.
+    pub source: PathBuf,
+    /// Destination path to write the copied bytes to.
+    pub dest: PathBuf,
     /// Result format, "markdown" (default) or "json".
     #[serde(default)]
     pub format: Format,
@@ -115,8 +131,10 @@ impl Tpmcp {
     #[tool(
         title = "Write Python File",
         description = "Write a Python/text file. Omit `revision` to create a new file (fails if \
-                       it exists); pass the current `revision` to overwrite. Returns the new \
-                       revision. Prefer the host's native write tool when available.",
+                       it exists); pass the current `revision` to overwrite. Provide the content \
+                       inline, or via `from_path` to stream a large payload from disk without \
+                       round-tripping it through your context. Returns the new revision. \
+                       Prefer the host's native write tool when available.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -129,6 +147,12 @@ impl Tpmcp {
         Parameters(args): Parameters<PyWriteArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
+            let content = resolve_text_or_file(
+                args.content,
+                args.from_path.as_deref(),
+                "content",
+                "from_path",
+            )?;
             let creating = args.revision.is_none();
             let new_revision = fs::with_file_lock(&args.path, || {
                 match &args.revision {
@@ -142,11 +166,11 @@ impl Tpmcp {
                                 path: args.path.clone(),
                             });
                         }
-                        fs::create(&args.path, &args.content)
+                        fs::create(&args.path, &content)
                     }
                     Some(expected) => {
                         fs::read_verified(&args.path, expected)?;
-                        fs::write(&args.path, &args.content)
+                        fs::write(&args.path, &content)
                     }
                 }
             })?;
@@ -204,6 +228,50 @@ impl Tpmcp {
                 &new_revision,
                 || Some(format!("```diff\n{diff}```")),
                 || json!({"diff": diff.as_str()}),
+            ))
+        })
+        .await
+    }
+
+    #[tool(
+        title = "Stream Copy File",
+        description = "Copy `source` to `dest` byte-for-byte through tpmcp, without loading \
+                       the content into the caller's context (the agent passes only a path). \
+                       The bytes are streamed in chunks and honor the same size cap as every \
+                       other read; `dest` is written atomically (temp file + rename) so it is \
+                       never observed half-written. Unlike py_write the content may be binary \
+                       (not UTF-8). Returns the new revision of `dest`. Prefer the host's \
+                       native copy tool when available.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn stream_copy(
+        &self,
+        Parameters(args): Parameters<StreamCopyArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let (new_revision, bytes) =
+                fs::with_file_lock(&args.dest, || fs::copy_stream(&args.source, &args.dest))?;
+            Ok(mutation_result(
+                args.format,
+                format!(
+                    "copied {} to {}",
+                    args.source.display(),
+                    args.dest.display()
+                ),
+                &args.dest,
+                &new_revision,
+                || None,
+                || {
+                    json!({
+                        "source": args.source.display().to_string(),
+                        "bytes": bytes,
+                    })
+                },
             ))
         })
         .await
