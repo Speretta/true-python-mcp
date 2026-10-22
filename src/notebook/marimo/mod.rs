@@ -19,6 +19,7 @@ pub(super) mod scope;
 mod summary;
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use super::{Cell, Finding, Notebook, check_index};
 use crate::error::Error;
@@ -232,6 +233,51 @@ impl MarimoNotebook {
             .any(|(cell, _)| {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
+    }
+
+    /// Each lintable cell's `(0-based marimo index, Python body)` for ruff.
+    ///
+    /// Parsing already strips the fixed indent and the trailing `return`, so a
+    /// code app cell or a setup cell is just its dedented body; a markdown
+    /// cell contributes its `mo.md(...)` wrapper call (the only Python it
+    /// compiles to); a function/class block is linted verbatim (decorator and
+    /// signature are real Python, not scaffolding); broken/unparsable cells
+    /// have no valid body and are skipped. Indices stay 1:1 with the cell
+    /// tools so the caller can pair a skipped index with a placeholder.
+    pub(crate) fn lint_cells(&self) -> Vec<(usize, String)> {
+        let mut lintable = Vec::new();
+        for (index, (cell, meta)) in self.cells.iter().zip(&self.metas).enumerate() {
+            let body = match meta.kind {
+                Kind::Broken | Kind::Unparsable => continue,
+                Kind::AppCell => match &meta.md {
+                    Some(md) => markdown::wrap_call(&cell.source.text(), "", &md.tag),
+                    None => cell.source.text().into_owned(),
+                },
+                Kind::Setup => cell.source.text().into_owned(),
+                Kind::Function | Kind::Class => meta.block.clone(),
+            };
+            lintable.push((index, body));
+        }
+        lintable
+    }
+
+    /// Every name the marimo runtime provides: the builtins as marimo sees
+    /// them plus the top-level defs of every analyzable cell (setup defs
+    /// included). This is the `graph_provided` set the ruff F821 filter drops
+    /// false positives against — a name marimo binds through the graph is not
+    /// "undefined" just because the concatenated cell bodies do not bind it.
+    pub(crate) fn graph_provided(&self) -> HashSet<String> {
+        let mut names: HashSet<String> = check::marimo_builtin_names().into_iter().collect();
+        for (cell, meta) in self.cells.iter().zip(&self.metas) {
+            if meta.md.is_some() {
+                // A markdown cell's source is text, not Python.
+                continue;
+            }
+            if let Some(info) = scope::analyze(&cell.source.text()) {
+                names.extend(info.defs);
+            }
+        }
+        names
     }
 }
 

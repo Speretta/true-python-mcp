@@ -15,6 +15,7 @@
 //! is re-parsed and re-emitted canonically, so fixing or formatting a
 //! notebook never introduces diff noise in untouched cells.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use ruff_db::diagnostic::Diagnostic as RuffDiagnostic;
@@ -23,7 +24,10 @@ use ruff_linter::linter::{FixerResult, ParseSource, lint_fix, lint_only};
 use ruff_linter::settings::flags::Noqa;
 use ruff_linter::settings::types::UnsafeFixes;
 use ruff_linter::source_kind::SourceKind;
-use ruff_notebook::{Notebook as RuffNotebook, NotebookIndex};
+use ruff_notebook::{
+    Cell as RuffCell, CellMetadata, CodeCell, MarkdownCell, Notebook as RuffNotebook,
+    NotebookIndex, RawNotebook, RawNotebookMetadata, SourceValue,
+};
 use ruff_python_ast::{PySourceType, SourceType};
 use ruff_python_formatter::format_module_source;
 use ruff_text_size::{TextLen, TextRange, TextSize};
@@ -31,7 +35,7 @@ use ruff_workspace::Settings;
 
 use crate::error::Error;
 use crate::fs;
-use crate::notebook::JupyterNotebook;
+use crate::notebook::{JupyterNotebook, MarimoNotebook, Notebook};
 
 mod diagnostics;
 mod settings;
@@ -125,7 +129,33 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
     // Worst-case AST recursion bound for ruff's unguarded walk/drop stages
     // (crate::stack): every node consumes at least one source byte.
     let source_len = snapshot.content.len();
-    let source_kind = source_kind_from(snapshot.content, source_type, path)?;
+    // A marimo `.py` is linted per cell (dedented bodies concatenated into one
+    // fabricated notebook), never as a single module: marimo's scaffolding
+    // (cell headers, trailing `return`, `@app.function` decorators) would
+    // otherwise surface as false positives. Phase 1 is lint-only; fix/format
+    // write-back lands in a later phase. A file that merely *looks* like
+    // marimo but fails to parse falls back to whole-file lint so a parse
+    // hiccup can never silently drop diagnostics.
+    let marimo = (source_type == PySourceType::Python
+        && crate::notebook::is_marimo(&snapshot.content))
+    .then(|| MarimoNotebook::parse(&snapshot.content).ok())
+    .flatten();
+    let (source_kind, source_type, graph_provided) = match marimo {
+        Some(notebook) => {
+            if fixes == SafeFixes::Apply {
+                return Err(Error::invalid_input(
+                    "fixing marimo notebooks is not supported yet (phase 1 is lint-only)",
+                ));
+            }
+            let graph_provided = notebook.graph_provided();
+            let kind = marimo_source_kind(&notebook, path)?;
+            (kind, PySourceType::Ipynb, Some(graph_provided))
+        }
+        None => {
+            let kind = source_kind_from(snapshot.content, source_type, path)?;
+            (kind, source_type, None)
+        }
+    };
     let noqa = Noqa::Enabled;
 
     let pass = match fixes {
@@ -185,7 +215,10 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
         }
     };
 
-    let diagnostics = map_diagnostics(&pass.diagnostics, path, pass.notebook_index)?;
+    let mut diagnostics = map_diagnostics(&pass.diagnostics, path, pass.notebook_index)?;
+    if let Some(graph_provided) = graph_provided {
+        diagnostics = filter_marimo(diagnostics, &graph_provided);
+    }
     Ok(CheckOutcome {
         diagnostics,
         changed: pass.changed,
@@ -205,6 +238,11 @@ pub fn format_file(
     let Some(source_type) = python_source_type(&settings, path) else {
         return Err(not_python(path));
     };
+    // Phase 1 leaves marimo formatting unimplemented: a marimo `.py` is still
+    // formatted whole-file below. A later phase will branch here on
+    // `crate::notebook::is_marimo` to format each cell body (re-indented,
+    // `return` regenerated) through the byte-exact serializer, mirroring
+    // `check`'s cell-body lint.
     let source_kind = source_kind_from(snapshot.content, source_type, path)?;
 
     // Consume `source_kind` so the notebook branch can hand ownership to
@@ -345,6 +383,99 @@ fn source_kind_from(
         .ok_or_else(|| {
             Error::invalid_input(format!("empty or unsupported file: {}", path.display()))
         })
+}
+
+/// Fabricate a [`SourceKind::IpyNotebook`] for a marimo notebook: one code
+/// cell per lintable body, plus an empty markdown placeholder per skipped
+/// index, so the notebook index stays 1:1 with marimo cell indices (a
+/// broken/unparsable cell keeps its slot without contributing source). Lint
+/// only — this notebook is never written back.
+fn marimo_source_kind(marimo: &MarimoNotebook, path: &Path) -> Result<SourceKind, Error> {
+    let mut bodies: Vec<Option<String>> = vec![None; marimo.cells().len()];
+    for (index, body) in marimo.lint_cells() {
+        if let Some(slot) = bodies.get_mut(index) {
+            *slot = Some(body);
+        }
+    }
+    let cells = bodies
+        .into_iter()
+        .map(|body| match body {
+            Some(body) => {
+                // Mirror Jupyter's cell-source convention (each entry ends in a
+                // newline) so ruff's synthetic `\n` separator becomes a blank
+                // line between cells; otherwise an import at the end of one
+                // cell and code at the start of the next fuse into an
+                // "un-formatted" I001.
+                let mut source = body;
+                if !source.ends_with('\n') {
+                    source.push('\n');
+                }
+                RuffCell::Code(CodeCell {
+                    execution_count: None,
+                    id: None,
+                    metadata: CellMetadata::default(),
+                    outputs: Vec::new(),
+                    source: SourceValue::String(source),
+                })
+            }
+            None => RuffCell::Markdown(MarkdownCell {
+                attachments: None,
+                id: None,
+                metadata: CellMetadata::default(),
+                source: SourceValue::String(String::new()),
+            }),
+        })
+        .collect();
+    let notebook = RuffNotebook::from_raw_notebook(
+        RawNotebook {
+            cells,
+            metadata: RawNotebookMetadata::default(),
+            nbformat: 4,
+            nbformat_minor: 4,
+        },
+        false,
+    )
+    .map_err(|error| Error::analysis(format!("cannot lint marimo {}: {error}", path.display())))?;
+    Ok(SourceKind::ipy_notebook(notebook))
+}
+
+/// Post-mapping filter for marimo notebooks: drop the false positives of
+/// linting cell bodies as one module. `graph_provided` is every name the
+/// marimo runtime provides (builtins plus cell defs), so an F821 against it is
+/// a graph-provided name, not a genuine undefined one. PLR1711/I001/C408 are
+/// untouched: PLR1711 disappears because `lint_cells` strips the trailing
+/// `return`, and the rest are real lint findings.
+fn filter_marimo(diags: Vec<Diagnostic>, graph_provided: &HashSet<String>) -> Vec<Diagnostic> {
+    diags
+        .into_iter()
+        .filter(|diagnostic| {
+            let Some(code) = diagnostic.code.as_deref() else {
+                return true;
+            };
+            let token = backtick_token(&diagnostic.message);
+            match code {
+                // The scaffold `import marimo` (or `import marimo as mo`) is
+                // never a user mistake; marimo owns it.
+                "F401" => !matches!(
+                    token,
+                    Some(token) if token == "marimo" || token.starts_with("marimo.")
+                ),
+                // `mo`/`marimo` are redefined by the graph across cells.
+                "F811" => !matches!(token, Some(token) if token == "mo" || token == "marimo"),
+                // A name marimo provides is not "undefined" to the runtime.
+                "F821" => !token.is_some_and(|token| graph_provided.contains(token)),
+                _ => true,
+            }
+        })
+        .collect()
+}
+
+/// The first backtick-quoted token of a ruff message: `` `marimo` imported but
+/// unused`` → `marimo`, ``Redefinition of unused `mo` from line 1`` → `mo`,
+/// ``Undefined name `x` `` → `x`. `None` when the message has no backticks.
+fn backtick_token(message: &str) -> Option<&str> {
+    let rest = message.split_once('`')?.1;
+    rest.split('`').next()
 }
 
 /// The small [`NotebookIndex`] used to map ruff offsets back to `cell`/`row`,
