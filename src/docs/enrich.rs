@@ -83,7 +83,10 @@ fn enrich_from_cpython(
 ) -> Enrichment {
     let Some(stub_path) = definition_file
         .as_vendored_path()
-        .map(|path| path.as_str())
+        // The vendored path uses the platform separator (`\` on Windows); the
+        // mapping below keys on the forward-slash `stdlib/` shape, so normalize
+        // once to keep the prefix check and strip platform-independent.
+        .map(|path| path.as_str().replace('\\', "/"))
         .filter(|path| path.starts_with("stdlib/"))
     else {
         // why: the fallback only knows how to map typeshed stdlib stubs; anything
@@ -109,7 +112,7 @@ fn enrich_from_cpython(
         };
     };
 
-    let Some(source_path) = map_stub_to_source(stub_path, &stdlib) else {
+    let Some(source_path) = map_stub_to_source(&stub_path, &stdlib) else {
         return Enrichment::Missing {
             note: format!(
                 "no docstring: the stub has none and no CPython source could be mapped \
@@ -144,6 +147,9 @@ fn enrich_from_cpython(
 /// Maps a vendored typeshed stub path to the real CPython source:
 /// `stdlib/json/__init__.pyi` -> `<stdlib>/json/__init__.py`.
 fn map_stub_to_source(stub_path: &str, stdlib: &SystemPath) -> Option<SystemPathBuf> {
+    // Windows vendored paths use `\`; normalize so the `stdlib/` prefix strip
+    // is platform-independent.
+    let stub_path = stub_path.replace('\\', "/");
     let rest = stub_path.strip_prefix("stdlib/")?;
     let rest = rest.strip_suffix(".pyi")?;
     Some(stdlib.join(rest).with_extension("py"))
@@ -226,4 +232,22 @@ fn body_docstring(body: &[ast::Stmt]) -> Option<String> {
     value
         .as_string_literal_expr()
         .map(|expr| expr.value.to_str().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
+
+    use super::*;
+
+    #[test]
+    fn map_stub_to_source_normalizes_windows_separators() {
+        let stdlib = SystemPath::new("/base/Lib");
+        // A Windows vendored path uses `\`; the mapping must still resolve it
+        // to the real CPython source.
+        assert_eq!(
+            map_stub_to_source("stdlib\\antigravity.pyi", stdlib).unwrap(),
+            stdlib.join("antigravity").with_extension("py")
+        );
+    }
 }
