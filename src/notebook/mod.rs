@@ -229,9 +229,26 @@ pub fn open(content: &str) -> Result<AnyNotebook, String> {
 }
 
 pub fn create(format: Format) -> AnyNotebook {
+    create_with_dependencies(format, None, None)
+}
+
+/// [`create`] for a fresh marimo file with a PEP 723 `# /// script` header:
+/// `dependencies` and `requires_python` name the inline script metadata block
+/// emitted above `import marimo`. A `None` for either omits that key, and
+/// both `None` reproduces the default scaffold. Jupyter targets have no PEP
+/// 723 form, so the arguments are ignored there; callers that supplied them
+/// for a Jupyter target reject before reaching this function.
+pub fn create_with_dependencies(
+    format: Format,
+    dependencies: Option<&[String]>,
+    requires_python: Option<&str>,
+) -> AnyNotebook {
     match format {
         Format::Jupyter => AnyNotebook::Jupyter(JupyterNotebook::new()),
-        Format::Marimo => AnyNotebook::Marimo(marimo::MarimoNotebook::create()),
+        Format::Marimo => AnyNotebook::Marimo(marimo::MarimoNotebook::create(
+            dependencies,
+            requires_python,
+        )),
     }
 }
 

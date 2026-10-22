@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 mod common;
 
-use common::{ground_truth_python, marimo_fixture, run_python};
+use common::{ground_truth_python, marimo_fixture, run_python, synthetic_marimo};
 use tpmcp::notebook::{Notebook, open};
 
 /// Every marimo fixture: the hand-picked files plus the shipped tutorials.
@@ -469,5 +469,57 @@ for cell in nb.cells:
             python_repr(&notebook.cells()[0].source_text()),
             python_repr(cell1)
         ]
+    );
+}
+
+/// The PEP 723 header tpmcp emits (single-line `dependencies`) round-trips
+/// byte-exact through parse→serialize, and editing a cell leaves the header
+/// untouched.
+#[test]
+fn pep723_header_roundtrips_and_survives_edits() {
+    let header =
+        "# /// script\n# requires-python = \">=3.12\"\n# dependencies = [\"marimo\"]\n# ///\n\n";
+    let src = format!("{header}{}", synthetic_marimo(&["x = 1"]));
+
+    let mut notebook = open(&src).unwrap();
+    assert_eq!(notebook.serialize(), src, "byte-exact round-trip");
+
+    notebook.set_source(0, "x = 42").unwrap();
+    let serialized = notebook.serialize();
+    assert!(
+        serialized.starts_with(header),
+        "the PEP 723 header survives an edit: {serialized}"
+    );
+    assert!(serialized.contains("    x = 42\n"), "{serialized}");
+    assert!(!serialized.contains("x = 1"));
+    assert!(open(&serialized).is_ok());
+}
+
+/// A file with a PEP 723 header and a broken cell degrades into the scanner;
+/// the header stays a verbatim literal and the file round-trips byte-exact.
+#[test]
+fn pep723_header_survives_scan_mode() {
+    let header =
+        "# /// script\n# requires-python = \">=3.12\"\n# dependencies = [\"marimo\"]\n# ///\n\n";
+    let src = format!("{header}{}", marimo_fixture("broken.py"));
+
+    let mut notebook = open(&src).expect("scanner opens a file with a syntax error");
+    assert_eq!(
+        notebook.serialize(),
+        src,
+        "byte-exact round-trip in scan mode"
+    );
+
+    // The intact cell is editable while the header and broken cell stay put.
+    notebook.set_source(0, "x = 100").unwrap();
+    let serialized = notebook.serialize();
+    assert!(
+        serialized.starts_with(header),
+        "the PEP 723 header survives a scan-mode edit: {serialized}"
+    );
+    assert!(serialized.contains("    x = 100\n"), "{serialized}");
+    assert!(
+        serialized.contains("this is not valid python"),
+        "broken cell preserved"
     );
 }
