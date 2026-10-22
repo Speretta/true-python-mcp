@@ -18,7 +18,7 @@ pub mod lock;
 mod sweep;
 
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
@@ -219,6 +219,77 @@ pub fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
+/// Stream-copy `source` to `dest` byte-for-byte, honoring the same size cap
+/// as every other read. The bytes move in fixed-size chunks — never buffered
+/// whole — and the destination lands atomically via a sibling temp file +
+/// rename, so an observer never sees a half-written `dest`.
+///
+/// Unlike [`write`], the content need not be UTF-8: this is the primitive
+/// for moving opaque payloads (blobs, binaries) into place without
+/// round-tripping them through the LLM's context. Returns the `dest`
+/// revision (over the raw bytes) and the number of bytes copied.
+///
+/// Writes follow symlinks exactly like [`write`]: `dest` is resolved first
+/// and the rename lands next to the resolved target. The parent directory
+/// must exist; like [`write`], this never fabricates directories from a
+/// typo'd path.
+pub fn copy_stream(source: &Path, dest: &Path) -> Result<(String, u64), Error> {
+    let target = resolve_target(dest);
+    if let Some(parent) = target.parent() {
+        sweep::sweep_stale_temps(parent);
+    }
+    let tmp = temp_path(&target);
+    match copy_via_temp(source, &tmp, &target, dest) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let _ = fs::remove_file(&tmp);
+            Err(error)
+        }
+    }
+}
+
+/// The copy itself: open the source, stream it into the temp file while
+/// hashing, then rename. `reported` is the caller's spelling of `dest`,
+/// used in errors. The source's permission bits are not propagated: `dest`
+/// is a fresh file owned by the copying user, matching [`write`].
+fn copy_via_temp(
+    source: &Path,
+    tmp: &Path,
+    target: &Path,
+    reported: &Path,
+) -> Result<(String, u64), Error> {
+    let (_, mut reader) = open_source(source)?;
+    let io = |err| Error::io(reported.to_path_buf(), err);
+    let mut writer = fs::File::create(tmp).map_err(io)?;
+    preserve_mode(target, tmp);
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut copied: u64 = 0;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|err| Error::io(source.to_path_buf(), err))?;
+        if count == 0 {
+            break;
+        }
+        copied += count as u64;
+        // The metadata check in `open_source` is TOCTOU: re-check the running
+        // count so a file grown past the cap mid-copy is still rejected.
+        if copied > MAX_FILE_SIZE {
+            return Err(Error::TooLarge {
+                path: source.to_path_buf(),
+                max_mib: MAX_FILE_SIZE / (1024 * 1024),
+            });
+        }
+        hasher.update(&buffer[..count]);
+        writer.write_all(&buffer[..count]).map_err(io)?;
+    }
+    writer.sync_all().map_err(io)?;
+    fs::rename(tmp, target).map_err(io)?;
+    let revision = hasher.finalize().to_hex()[..16].to_string();
+    Ok((revision, copied))
+}
+
 /// The real file behind `path`: canonicalize resolves every symlink, so an
 /// edit through a symlinked path renames over the real target (see
 /// [`write`]). Falls back to `path` itself when the file does not exist yet
@@ -326,7 +397,12 @@ pub fn replace_line_range(
     Ok(out)
 }
 
-fn read_bytes(path: &Path) -> Result<Vec<u8>, Error> {
+/// Validate `path` as a readable, size-capped regular file and open it for
+/// streaming. Shared by [`read_bytes`] and [`copy_stream`] so the size cap
+/// and regular-file check are enforced identically. The returned handle makes
+/// the stat→read TOCTOU window explicit; callers re-check the actual byte
+/// count as they consume the stream.
+fn open_source(path: &Path) -> Result<(u64, fs::File), Error> {
     let meta = fs::metadata(path).map_err(|source| match source.kind() {
         std::io::ErrorKind::NotFound => Error::NotFound {
             path: path.to_path_buf(),
@@ -345,9 +421,17 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, Error> {
             max_mib: MAX_FILE_SIZE / (1024 * 1024),
         });
     }
-    let bytes = fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
-    // The metadata check above is TOCTOU: recheck the actual byte count so a
-    // file grown past the cap between stat and read is still rejected.
+    let file = fs::File::open(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    Ok((meta.len(), file))
+}
+
+fn read_bytes(path: &Path) -> Result<Vec<u8>, Error> {
+    let (_, mut file) = open_source(path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
+    // The metadata check in `open_source` is TOCTOU: recheck the actual byte
+    // count so a file grown past the cap between stat and read is rejected.
     if bytes.len() as u64 > MAX_FILE_SIZE {
         return Err(Error::TooLarge {
             path: path.to_path_buf(),

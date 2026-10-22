@@ -46,8 +46,8 @@ fn default_tool_surface() {
 fn file_tools_flag_adds_py_tools() {
     let mut server = Server::start(&["--file-tools"]);
     let tools = server.list_tools();
-    assert_eq!(tools.len(), DEFAULT_TOOLS.len() + 3);
-    for name in ["py_read", "py_write", "py_edit"] {
+    assert_eq!(tools.len(), DEFAULT_TOOLS.len() + 4);
+    for name in ["py_read", "py_write", "py_edit", "stream_copy"] {
         assert!(tools.contains(&name.to_string()), "missing {name}");
     }
 }
@@ -767,4 +767,147 @@ fn py_read_explicit_range_on_empty_file_is_a_bounds_error() {
         "an explicit range on an empty file must not silently succeed"
     );
     assert!(text.contains("out of bounds: file has 0 lines"), "{text}");
+}
+
+/// The path-reference "stream" capability: `source_file` (cell_insert,
+/// cell_set_source) and `from_path` (py_write) read the payload from disk
+/// instead of the inline arg, and reject being combined with it.
+#[test]
+fn stream_path_source_into_cells_and_files() {
+    let dir = temp_dir("stream-source");
+    let mut server = Server::start(&["--file-tools"]);
+
+    // A sizeable payload written to disk by the host — the agent only ever
+    // passes its path.
+    let payload = "PAYLOAD_MARKER_".repeat(2000);
+    let source_path = dir.join("blob.txt");
+    std::fs::write(&source_path, &payload).unwrap();
+
+    // Notebook with one code cell.
+    let nb = dir.join("nb.ipynb");
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": nb, "cells": [{"cell_type": "code", "source": "x = 1\n"}]}),
+    );
+    assert!(!err, "{text}");
+    let mut rev = revision_of(&text);
+
+    // cell_insert from a path.
+    let (err, text, _) = server.call(
+        "cell_insert",
+        json!({"path": nb, "cell_type": "code", "source_file": source_path, "revision": rev}),
+    );
+    assert!(!err, "{text}");
+    rev = revision_of(&text);
+    let (err, _, sc) = server.call("notebook_read", json!({"path": nb, "format": "json"}));
+    assert!(!err, "{sc}");
+    assert_eq!(sc["cells"][1]["source"], payload);
+
+    // cell_set_source from a path overwrites cell 0 wholesale.
+    let (err, text, _) = server.call(
+        "cell_set_source",
+        json!({"path": nb, "cell": 0, "source_file": source_path, "revision": rev}),
+    );
+    assert!(!err, "{text}");
+    rev = revision_of(&text);
+    let (err, _, sc) = server.call("notebook_read", json!({"path": nb, "format": "json"}));
+    assert!(!err, "{sc}");
+    assert_eq!(sc["cells"][0]["source"], payload);
+
+    // py_write from a path.
+    let dest = dir.join("out.py");
+    let (err, text, _) = server.call("py_write", json!({"path": dest, "from_path": source_path}));
+    assert!(!err, "{text}");
+    assert_eq!(std::fs::read_to_string(&dest).unwrap(), payload);
+
+    // cell_insert with neither source nor source_file is an empty cell.
+    let (err, text, _) = server.call(
+        "cell_insert",
+        json!({"path": nb, "cell_type": "code", "revision": rev}),
+    );
+    assert!(!err, "empty source is valid for cell_insert: {text}");
+
+    // Mutually exclusive: both inline and path.
+    let (err, text, sc) = server.call(
+        "cell_set_source",
+        json!({"path": nb, "cell": 0, "source": "inline", "source_file": source_path,
+               "revision": rev}),
+    );
+    assert!(err && sc["error"] == "invalid_input", "{sc}");
+    assert!(text.contains("mutually exclusive"), "{text}");
+
+    let (err, text, _) = server.call(
+        "cell_insert",
+        json!({"path": nb, "cell_type": "code", "source": "inline",
+               "source_file": source_path, "revision": rev}),
+    );
+    assert!(err && text.contains("mutually exclusive"), "{text}");
+
+    let (err, text, _) = server.call(
+        "py_write",
+        json!({"path": dir.join("both.py"), "content": "inline", "from_path": source_path}),
+    );
+    assert!(err && text.contains("mutually exclusive"), "{text}");
+
+    // Required: cell_set_source and py_write refuse neither-param calls.
+    let (err, text, _) = server.call(
+        "cell_set_source",
+        json!({"path": nb, "cell": 0, "revision": rev}),
+    );
+    assert!(
+        err && text.contains("provide either source or source_file"),
+        "{text}"
+    );
+
+    let (err, text, _) = server.call("py_write", json!({"path": dir.join("neither.py")}));
+    assert!(
+        err && text.contains("provide either content or from_path"),
+        "{text}"
+    );
+}
+
+/// `stream_copy` moves bytes source→dest through tpmcp (binary-safe, chunked,
+/// size-capped) and returns the dest revision.
+#[test]
+fn stream_copy_over_the_wire() {
+    let dir = temp_dir("stream-copy");
+    let mut server = Server::start(&["--file-tools"]);
+
+    // Binary source: stream_copy moves raw bytes, not just UTF-8 text.
+    let payload: Vec<u8> = (0_u8..=255).cycle().take(4096).collect();
+    let source = dir.join("blob.bin");
+    std::fs::write(&source, &payload).unwrap();
+
+    let dest = dir.join("copy.bin");
+    let (err, text, sc) = server.call(
+        "stream_copy",
+        json!({"source": source, "dest": dest, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["bytes"], payload.len());
+    assert_eq!(sc["revision"].as_str().unwrap().len(), 16);
+    assert_eq!(std::fs::read(&dest).unwrap(), payload);
+
+    // The markdown summary names both paths.
+    let (err, text, _) = server.call(
+        "stream_copy",
+        json!({"source": source, "dest": dir.join("copy2.bin")}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("copied") && text.contains("blob.bin"),
+        "{text}"
+    );
+
+    // The size cap is honored on the source.
+    let huge = dir.join("huge.bin");
+    {
+        let file = std::fs::File::create(&huge).unwrap();
+        file.set_len(33 * 1024 * 1024).unwrap();
+    }
+    let (err, _, sc) = server.call(
+        "stream_copy",
+        json!({"source": huge, "dest": dir.join("huge-copy.bin")}),
+    );
+    assert!(err && sc["error"] == "too_large", "{sc}");
 }

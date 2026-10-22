@@ -121,6 +121,60 @@ fn read_rejects_oversized_files() {
 }
 
 #[test]
+fn copy_stream_roundtrips_bytes_and_revision() {
+    let dir = temp_dir("stream");
+    let source = dir.join("blob.bin");
+    let dest = dir.join("copy.bin");
+    // Binary payload: stream_copy moves raw bytes, not UTF-8 text.
+    let payload: Vec<u8> = (0_u32..4096).flat_map(|n| n.to_be_bytes()).collect();
+    fs::write(&source, &payload).unwrap();
+
+    let (revision, bytes) = copy_stream(&source, &dest).unwrap();
+
+    assert_eq!(bytes, payload.len() as u64);
+    assert_eq!(revision, revision_of(&payload));
+    assert_eq!(fs::read(&dest).unwrap(), payload);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn copy_stream_rejects_missing_non_regular_and_oversized_sources() {
+    let dir = temp_dir("stream-errors");
+    assert_eq!(
+        copy_stream(&dir.join("nope.bin"), &dir.join("out.bin"))
+            .unwrap_err()
+            .kind(),
+        "not_found"
+    );
+    assert_eq!(
+        copy_stream(&dir, &dir.join("out.bin")).unwrap_err().kind(),
+        "invalid_input"
+    );
+    let huge = dir.join("huge.bin");
+    let file = fs::File::create(&huge).unwrap();
+    file.set_len(MAX_FILE_SIZE + 1).unwrap();
+    drop(file);
+    assert_eq!(
+        copy_stream(&huge, &dir.join("out.bin")).unwrap_err().kind(),
+        "too_large"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn copy_stream_does_not_fabricate_missing_parents() {
+    let dir = temp_dir("stream-parent");
+    let source = dir.join("blob.bin");
+    fs::write(&source, b"x").unwrap();
+    let missing = dir.join("no").join("such").join("dir.bin");
+    assert_eq!(
+        copy_stream(&source, &missing).unwrap_err().kind(),
+        "io_error"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn logical_lines_handles_edges() {
     assert_eq!(logical_lines(""), Vec::<&str>::new());
     assert_eq!(logical_lines("a\nb\n"), ["a", "b"]);
