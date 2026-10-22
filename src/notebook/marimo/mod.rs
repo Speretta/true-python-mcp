@@ -195,6 +195,31 @@ impl MarimoNotebook {
         (self.cells.remove(index), self.metas.remove(index))
     }
 
+    /// Whether any cell binds `name` at its top level: a setup block makes it
+    /// global, a plain app cell feeds it through the graph. Markdown cells
+    /// (whose source is markdown text, not Python) and unparsable or broken
+    /// regions cannot be analyzed and never count as definers.
+    pub(super) fn defines(&self, name: &str) -> bool {
+        self.cells
+            .iter()
+            .zip(&self.metas)
+            .filter(|(_, meta)| {
+                meta.md.is_none()
+                    && matches!(
+                        meta.kind,
+                        Kind::AppCell | Kind::Setup | Kind::Function | Kind::Class
+                    )
+            })
+            .any(|(cell, _)| {
+                scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
+            })
+    }
+
+    /// Whether any cell is a markdown cell (a `mo.md(...)` wrapper).
+    pub(super) fn has_markdown_cell(&self) -> bool {
+        self.cells.iter().any(Cell::is_markdown)
+    }
+
     /// Whether a setup cell binds `name` at its top level (so every cell can
     /// use it without a signature parameter).
     fn setup_defines(&self, name: &str) -> bool {

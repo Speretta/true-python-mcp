@@ -79,6 +79,105 @@ fn check_flags_setup_root() {
     assert!(findings[0].message.contains("payload"), "{findings:?}");
 }
 
+/// A markdown cell whose only `mo` is a signature parameter — no cell defines
+/// `mo` — is a runtime NameError in marimo, flagged as `missing-mo`.
+const MISSING_MO: &str = r#"import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App()
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("hi")
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+"#;
+
+/// A markdown cell backed by a plain `import marimo as mo` cell: `mo` is
+/// defined, so there is nothing to flag.
+const MO_IMPORT_MARKDOWN: &str = r#"import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App()
+
+
+@app.cell
+def _():
+    import marimo as mo
+    return (mo,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("hi")
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+"#;
+
+/// A markdown cell whose `mo` comes from the setup block: `mo` is defined, so
+/// there is nothing to flag (and the markdown cell takes no `mo` parameter).
+const SETUP_MO_MARKDOWN: &str = r#"import marimo
+
+__generated_with = "0.25.1"
+app = marimo.App()
+
+with app.setup:
+    import marimo as mo
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md("hi")
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+"#;
+
+#[test]
+fn check_flags_missing_mo() {
+    let notebook = open(MISSING_MO).unwrap();
+    let findings = notebook.check();
+    assert_eq!(
+        codes(&findings),
+        vec![("missing-mo", Some(0))],
+        "{findings:?}"
+    );
+    assert_eq!(findings[0].severity, tpmcp::notebook::Severity::Error);
+    assert_eq!(
+        findings[0].message,
+        "markdown cells reference `mo` but no cell defines it (missing `import marimo as mo`)"
+    );
+}
+
+#[test]
+fn check_does_not_flag_missing_mo_when_imported() {
+    let notebook = open(MO_IMPORT_MARKDOWN).unwrap();
+    let findings = notebook.check();
+    assert!(
+        findings.iter().all(|finding| finding.code != "missing-mo"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn check_does_not_flag_missing_mo_from_setup_block() {
+    let notebook = open(SETUP_MO_MARKDOWN).unwrap();
+    let findings = notebook.check();
+    assert!(
+        findings.iter().all(|finding| finding.code != "missing-mo"),
+        "{findings:?}"
+    );
+}
+
 #[test]
 fn check_reports_stale_drift_as_info() {
     let notebook = open(&marimo_fixture("graph_stale.py")).unwrap();

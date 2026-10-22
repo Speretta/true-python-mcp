@@ -130,15 +130,36 @@ fn cells_list(cells: &[usize]) -> String {
 }
 
 /// Validate the notebook. Deterministic order: syntax, multiple definitions,
-/// cycles, setup root, then informational drift by cell.
+/// cycles, setup root, a missing `mo` definition, then informational drift by
+/// cell.
 pub(super) fn check(notebook: &MarimoNotebook) -> Vec<Finding> {
     let mut graph = Graph::build(notebook);
     let mut findings = std::mem::take(&mut graph.syntax_findings);
     findings.extend(graph.multiple_definition_findings());
     findings.extend(graph.cycle_findings());
     findings.extend(graph.setup_root_findings());
+    findings.extend(missing_mo_findings(notebook));
     findings.extend(graph.drift_findings(notebook));
     findings
+}
+
+/// A markdown cell's wrapper calls `mo.md(...)`; when no cell defines `mo`,
+/// marimo raises a NameError at runtime even though the file parses and
+/// compiles. Guards on the same predicate `ensure_mo_definition` uses, so a
+/// notebook this flags is exactly the one the auto-fix would repair.
+fn missing_mo_findings(notebook: &MarimoNotebook) -> Vec<Finding> {
+    if !(notebook.has_markdown_cell() && !notebook.defines("mo")) {
+        return Vec::new();
+    }
+    let cell = notebook.cells.iter().position(|cell| cell.is_markdown());
+    vec![Finding {
+        severity: Severity::Error,
+        cell,
+        code: "missing-mo".to_string(),
+        message: "markdown cells reference `mo` but no cell defines it \
+                  (missing `import marimo as mo`)"
+            .to_string(),
+    }]
 }
 
 /// The reactive graph: analyzed cells, name indexes, and dependency edges,

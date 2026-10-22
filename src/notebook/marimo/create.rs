@@ -76,36 +76,18 @@ impl MarimoNotebook {
     /// compiles. Returns the warning announcing the added cell, or `None`
     /// when nothing was needed.
     pub(crate) fn ensure_mo_definition(&mut self) -> Result<Option<String>, Error> {
-        let has_markdown = self.cells.iter().any(Cell::is_markdown);
-        if !has_markdown || self.defines("mo") {
-            return Ok(None);
+        // The same predicate check.rs's missing-mo finding guards on, so the
+        // auto-fix repairs exactly the notebooks the check flags.
+        if self.has_markdown_cell() && !self.defines("mo") {
+            self.insert(0, "code", MO_IMPORT)?;
+            return Ok(Some(format!(
+                "added a first cell `{MO_IMPORT}`: markdown cells need a definition of `mo` \
+                 to run in marimo"
+            )));
         }
-        self.insert(0, "code", MO_IMPORT)?;
-        Ok(Some(format!(
-            "added a first cell `{MO_IMPORT}`: markdown cells need a definition of `mo` \
-             to run in marimo"
-        )))
+        Ok(None)
     }
 
-    /// Whether any cell binds `name` at its top level: a setup block makes it
-    /// global, a plain app cell feeds it through the graph. Markdown cells
-    /// (whose source is markdown text, not Python) and unparsable or broken
-    /// regions cannot be analyzed and never count as definers.
-    fn defines(&self, name: &str) -> bool {
-        self.cells
-            .iter()
-            .zip(&self.metas)
-            .filter(|(_, meta)| {
-                meta.md.is_none()
-                    && matches!(
-                        meta.kind,
-                        Kind::AppCell | Kind::Setup | Kind::Function | Kind::Class
-                    )
-            })
-            .any(|(cell, _)| {
-                scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
-            })
-    }
     /// Rewrite the generated cells' trailing `return` and signature the way
     /// marimo's serializer writes them: `return` names exactly the cell's
     /// defs that some cell refs (sorted), and the signature takes exactly

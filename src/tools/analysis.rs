@@ -172,8 +172,9 @@ impl Tpmcp {
         description = "Validate a notebook without modifying it. Jupyter: nbformat schema \
                        subset (cell types, ids, metadata, outputs, execution_count) plus git \
                        conflict markers. marimo: reactive-graph semantics (multiple \
-                       definitions, dependency cycles, setup-cell root, syntax errors) and \
-                       stale return/signature drift that marimo would regenerate. Returns \
+                       definitions, dependency cycles, setup-cell root, syntax errors), a \
+                       markdown cell referencing `mo` with no definition of it, and stale \
+                       return/signature drift that marimo would regenerate. Returns \
                        findings with severity error/warning/info; no findings means the \
                        notebook is clean. Use after edits or merges before trusting a file. To \
                        get findings alongside the notebook content in one call, use \
