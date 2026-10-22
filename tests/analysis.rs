@@ -295,3 +295,89 @@ fn settings_cache_invalidates_on_config_change() {
 
     fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A plain `.py` (not a marimo notebook) still reports an unused import: the
+/// marimo filter is gated on `is_marimo`, so an ordinary module never loses a
+/// genuine F401.
+#[test]
+fn plain_python_still_reports_unused_import() {
+    let dir = temp_dir("plain-f401");
+    let path = dir.join("sample.py");
+    fs::write(&path, "import os\n\nprint('hi')\n").unwrap();
+
+    let outcome = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
+    let codes: Vec<&str> = outcome.diagnostics.iter().map(code).collect();
+    assert_eq!(codes, vec!["F401"], "{:?}", outcome.diagnostics);
+    let f401 = &outcome.diagnostics[0];
+    assert!(
+        f401.message.contains("imported but unused"),
+        "{}",
+        f401.message
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A synthetic marimo `.py` linted per cell drops the scaffolding false
+/// positives — F401(`marimo`), F811(`mo`), and the cell `return` (PLR1711) /
+/// import-block (I001) noise — while a genuine C408 and F821 survive. The
+/// whole-file lint would have flagged `import marimo` (F401) and each cell's
+/// trailing `return` (PLR1711).
+#[test]
+fn marimo_lint_filters_scaffolding_noise() {
+    let dir = temp_dir("marimo-lint");
+    fs::write(
+        dir.join("ruff.toml"),
+        "[lint]\nselect = [\"F401\", \"F811\", \"F821\", \"PLR1711\", \"I001\", \"C408\"]\n",
+    )
+    .unwrap();
+    let path = dir.join("notebook.py");
+    fs::write(
+        &path,
+        r#"import marimo
+
+__generated_with = "0.25.2"
+app = marimo.App()
+
+
+@app.cell
+def _():
+    import marimo
+    import marimo as mo
+    return
+
+
+@app.cell
+def _(mo):
+    mo = 1
+    result = dict(a=1)
+    print(undefined_name)
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+"#,
+    )
+    .unwrap();
+
+    let outcome = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
+    let codes: Vec<&str> = outcome.diagnostics.iter().map(code).collect();
+    assert_eq!(codes, vec!["C408", "F821"], "{:?}", outcome.diagnostics);
+
+    // Both real findings map to cell 1 (the second @app.cell), 0-based.
+    assert!(
+        outcome.diagnostics.iter().all(|d| d.cell == Some(1)),
+        "{:?}",
+        outcome.diagnostics
+    );
+
+    // The F821 is genuinely `undefined_name`, not a graph-provided name.
+    let f821 = outcome
+        .diagnostics
+        .iter()
+        .find(|d| code(d) == "F821")
+        .expect("F821 present");
+    assert!(f821.message.contains("undefined_name"), "{}", f821.message);
+
+    fs::remove_dir_all(&dir).unwrap();
+}

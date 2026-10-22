@@ -19,6 +19,25 @@ use super::scope::{self, CellInfo};
 use super::{CellMeta, Kind, MarimoNotebook};
 use crate::notebook::{Finding, Severity};
 
+/// Names marimo's `builtins.__dict__` carries beyond the CPython builtins:
+/// module dunders, Python 2's `__builtin__`, the instance `__class__`, and
+/// IPython's `_IncompleteInputError` (marimo/_ast/variables.py).
+const MARIMO_EXTRA_BUILTINS: &[&str] = &[
+    "__builtin__",
+    "__file__",
+    "__builtins__",
+    "__class__",
+    "__name__",
+    "__doc__",
+    "__package__",
+    "__loader__",
+    "__spec__",
+    "__debug__",
+    "__build_class__",
+    "__import__",
+    "_IncompleteInputError",
+];
+
 /// BUILTINS as marimo sees them: the interpreter's builtins plus the module
 /// dunders and special names in `builtins.__dict__` (marimo/_ast/variables.py).
 ///
@@ -29,22 +48,16 @@ use crate::notebook::{Finding, Severity};
 /// discovers. The stale-signature finding names this when it shapes a result.
 pub(super) fn is_marimo_builtin(name: &str) -> bool {
     ruff_python_stdlib::builtins::is_python_builtin(name, MARIMO_BUILTIN_MINOR_VERSION, false)
-        || matches!(
-            name,
-            "__builtin__"
-                | "__file__"
-                | "__builtins__"
-                | "__class__"
-                | "__name__"
-                | "__doc__"
-                | "__package__"
-                | "__loader__"
-                | "__spec__"
-                | "__debug__"
-                | "__build_class__"
-                | "__import__"
-                | "_IncompleteInputError"
-        )
+        || MARIMO_EXTRA_BUILTINS.contains(&name)
+}
+
+/// Every name [`is_marimo_builtin`] accepts, as owned strings — the builtin
+/// half of the set the marimo F821 filter treats as "provided by the runtime".
+pub(super) fn marimo_builtin_names() -> Vec<String> {
+    ruff_python_stdlib::builtins::python_builtins(MARIMO_BUILTIN_MINOR_VERSION, false)
+        .chain(MARIMO_EXTRA_BUILTINS.iter().copied())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The CPython minor version whose builtin set [`is_marimo_builtin`] assumes —

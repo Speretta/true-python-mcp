@@ -160,9 +160,11 @@ fn marimo_diagnostics_over_the_wire() {
             .any(|finding| finding["code"] == "syntax-error"),
         "{found}"
     );
+    // The broken cell is skipped by the per-cell lint (it has no valid body);
+    // its syntax error is surfaced by the graph finding above, not by ruff.
     assert!(
-        !found["lint"].as_array().unwrap().is_empty(),
-        "ruff sees the syntax error too: {found}"
+        found["lint"].as_array().unwrap().is_empty(),
+        "the broken cell has no lintable body: {found}"
     );
 
     // EC-8: the query view labels marimo block kinds like every other view.
