@@ -4,8 +4,9 @@
 //! cells. An unedited cell serializes from its captured [`CellMeta::block`],
 //! so parse→serialize is byte-identical to the original. Editing a cell
 //! regenerates just its body (re-indented) between the preserved header and
-//! trailing `return`; marimo recomputes signatures and returns on its next
-//! save, so a stale `return` is harmless.
+//! trailing `return`, then canonicalizes the `return` and signature the way
+//! marimo's serializer would write them (see `create::canonicalize_edited_cells`),
+//! so an edited cell never carries a stale return or signature.
 
 mod check;
 mod create;
@@ -15,6 +16,7 @@ pub(super) mod markdown;
 pub(super) mod parse;
 mod scan;
 pub(super) mod scope;
+mod summary;
 
 use std::borrow::Cow;
 

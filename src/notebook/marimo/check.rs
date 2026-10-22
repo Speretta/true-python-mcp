@@ -146,9 +146,6 @@ pub(super) fn check(notebook: &MarimoNotebook) -> Vec<Finding> {
 struct Graph {
     /// Analyzed Python cells by index (SQL cells excluded, like marimo).
     nodes: BTreeMap<usize, Node>,
-    /// Names bound by read-only `@app.function` / `@app.class_definition`
-    /// blocks; they join the allowed refs.
-    toplevel_names: BTreeSet<String>,
     setup_index: Option<usize>,
     /// Broken cells and unparsable bodies, in cell order.
     syntax_findings: Vec<Finding>,
@@ -164,7 +161,6 @@ impl Graph {
     fn build(notebook: &MarimoNotebook) -> Self {
         let mut graph = Self {
             nodes: BTreeMap::new(),
-            toplevel_names: BTreeSet::new(),
             setup_index: None,
             syntax_findings: Vec::new(),
             definers: BTreeMap::new(),
@@ -197,11 +193,7 @@ impl Graph {
                 }
                 // The runtime registers unparsable cells without compiling them.
                 Kind::Unparsable => continue,
-                Kind::Function | Kind::Class => {
-                    if let Some(name) = block_definition_name(meta) {
-                        self.toplevel_names.insert(name);
-                    }
-                }
+                Kind::Function | Kind::Class => {}
                 Kind::Setup => self.setup_index = Some(index),
                 Kind::AppCell => {}
             }
@@ -378,43 +370,16 @@ impl Graph {
     /// Informational drift: stale returns and signatures that marimo's own
     /// save would regenerate, by cell.
     fn drift_findings(&self, notebook: &MarimoNotebook) -> Vec<Finding> {
+        let summary = notebook.graph_summary();
         let mut findings = Vec::new();
-        let all_defs: BTreeSet<&str> = self
-            .nodes
-            .values()
-            .flat_map(|node| node.info.defs.iter())
-            .map(String::as_str)
-            .collect();
-        let used_refs: BTreeSet<&str> = self
-            .nodes
-            .values()
-            .flat_map(|node| node.info.refs.iter())
-            .map(String::as_str)
-            .collect();
-        let setup_defs: BTreeSet<&str> = self
-            .setup_index
-            .and_then(|setup| self.nodes.get(&setup))
-            .map(|node| node.info.defs.iter().map(String::as_str).collect())
-            .unwrap_or_default();
-
         for (index, node) in &self.nodes {
             let meta: &CellMeta = &notebook.metas[*index];
             if !matches!(meta.kind, Kind::AppCell) {
                 continue;
             }
-            // Stale return: marimo writes `return` with exactly the defs that are
-            // referenced somewhere, sorted.
-            let expected_return: Vec<&str> = {
-                let mut names: Vec<&str> = node
-                    .info
-                    .defs
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|name| used_refs.contains(name))
-                    .collect();
-                names.sort_unstable();
-                names
-            };
+            // Stale return: marimo writes `return` with exactly the defs that
+            // are referenced somewhere, sorted.
+            let expected_return = summary.returned(&node.info);
             let stored_return = meta
                 .return_suffix
                 .as_deref()
@@ -438,31 +403,10 @@ impl Graph {
                     ),
                 });
             }
-            // Stale signature: marimo writes parameters for exactly the refs that
-            // are not allowed (setup defs, unshadowed builtins, toplevel names)
-            // and not defined by the cell itself, sorted.
-            let mut assumed_builtins: Vec<&str> = Vec::new();
-            let expected_params: Vec<&str> = {
-                let mut names: Vec<&str> = node
-                    .info
-                    .refs
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|name| {
-                        let assumed_builtin = is_marimo_builtin(name) && !all_defs.contains(name);
-                        if assumed_builtin {
-                            assumed_builtins.push(*name);
-                        }
-                        !node.info.defs.contains(*name)
-                            && !setup_defs.contains(name)
-                            && !self.toplevel_names.contains(*name)
-                            && !assumed_builtin
-                    })
-                    .filter(|name| ruff_python_stdlib::identifiers::is_identifier(name))
-                    .collect();
-                names.sort_unstable();
-                names
-            };
+            // Stale signature: marimo writes parameters for exactly the refs
+            // that are not allowed (own defs, setup defs, toplevel names,
+            // unshadowed builtins), sorted.
+            let expected_params = summary.params(&node.info);
             let stored_params = parse_params(&meta.header);
             if !stored_params
                 .iter()
@@ -472,10 +416,17 @@ impl Graph {
                 // The builtin set is approximated as Python 3.13's (see
                 // [`is_marimo_builtin`]); say so only when it actually shaped
                 // this finding, so the assumption is never silent.
+                let mut assumed_builtins: Vec<&str> = node
+                    .info
+                    .refs
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| summary.is_unshadowed_builtin(name))
+                    .collect();
+                assumed_builtins.sort_unstable();
                 let builtin_note = if assumed_builtins.is_empty() {
                     String::new()
                 } else {
-                    assumed_builtins.sort_unstable();
                     format!(
                         " (assumed builtin {} as of Python 3.13, not the discovered environment)",
                         assumed_builtins.join(", ")
@@ -497,29 +448,6 @@ impl Graph {
         }
         findings
     }
-}
-
-/// The name defined by a read-only `@app.function` / `@app.class_definition`
-/// block (its names join the allowed refs, so other cells do not take them
-/// as signature parameters).
-fn block_definition_name(meta: &CellMeta) -> Option<String> {
-    let parsed = ruff_python_parser::parse_module(&meta.block).ok()?;
-    let mut name = None;
-    for stmt in parsed.syntax().body.iter() {
-        match stmt {
-            ruff_python_ast::Stmt::FunctionDef(function) => {
-                name = Some(function.name.to_string());
-                break;
-            }
-            ruff_python_ast::Stmt::ClassDef(class) => {
-                name = Some(class.name.to_string());
-                break;
-            }
-            _ => {}
-        }
-    }
-    super::parse::guarded_drop(parsed, meta.block.len());
-    name
 }
 
 #[cfg(test)]

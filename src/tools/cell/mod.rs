@@ -54,7 +54,9 @@ impl Tpmcp {
                 // Render the diff before the mutation: `source` borrows the
                 // notebook, and the write needs it mutably.
                 let diff = render::unified_diff(&source, &updated);
+                let before = source.into_owned();
                 notebook.set_source(args.cell, &updated)?;
+                notebook.canonicalize_after_edit(args.cell, Some(&before));
                 Ok(diff)
             })?;
             Ok(mutation_result(
@@ -90,6 +92,7 @@ impl Tpmcp {
             let ((cell_type, source), new_revision) =
                 with_notebook(&args.path, &args.revision, |notebook| {
                     check_cell_index(notebook, args.cell)?;
+                    let before = notebook.cells()[args.cell].source_text().into_owned();
                     let updated = match (args.start_line, args.end_line) {
                         // args is owned and no later step needs source: move it.
                         (None, None) => args.source,
@@ -112,6 +115,7 @@ impl Tpmcp {
                         }
                     };
                     notebook.set_source(args.cell, &updated)?;
+                    notebook.canonicalize_after_edit(args.cell, Some(&before));
                     let cell_type = notebook.cells()[args.cell].cell_type.clone();
                     Ok((cell_type, updated))
                 })?;
@@ -163,6 +167,7 @@ impl Tpmcp {
                     } else {
                         None
                     };
+                    notebook.canonicalize_after_edit(index, None);
                     Ok((index, warning))
                 })?;
             Ok(mutation_result(

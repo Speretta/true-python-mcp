@@ -6,8 +6,6 @@
 //! cells); parsed files serialize from their captured bytes and never pass
 //! through this module.
 
-use std::collections::BTreeSet;
-
 use ruff_python_ast::Stmt;
 use ruff_python_parser::parse_module;
 use ruff_text_size::Ranged;
@@ -106,44 +104,30 @@ impl MarimoNotebook {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
     }
-    /// Rewrite the generated cells' trailing `return` and signature the way
+    /// Rewrite every edited app cell's trailing `return` and signature the way
     /// marimo's serializer writes them: `return` names exactly the cell's
-    /// defs that some cell refs (sorted), and the signature takes exactly
-    /// the refs that are not allowed (own defs, setup defs, unshadowed
-    /// builtins), sorted, the same expectations check.rs reports drift
-    /// against, so a freshly built file carries no stale-return or
-    /// stale-signature findings. Parsed cells serialize from their captured
-    /// bytes and are never touched, so roundtrips stay byte-exact. Very long
-    /// name lists keep the one-line shape (marimo wraps them into multiline
-    /// tuples and rewraps ours on its next save).
-    pub(crate) fn canonicalize_generated_cells(&mut self) {
-        let mut used_refs: BTreeSet<String> = BTreeSet::new();
-        let mut all_defs: BTreeSet<String> = BTreeSet::new();
-        let mut setup_defs: BTreeSet<String> = BTreeSet::new();
+    /// defs that some cell refs (sorted), and the signature takes exactly the
+    /// refs that are not allowed (own defs, setup defs, toplevel names,
+    /// unshadowed builtins), sorted, the same expectations check.rs reports
+    /// drift against, so an edited cell never carries a stale-return or
+    /// stale-signature finding. Parsed-but-unedited cells serialize from their
+    /// captured bytes and are never touched, so roundtrips stay byte-exact.
+    /// Very long name lists keep the one-line shape (marimo wraps them into
+    /// multiline tuples and rewraps ours on its next save).
+    pub(crate) fn canonicalize_edited_cells(&mut self) {
+        let summary = self.graph_summary();
         let mut infos: Vec<Option<scope::CellInfo>> = Vec::with_capacity(self.cells.len());
         for (cell, meta) in self.cells.iter().zip(&self.metas) {
             // A markdown cell's wrapper call refs `mo`; its source is not Python.
-            if meta.md.is_some() {
-                used_refs.insert("mo".to_string());
-                infos.push(None);
-                continue;
-            }
-            let info = scope::analyze(&cell.source.text());
-            if let Some(info) = &info {
-                used_refs.extend(info.refs.iter().cloned());
-                all_defs.extend(info.defs.iter().cloned());
-                if matches!(meta.kind, Kind::Setup) {
-                    setup_defs.extend(info.defs.iter().cloned());
-                }
-            }
-            infos.push(info);
+            infos.push(if meta.md.is_some() {
+                None
+            } else {
+                scope::analyze(&cell.source.text())
+            });
         }
         for (index, meta) in self.metas.iter_mut().enumerate() {
-            let generated = meta.block.is_empty()
-                && meta.edited
-                && meta.md.is_none()
-                && matches!(meta.kind, Kind::AppCell);
-            if !generated {
+            let editable = meta.edited && meta.md.is_none() && matches!(meta.kind, Kind::AppCell);
+            if !editable {
                 continue;
             }
             let Some(info) = infos[index].as_ref() else {
@@ -152,25 +136,8 @@ impl MarimoNotebook {
             if info.is_sql {
                 continue; // marimo keeps SQL cells' defs out of the return
             }
-            let mut exported: Vec<&str> = info
-                .defs
-                .iter()
-                .map(String::as_str)
-                .filter(|name| used_refs.contains(*name))
-                .collect();
-            exported.sort_unstable();
-            let mut params: Vec<&str> = info
-                .refs
-                .iter()
-                .map(String::as_str)
-                .filter(|name| {
-                    !info.defs.contains(*name)
-                        && !setup_defs.contains(*name)
-                        && !(super::check::is_marimo_builtin(name) && !all_defs.contains(*name))
-                })
-                .filter(|name| ruff_python_stdlib::identifiers::is_identifier(name))
-                .collect();
-            params.sort_unstable();
+            let exported = summary.returned(info);
+            let params = summary.params(info);
             let blank_line = meta
                 .return_suffix
                 .as_deref()
@@ -178,6 +145,22 @@ impl MarimoNotebook {
             meta.return_suffix = Some(return_statement(&meta.indent, &exported, blank_line));
             meta.header = format!("@app.cell\ndef _({}):\n", params.join(", "));
         }
+    }
+
+    /// Canonicalize after an app-cell body edit, skipping the full recompute
+    /// when the edit did not change what the cell defines or references: the
+    /// only inputs the return/signature pass reads, so an unchanged footprint
+    /// means no cell can drift. `before` is the cell's source before the edit
+    /// (pass `None` for an insert, which always recomputes).
+    pub(crate) fn canonicalize_after_edit(&mut self, index: usize, before: Option<&str>) {
+        if let Some(before) = before {
+            let before = scope::analyze(before);
+            let after = scope::analyze(&self.cells[index].source.text());
+            if same_footprint(before.as_ref(), after.as_ref()) {
+                return;
+            }
+        }
+        self.canonicalize_edited_cells();
     }
 
     /// What converting this file into another format leaves behind: literal
@@ -208,6 +191,17 @@ impl MarimoNotebook {
             ));
         }
         warnings
+    }
+}
+
+/// Whether two scope analyses expose the same graph footprint — the defs,
+/// refs, and SQL-ness the return/signature pass reads. An equal footprint
+/// means canonicalization would rewrite nothing.
+fn same_footprint(a: Option<&scope::CellInfo>, b: Option<&scope::CellInfo>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.defs == b.defs && a.refs == b.refs && a.is_sql == b.is_sql,
+        _ => false,
     }
 }
 
