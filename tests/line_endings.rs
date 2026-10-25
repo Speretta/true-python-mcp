@@ -129,3 +129,56 @@ fn the_scanner_splits_at_a_cr_hidden_boundary() {
     );
     assert_eq!(before[1], "z = y + 1");
 }
+
+/// An edited block always carries marimo's `return` line. A captured block
+/// without one plus a blank body is a bodyless `def _():` — an
+/// IndentationError marimo cannot open. marimo regenerates the return on its
+/// own save and emits it even for a cell with no defs (codegen.py replaces the
+/// `(...)` placeholder with nothing).
+#[test]
+fn a_blank_edit_writes_maroimos_return_line() {
+    // The captured cell has no trailing `return`.
+    let text = "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n@app.cell\ndef _():\n    x = 1\n\n\nif __name__ == \"__main__\":\n    app.run()\n";
+    let AnyNotebook::Marimo(mut notebook) = open(text).unwrap() else {
+        panic!("must open as marimo");
+    };
+    assert_eq!(notebook.cells().len(), 1);
+    notebook.set_source(0, " ").unwrap();
+    let out = notebook.serialize();
+    assert!(
+        out.lines().any(|line| line.trim() == "return"),
+        "the edited block must carry marimo's bare return line:\n{out}"
+    );
+    let AnyNotebook::Marimo(reopened) = open(&out).unwrap() else {
+        panic!("an edited marimo file must still parse as marimo:\n{out}");
+    };
+    let after = sources(&reopened);
+    assert_eq!(after.len(), 1, "{out}");
+    // A whitespace-only body is not code: the blank line the block writes is
+    // spacing before marimo's return line, so the source reopens empty — the
+    // same shape the synthetic fixtures use for an empty cell body.
+    assert_eq!(
+        after[0], "",
+        "the blank edit must stay an editable, empty cell:\n{out}"
+    );
+}
+
+/// A statement-less setup body is an IndentationError. marimo appends `pass`
+/// to a comment-only body (codegen.py `has_only_comments`) and drops an empty
+/// setup section outright; tpmcp must keep the cell, so the body becomes
+/// marimo's own `pass` shape.
+#[test]
+fn a_statementless_setup_edit_writes_pass() {
+    let text = "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\nwith app.setup:\n    x = 1\n\n\nif __name__ == \"__main__\":\n    app.run()\n";
+    let AnyNotebook::Marimo(mut notebook) = open(text).unwrap() else {
+        panic!("must open as marimo");
+    };
+    notebook.set_source(0, "").unwrap();
+    let out = notebook.serialize();
+    let AnyNotebook::Marimo(reopened) = open(&out).unwrap() else {
+        panic!("an edited marimo file must still parse as marimo:\n{out}");
+    };
+    let after = sources(&reopened);
+    assert_eq!(after.len(), 1, "{out}");
+    assert_eq!(after[0], "pass", "marimo's pass fallback:\n{out}");
+}

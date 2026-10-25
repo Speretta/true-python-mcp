@@ -236,7 +236,7 @@ fn blank_before_return(source: &str) -> bool {
 
 /// marimo's `return` shape (`format_tuple_elements` with a naked empty and
 /// single-name forms): bare, `(name,)` for one, paren-less for several.
-fn return_statement(indent: &str, names: &[&str], blank_line: bool) -> String {
+pub(super) fn return_statement(indent: &str, names: &[&str], blank_line: bool) -> String {
     let prefix = if blank_line { "\n" } else { "" };
     match names {
         [] => format!("{prefix}{indent}return"),

@@ -97,6 +97,16 @@ pub(super) struct MdInfo {
     comments: String,
 }
 
+/// Whether a body contains no statement — blank and comment lines only. The
+/// predicate behind marimo's `pass` fallback for a statement-less setup body
+/// (codegen.py `has_only_comments`).
+fn statementless(body: &str) -> bool {
+    body.lines().all(|line| {
+        let trimmed = line.trim();
+        trimmed.is_empty() || trimmed.starts_with('#')
+    })
+}
+
 impl MarimoNotebook {
     pub(crate) fn parse(src: &str) -> Result<Self, String> {
         parse::parse(src)
@@ -136,9 +146,32 @@ impl MarimoNotebook {
                 "{}{}{}",
                 meta.header,
                 body,
-                meta.return_suffix.clone().unwrap_or_default()
+                // why: marimo regenerates the `return` line on save and emits
+                // it even for a cell with no defs (codegen.py replaces the
+                // `(...)` placeholder with nothing). A captured block without
+                // one would serialize a blank body as a bodyless `def _():` —
+                // an IndentationError marimo cannot open.
+                meta.return_suffix
+                    .clone()
+                    .unwrap_or_else(|| create::return_statement(&meta.indent, &[], false))
             ),
-            Kind::Setup => format!("{}{}", meta.header, body),
+            Kind::Setup => {
+                // why: a body without a statement is an IndentationError.
+                // marimo appends `pass` to a statement-less body (codegen.py
+                // `has_only_comments`) and drops an empty setup section
+                // outright; tpmcp keeps the cell, so its body becomes marimo's
+                // own `pass` shape.
+                if statementless(&source) {
+                    format!(
+                        "{}{}{}",
+                        meta.header,
+                        body,
+                        indent::indent_lines("pass", &meta.indent, None)
+                    )
+                } else {
+                    format!("{}{}", meta.header, body)
+                }
+            }
             _ => meta.block.clone(),
         };
         Cow::Owned(block)
