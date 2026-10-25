@@ -292,6 +292,25 @@ fn broken_file_parses_partially() {
     );
 }
 
+/// A dangling column-0 decorator before the FIRST cell belongs to that cell
+/// block, exactly like one between two blocks. Without the rejoin the leading
+/// literal region ends on an unparseable bare decorator, its header markers go
+/// unrecorded, and the file is rejected outright (the nightly property run
+/// shrank to this on 2026-10-26).
+#[test]
+fn dangling_decorator_before_the_first_cell_still_opens() {
+    let src = "import marimo\n\n__generated_with = \"0.25.1\"\napp = marimo.App()\n\n\n@areturn\n\n\n@app.cell\ndef _():\n    x = 1\n    return (x,)\n\n\n@app.cell\ndef _(:\n    y = 2\n\n\nif __name__ == \"__main__\":\n    app.run()\n";
+    let notebook = open(src).expect("the dangling decorator joins the first cell block");
+    assert_eq!(
+        notebook.serialize(),
+        src,
+        "untouched round-trip is byte-exact"
+    );
+    let cells = notebook.cells();
+    assert_eq!(cells.len(), 2, "one intact cell + one broken");
+    assert_eq!(cells[0].source_text(), "x = 1");
+}
+
 #[test]
 fn broken_file_matches_marimo_status() {
     // Sanity: the fixture really is a marimo file with an error, and our

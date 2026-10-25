@@ -138,10 +138,15 @@ fn split_regions(src: &str) -> Vec<(usize, usize, Region)> {
 fn rejoin_split_decorator_stacks(marks: &[(usize, Region)], src: &str) -> Vec<(usize, Region)> {
     let mut adjusted: Vec<(usize, Region)> = Vec::with_capacity(marks.len());
     for (position, &(start, region)) in marks.iter().enumerate() {
-        let shifted = position.checked_sub(1).and_then(|previous| {
-            let region_start = marks[previous].0;
-            dangling_decorator_start(&src[region_start..start]).map(|offset| region_start + offset)
-        });
+        // The region before mark 0 is the leading literal (offset 0); its
+        // dangling decorators belong to the first cell block just the same,
+        // and without the shift the literal would end on a bare decorator —
+        // unparseable, so its header markers would go unrecorded.
+        let region_start = position
+            .checked_sub(1)
+            .map_or(0, |previous| marks[previous].0);
+        let shifted =
+            dangling_decorator_start(&src[region_start..start]).map(|offset| region_start + offset);
         adjusted.push((shifted.unwrap_or(start), region));
     }
     adjusted
