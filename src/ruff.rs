@@ -140,16 +140,16 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
         && crate::notebook::is_marimo(&snapshot.content))
     .then(|| MarimoNotebook::parse(&snapshot.content).ok())
     .flatten();
-    let (source_kind, source_type, graph_provided) = match marimo {
+    let (source_kind, source_type, cell_definitions) = match marimo {
         Some(notebook) => {
             if fixes == SafeFixes::Apply {
                 return Err(Error::invalid_input(
                     "fixing marimo notebooks is not supported yet (phase 1 is lint-only)",
                 ));
             }
-            let graph_provided = notebook.graph_provided();
+            let cell_definitions = notebook.cell_definitions();
             let kind = marimo_source_kind(&notebook, path)?;
-            (kind, PySourceType::Ipynb, Some(graph_provided))
+            (kind, PySourceType::Ipynb, Some(cell_definitions))
         }
         None => {
             let kind = source_kind_from(snapshot.content, source_type, path)?;
@@ -216,8 +216,8 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
     };
 
     let mut diagnostics = map_diagnostics(&pass.diagnostics, path, pass.notebook_index)?;
-    if let Some(graph_provided) = graph_provided {
-        diagnostics = filter_marimo(diagnostics, &graph_provided);
+    if let Some(cell_definitions) = cell_definitions {
+        diagnostics = filter_marimo(diagnostics, &cell_definitions);
     }
     Ok(CheckOutcome {
         diagnostics,
@@ -440,12 +440,13 @@ fn marimo_source_kind(marimo: &MarimoNotebook, path: &Path) -> Result<SourceKind
 }
 
 /// Post-mapping filter for marimo notebooks: drop the false positives of
-/// linting cell bodies as one module. `graph_provided` is every name the
-/// marimo runtime provides (builtins plus cell defs), so an F821 against it is
-/// a graph-provided name, not a genuine undefined one. PLR1711/I001/C408 are
-/// untouched: PLR1711 disappears because `lint_cells` strips the trailing
-/// `return`, and the rest are real lint findings.
-fn filter_marimo(diags: Vec<Diagnostic>, graph_provided: &HashSet<String>) -> Vec<Diagnostic> {
+/// linting cell bodies as one module. A name is "provided" when the marimo
+/// runtime supplies it as a builtin or some cell defines it at its top level
+/// (`cell_definitions`), so an F821 against either is a graph-provided name,
+/// not a genuine undefined one. PLR1711/I001/C408 are untouched: PLR1711
+/// disappears because `lint_cells` strips the trailing `return`, and the rest
+/// are real lint findings.
+fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> Vec<Diagnostic> {
     diags
         .into_iter()
         .filter(|diagnostic| {
@@ -463,7 +464,11 @@ fn filter_marimo(diags: Vec<Diagnostic>, graph_provided: &HashSet<String>) -> Ve
                 // `mo`/`marimo` are redefined by the graph across cells.
                 "F811" => !matches!(token, Some(token) if token == "mo" || token == "marimo"),
                 // A name marimo provides is not "undefined" to the runtime.
-                "F821" => !token.is_some_and(|token| graph_provided.contains(token)),
+                "F821" => {
+                    !token.is_some_and(|token| {
+                        MarimoNotebook::runtime_builtin(token) || cell_definitions.contains(token)
+                    })
+                }
                 _ => true,
             }
         })

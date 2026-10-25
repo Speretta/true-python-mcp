@@ -52,15 +52,6 @@ pub(super) fn is_marimo_builtin(name: &str) -> bool {
         || MARIMO_EXTRA_BUILTINS.contains(&name)
 }
 
-/// Every name [`is_marimo_builtin`] accepts, as owned strings — the builtin
-/// half of the set the marimo F821 filter treats as "provided by the runtime".
-pub(super) fn marimo_builtin_names() -> Vec<String> {
-    ruff_python_stdlib::builtins::python_builtins(MARIMO_BUILTIN_MINOR_VERSION, false)
-        .chain(MARIMO_EXTRA_BUILTINS.iter().copied())
-        .map(str::to_string)
-        .collect()
-}
-
 /// The CPython minor version whose builtin set [`is_marimo_builtin`] assumes —
 /// the newest the linked ruff knows, not the discovered environment's.
 const MARIMO_BUILTIN_MINOR_VERSION: u8 = 13;

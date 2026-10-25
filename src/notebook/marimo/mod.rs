@@ -261,13 +261,12 @@ impl MarimoNotebook {
         lintable
     }
 
-    /// Every name the marimo runtime provides: the builtins as marimo sees
-    /// them plus the top-level defs of every analyzable cell (setup defs
-    /// included). This is the `graph_provided` set the ruff F821 filter drops
-    /// false positives against — a name marimo binds through the graph is not
-    /// "undefined" just because the concatenated cell bodies do not bind it.
-    pub(crate) fn graph_provided(&self) -> HashSet<String> {
-        let mut names: HashSet<String> = check::marimo_builtin_names().into_iter().collect();
+    /// The top-level names every analyzable cell defines (setup defs included).
+    /// Together with [`Self::runtime_builtin`], a name the marimo runtime binds
+    /// is not "undefined" just because the concatenated cell bodies do not
+    /// bind it — the graph half of the ruff F821 filter's provided set.
+    pub(crate) fn cell_definitions(&self) -> HashSet<String> {
+        let mut names = HashSet::new();
         for (cell, meta) in self.cells.iter().zip(&self.metas) {
             if meta.md.is_some() {
                 // A markdown cell's source is text, not Python.
@@ -278,6 +277,13 @@ impl MarimoNotebook {
             }
         }
         names
+    }
+
+    /// Whether the marimo runtime provides `name` as a builtin, the runtime
+    /// half of the ruff F821 filter's provided set (checked per name so the
+    /// builtin list is never materialized per call).
+    pub(crate) fn runtime_builtin(name: &str) -> bool {
+        check::is_marimo_builtin(name)
     }
 }
 
