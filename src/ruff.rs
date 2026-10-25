@@ -238,11 +238,16 @@ pub fn format_file(
     let Some(source_type) = python_source_type(&settings, path) else {
         return Err(not_python(path));
     };
-    // Phase 1 leaves marimo formatting unimplemented: a marimo `.py` is still
-    // formatted whole-file below. A later phase will branch here on
-    // `crate::notebook::is_marimo` to format each cell body (re-indented,
-    // `return` regenerated) through the byte-exact serializer, mirroring
-    // `check`'s cell-body lint.
+    // why: formatting a marimo `.py` whole-file fights the serializer's
+    // canonical shapes (the one-line `return`, the scaffold layout) and
+    // rewrites bytes no cell edit touched. Like `check`'s fix path, refuse
+    // until a per-cell format pass regenerates blocks through the byte-exact
+    // serializer.
+    if crate::notebook::is_marimo(&snapshot.content) {
+        return Err(Error::invalid_input(
+            "formatting marimo notebooks is not supported yet (phase 1 is lint-only)",
+        ));
+    }
     let source_kind = source_kind_from(snapshot.content, source_type, path)?;
 
     // Consume `source_kind` so the notebook branch can hand ownership to

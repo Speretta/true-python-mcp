@@ -205,6 +205,25 @@ fn format_unchanged_is_noop() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A marimo `.py` is refused rather than formatted whole-file: whole-file
+/// formatting fights the serializer's canonical shapes and rewrites bytes no
+/// cell edit touched (phase 1 is lint-only).
+#[test]
+fn format_refuses_marimo_notebook() {
+    let dir = temp_dir("format-marimo");
+    let path = dir.join("notebook.py");
+    let src = "import marimo\n\n__generated_with = \"0.25.2\"\napp = marimo.App()\n\n\n@app.cell\ndef _():\n    x = 1\n    return (x,)\n\n\nif __name__ == \"__main__\":\n    app.run()\n";
+    fs::write(&path, src).unwrap();
+    let error = ruff::format_file(&path, FormatWrite::InPlace, snap(&path)).unwrap_err();
+    assert!(error.to_string().contains("not supported"), "{error}");
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        src,
+        "the file must be untouched"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Formatting a notebook keeps the file byte-exact canonical and formats the
 /// offending code cell, leaving structure/outputs intact.
 #[test]
