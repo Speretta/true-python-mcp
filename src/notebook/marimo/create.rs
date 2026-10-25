@@ -101,21 +101,12 @@ impl MarimoNotebook {
     /// multiline tuples and rewraps ours on its next save).
     pub(crate) fn canonicalize_edited_cells(&mut self) {
         let summary = self.graph_summary();
-        let mut infos: Vec<Option<scope::CellInfo>> = Vec::with_capacity(self.cells.len());
-        for (cell, meta) in self.cells.iter().zip(&self.metas) {
-            // A markdown cell's wrapper call refs `mo`; its source is not Python.
-            infos.push(if meta.md.is_some() {
-                None
-            } else {
-                scope::analyze(&cell.source.text())
-            });
-        }
         for (index, meta) in self.metas.iter_mut().enumerate() {
             let editable = meta.edited && meta.md.is_none() && matches!(meta.kind, Kind::AppCell);
             if !editable {
                 continue;
             }
-            let Some(info) = infos[index].as_ref() else {
+            let Some(info) = summary.infos[index].as_ref() else {
                 continue;
             };
             if info.is_sql {

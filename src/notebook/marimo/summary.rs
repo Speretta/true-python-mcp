@@ -14,7 +14,8 @@ use super::{CellMeta, Kind, MarimoNotebook};
 
 /// The name sets a notebook's reactive graph exposes, the single source of
 /// truth for what counts as a referenced, defined, setup-provided, or
-/// toplevel-bound name.
+/// toplevel-bound name. Carries the per-cell analysis the same pass produced,
+/// so no caller re-analyzes a body.
 pub(super) struct GraphSummary {
     /// Names some cell references.
     used_refs: BTreeSet<String>,
@@ -25,6 +26,10 @@ pub(super) struct GraphSummary {
     /// Names bound by read-only `@app.function` / `@app.class_definition`
     /// blocks; they join the allowed refs.
     toplevel_names: BTreeSet<String>,
+    /// Per-cell analysis, in cell order: `None` where no Python body exists or
+    /// parses (markdown, broken, unparsable, or unparsed cells). SQL cells
+    /// carry their info with `is_sql` set.
+    pub(super) infos: Vec<Option<CellInfo>>,
 }
 
 impl GraphSummary {
@@ -79,9 +84,11 @@ impl MarimoNotebook {
             all_defs: BTreeSet::new(),
             setup_defs: BTreeSet::new(),
             toplevel_names: BTreeSet::new(),
+            infos: Vec::with_capacity(self.cells.len()),
         };
         for (cell, meta) in self.cells.iter().zip(&self.metas) {
             if matches!(meta.kind, Kind::Broken | Kind::Unparsable) {
+                summary.infos.push(None);
                 continue;
             }
             if matches!(meta.kind, Kind::Function | Kind::Class)
@@ -91,19 +98,20 @@ impl MarimoNotebook {
             }
             if meta.md.is_some() {
                 summary.used_refs.insert("mo".to_string());
+                summary.infos.push(None);
                 continue;
             }
-            let Some(info) = scope::analyze(&cell.source.text()) else {
-                continue;
-            };
-            if info.is_sql {
-                continue;
+            let info = scope::analyze(&cell.source.text());
+            if let Some(info) = &info
+                && !info.is_sql
+            {
+                summary.used_refs.extend(info.refs.iter().cloned());
+                summary.all_defs.extend(info.defs.iter().cloned());
+                if matches!(meta.kind, Kind::Setup) {
+                    summary.setup_defs.extend(info.defs.iter().cloned());
+                }
             }
-            summary.used_refs.extend(info.refs.iter().cloned());
-            summary.all_defs.extend(info.defs.iter().cloned());
-            if matches!(meta.kind, Kind::Setup) {
-                summary.setup_defs.extend(info.defs.iter().cloned());
-            }
+            summary.infos.push(info);
         }
         summary
     }

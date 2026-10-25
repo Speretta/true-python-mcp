@@ -15,7 +15,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::cycles::cycles;
 
-use super::scope::{self, CellInfo};
+use super::scope::CellInfo;
+use super::summary::GraphSummary;
 use super::{CellMeta, Kind, MarimoNotebook};
 use crate::notebook::{Finding, Severity};
 
@@ -146,7 +147,7 @@ fn cells_list(cells: &[usize]) -> String {
 /// cycles, setup root, a missing `mo` definition, then informational drift by
 /// cell.
 pub(super) fn check(notebook: &MarimoNotebook) -> Vec<Finding> {
-    let mut graph = Graph::build(notebook);
+    let mut graph = Graph::build(notebook, notebook.graph_summary());
     let mut findings = std::mem::take(&mut graph.syntax_findings);
     findings.extend(graph.multiple_definition_findings());
     findings.extend(graph.cycle_findings());
@@ -178,6 +179,9 @@ fn missing_mo_findings(notebook: &MarimoNotebook) -> Vec<Finding> {
 /// The reactive graph: analyzed cells, name indexes, and dependency edges,
 /// everything the finding passes read. Built once per check.
 struct Graph {
+    /// The name sets the same analysis pass produced; drift reads them instead
+    /// of re-analyzing the notebook.
+    summary: GraphSummary,
     /// Analyzed Python cells by index (SQL cells excluded, like marimo).
     nodes: BTreeMap<usize, Node>,
     setup_index: Option<usize>,
@@ -192,8 +196,12 @@ struct Graph {
 }
 
 impl Graph {
-    fn build(notebook: &MarimoNotebook) -> Self {
+    fn build(notebook: &MarimoNotebook, mut summary: GraphSummary) -> Self {
+        // The per-cell analysis travels with the summary; move it out so each
+        // node can own its `CellInfo` without a re-analysis or a clone.
+        let mut infos = std::mem::take(&mut summary.infos);
         let mut graph = Self {
+            summary,
             nodes: BTreeMap::new(),
             setup_index: None,
             syntax_findings: Vec::new(),
@@ -202,16 +210,17 @@ impl Graph {
             deleters: BTreeMap::new(),
             parents: HashMap::new(),
         };
-        graph.build_nodes(notebook);
+        graph.build_nodes(notebook, &mut infos);
         graph.index_names();
         graph.compute_edges();
         graph
     }
 
     /// Analyze every cell into a node, collecting syntax findings and the
-    /// setup / toplevel-name indexes along the way, in cell order.
-    fn build_nodes(&mut self, notebook: &MarimoNotebook) {
-        for (index, (cell, meta)) in notebook.cells.iter().zip(&notebook.metas).enumerate() {
+    /// setup / toplevel-name indexes along the way, in cell order. The body
+    /// analysis comes from the summary pass (`infos`), which is consumed here.
+    fn build_nodes(&mut self, notebook: &MarimoNotebook, infos: &mut [Option<CellInfo>]) {
+        for (index, meta) in notebook.metas.iter().enumerate() {
             match meta.kind {
                 Kind::Broken => {
                     self.syntax_findings.push(Finding {
@@ -244,7 +253,7 @@ impl Graph {
                     is_sql: false,
                 }
             } else {
-                let Some(info) = scope::analyze(&cell.source.text()) else {
+                let Some(info) = infos[index].take() else {
                     self.syntax_findings.push(Finding {
                         severity: Severity::Error,
                         cell: Some(index),
@@ -404,7 +413,7 @@ impl Graph {
     /// Informational drift: stale returns and signatures that marimo's own
     /// save would regenerate, by cell.
     fn drift_findings(&self, notebook: &MarimoNotebook) -> Vec<Finding> {
-        let summary = notebook.graph_summary();
+        let summary = &self.summary;
         let mut findings = Vec::new();
         for (index, node) in &self.nodes {
             let meta: &CellMeta = &notebook.metas[*index];
