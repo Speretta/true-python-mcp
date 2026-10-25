@@ -55,7 +55,8 @@ impl CacheKey {
 }
 
 /// One cached database. `db` is `None` only while a `with_db` call has it
-/// checked out, which keeps the single-owner invariant structural.
+/// checked out — or after a panicking checkout dropped it, which the next
+/// call rebuilds — and that keeps the single-owner invariant structural.
 struct DbSlot {
     key: CacheKey,
     db: Option<TyDb>,
@@ -63,6 +64,43 @@ struct DbSlot {
     /// Largest source length the slot has ever served; sizes the deferred drop
     /// guard (see [`crate::stack::guarded`]).
     max_source_len: usize,
+}
+
+/// A database checked out of its slot. The type exists for its `Drop`: whether
+/// the checkout ends in [`Self::return_to_slot`] or in a panic inside `work`,
+/// the database is dropped inside a [`crate::stack::guarded`] closure.
+/// `guarded` grows the stack only for the duration of its closure, so a plain
+/// local's drop glue — which runs in the unwinding frame, back on the small
+/// worker stack — is exactly the overflow the guard exists to prevent (a deep
+/// parsed AST drops recursively). The database must therefore be *moved into*
+/// the guarded closure, like `evict_lru` and `Drop for ThreadCache` do.
+struct CheckedOut {
+    /// `None` only after [`Self::return_to_slot`] or while `Drop` runs.
+    db: Option<TyDb>,
+    /// Largest source this database has served, sizing the deferred drop.
+    max_source_len: usize,
+}
+
+impl CheckedOut {
+    fn new(db: TyDb, max_source_len: usize) -> Self {
+        Self {
+            db: Some(db),
+            max_source_len,
+        }
+    }
+
+    /// Hands the database back to its slot and ends the guard's coverage.
+    fn return_to_slot(mut self) -> Option<TyDb> {
+        self.db.take()
+    }
+}
+
+impl Drop for CheckedOut {
+    fn drop(&mut self) {
+        if let Some(db) = self.db.take() {
+            crate::stack::guarded(self.max_source_len, move || drop(db));
+        }
+    }
 }
 
 #[derive(Default)]
@@ -152,20 +190,63 @@ pub(crate) fn with_db<R>(
 
         // Move the database out (a miss builds a fresh one); on a build error
         // the slot stays empty and the error propagates.
-        let mut db = match cache.slots[index].db.take() {
+        let db = match cache.slots[index].db.take() {
             Some(db) => db,
             None => build()?,
         };
 
-        cache.slots[index].max_source_len = cache.slots[index].max_source_len.max(source_len);
+        let max_source_len = cache.slots[index].max_source_len.max(source_len);
+        cache.slots[index].max_source_len = max_source_len;
 
-        // why: a panic inside `work` drops the checked-out db during unwind;
-        // re-apply the deferred-drop guard there too, sized by the largest
-        // source this db has served, exactly like the eviction and teardown
-        // drop paths (a deep parsed AST's recursive drop would overflow the
-        // worker stack otherwise).
-        let result = crate::stack::guarded(cache.slots[index].max_source_len, || work(&mut db));
-        cache.slots[index].db = Some(db);
+        // The guard drops the database under the deferred-drop guard on every
+        // path, panic or not (see `CheckedOut`): wrapping `work` in
+        // `stack::guarded` alone would NOT help, because the database's drop
+        // glue does not run inside that closure.
+        let mut checked_out = CheckedOut::new(db, max_source_len);
+        let result = match checked_out.db.as_mut() {
+            Some(db) => work(db),
+            // Unreachable: `new` holds a database and only this match and
+            // `Drop` take it out. An honest error, never a panic.
+            None => Err(Error::internal("checked-out database is missing")),
+        };
+        cache.slots[index].db = checked_out.return_to_slot();
         result
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
+
+    use std::panic::AssertUnwindSafe;
+    use std::path::Path;
+
+    use super::*;
+
+    /// A panicking `work` must leave no damage behind: the checked-out
+    /// database drops under the deferred-drop guard (its `Drop` moves the
+    /// database into `stack::guarded`'s closure — the only place the grown
+    /// stack covers a drop), the slot stays empty, and the next call rebuilds
+    /// and serves normally. This is precisely the exit path that wrapping
+    /// `work` in `stack::guarded` does not cover.
+    #[test]
+    fn a_panicking_checkout_drops_guarded_and_the_cache_recovers() {
+        let root = Path::new(".");
+        let panicked = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            with_db(
+                CacheKey::new(root, None),
+                8,
+                || TyDb::for_src_root(root, None),
+                |_| -> Result<(), Error> { panic!("work panics on purpose") },
+            )
+        }));
+        assert!(panicked.is_err(), "the panic must propagate");
+        let served = with_db(
+            CacheKey::new(root, None),
+            8,
+            || TyDb::for_src_root(root, None),
+            |_| Ok(()),
+        );
+        assert!(served.is_ok(), "the cache must serve the key after a panic");
+    }
 }
