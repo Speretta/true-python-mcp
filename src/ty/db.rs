@@ -46,7 +46,7 @@ pub(crate) const DOCS_VIRTUAL_PATH: &str = "__tpmcp_docs__.py";
 #[derive(Debug, Clone)]
 pub(super) struct VirtualSource {
     pub(super) path: SystemVirtualPathBuf,
-    pub(super) content: Arc<str>,
+    pub(super) content: String,
 }
 
 /// [`OsSystem`] plus a single in-memory virtual file, so a notebook's
@@ -55,7 +55,7 @@ pub(super) struct VirtualSource {
 #[derive(Debug, Clone)]
 pub(super) struct TySystem {
     pub(super) inner: OsSystem,
-    pub(super) virtual_source: Option<Arc<VirtualSource>>,
+    pub(super) virtual_source: Option<VirtualSource>,
 }
 
 impl System for TySystem {
@@ -85,7 +85,7 @@ impl System for TySystem {
 
     fn read_virtual_path_to_string(&self, path: &SystemVirtualPath) -> std::io::Result<String> {
         match &self.virtual_source {
-            Some(source) if source.path.as_path() == path => Ok(source.content.to_string()),
+            Some(source) if source.path.as_path() == path => Ok(source.content.clone()),
             _ => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
         }
     }
@@ -154,8 +154,8 @@ pub struct TyDb {
     system: TySystem,
     vendored: VendoredFileSystem,
     program_settings: Arc<ProgramSettings>,
-    rule_selection: Arc<RuleSelection>,
-    analysis_settings: Arc<AnalysisSettings>,
+    rule_selection: RuleSelection,
+    analysis_settings: AnalysisSettings,
 }
 
 /// Provides the interned `Program` query, mirroring ty_python_core's
@@ -193,8 +193,8 @@ impl TyDb {
             system,
             vendored,
             program_settings,
-            rule_selection: Arc::new(RuleSelection::from_registry(default_lint_registry())),
-            analysis_settings: Arc::new(AnalysisSettings::default()),
+            rule_selection: RuleSelection::from_registry(default_lint_registry()),
+            analysis_settings: AnalysisSettings::default(),
         };
         db.program_settings
             .search_paths
@@ -225,10 +225,10 @@ impl TyDb {
     /// time, so the previous one does not survive a cache hit.
     pub(crate) fn serve_virtual(&mut self, path: &str, content: &str) -> File {
         let path = SystemVirtualPathBuf::from(path.to_string());
-        self.system.virtual_source = Some(Arc::new(VirtualSource {
+        self.system.virtual_source = Some(VirtualSource {
             path: path.clone(),
-            content: Arc::from(content),
-        }));
+            content: content.to_string(),
+        });
         let virtual_file = match self.files().try_virtual_file(path.as_path()) {
             Some(virtual_file) => virtual_file,
             None => self.files().virtual_file(self, path.as_path()),
