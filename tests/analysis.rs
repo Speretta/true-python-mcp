@@ -321,7 +321,8 @@ fn plain_python_still_reports_unused_import() {
 /// positives — F401(`marimo`), F811(`mo`), and the cell `return` (PLR1711) /
 /// import-block (I001) noise — while a genuine C408 and F821 survive. The
 /// whole-file lint would have flagged `import marimo` (F401) and each cell's
-/// trailing `return` (PLR1711).
+/// trailing `return` (PLR1711). A reference to the header's `app` is not an
+/// undefined name either.
 #[test]
 fn marimo_lint_filters_scaffolding_noise() {
     let dir = temp_dir("marimo-lint");
@@ -351,6 +352,7 @@ def _(mo):
     mo = 1
     result = dict(a=1)
     print(undefined_name)
+    print(app)
     return
 
 

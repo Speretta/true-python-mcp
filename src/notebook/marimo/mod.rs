@@ -318,6 +318,15 @@ impl MarimoNotebook {
     pub(crate) fn runtime_builtin(name: &str) -> bool {
         check::is_marimo_builtin(name)
     }
+
+    /// Whether the file header binds `name` outside any cell: `import marimo`
+    /// and `app = marimo.App(...)` — both required for the file to count as
+    /// marimo at all — plus `__generated_with`. The header half of the ruff
+    /// F821 filter's provided set: a cell body touching `app` (a
+    /// `@app.function` block's decorator, say) references a real binding.
+    pub(crate) fn header_binds(name: &str) -> bool {
+        matches!(name, "marimo" | "app" | "__generated_with")
+    }
 }
 
 impl Notebook for MarimoNotebook {

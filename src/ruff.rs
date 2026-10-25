@@ -440,10 +440,11 @@ fn marimo_source_kind(marimo: &MarimoNotebook, path: &Path) -> Result<SourceKind
 }
 
 /// Post-mapping filter for marimo notebooks: drop the false positives of
-/// linting cell bodies as one module. A name is "provided" when the marimo
-/// runtime supplies it as a builtin or some cell defines it at its top level
-/// (`cell_definitions`), so an F821 against either is a graph-provided name,
-/// not a genuine undefined one. PLR1711/I001/C408 are untouched: PLR1711
+/// linting cell bodies as one module. A name is "provided" when marimo's
+/// runtime supplies it as a builtin, the file header binds it
+/// (`header_binds`), or some cell defines it at its top level
+/// (`cell_definitions`), so an F821 against those is a provided name, not a
+/// genuine undefined one. PLR1711/I001/C408 are untouched: PLR1711
 /// disappears because `lint_cells` strips the trailing `return`, and the rest
 /// are real lint findings.
 fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> Vec<Diagnostic> {
@@ -463,9 +464,12 @@ fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> 
                 ),
                 // `mo`/`marimo` are redefined by the graph across cells.
                 "F811" => !matches!(token, Some(token) if token == "mo" || token == "marimo"),
-                // A name marimo provides is not "undefined" to the runtime.
+                // A name the file provides is not "undefined": marimo's
+                // builtins, the header's bindings, and cell defs.
                 "F821" => !token.is_some_and(|token| {
-                    MarimoNotebook::runtime_builtin(token) || cell_definitions.contains(token)
+                    MarimoNotebook::runtime_builtin(token)
+                        || MarimoNotebook::header_binds(token)
+                        || cell_definitions.contains(token)
                 }),
                 _ => true,
             }
