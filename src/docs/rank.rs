@@ -34,10 +34,13 @@ pub(super) fn rank_candidates<'db>(
     // them into one candidate. `ResolvedDefinition` is `Eq`, and its
     // `Definition` arm is a salsa-tracked handle that compares by `scope` +
     // `place` (the `kind` field is `#[no_eq]`), so equality is exact identity.
-    // The scan is O(n²) but n is the candidate count for one symbol (1-3 in
-    // practice): `ResolvedDefinition` is `Eq`-only (no `Hash`/`Ord`, and its
-    // `Module` payload type is private), so a linear dedup is not expressible
-    // on the public API. Fine at this size; revisit if n ever grows.
+    // The scan is O(n²), and n is the candidate count for one symbol — 1-3 in
+    // practice. A linear dedup is expressible: all three variant payloads
+    // (`Definition`, `ProgramFile`, `FileRange`) impl `Hash`, so a small key
+    // enum would do it. Hashing 1-3 items still costs more than scanning them,
+    // and the key type would exist only to serve the scan, so the scan is the
+    // choice here. Revisit with a key enum if a symbol ever fans out to many
+    // candidates.
     let mut deduped: Vec<ResolvedDefinition<'db>> = Vec::with_capacity(resolved.len());
     for definition in resolved {
         if !deduped.contains(definition) {
