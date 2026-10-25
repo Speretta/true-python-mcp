@@ -464,11 +464,9 @@ fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> 
                 // `mo`/`marimo` are redefined by the graph across cells.
                 "F811" => !matches!(token, Some(token) if token == "mo" || token == "marimo"),
                 // A name marimo provides is not "undefined" to the runtime.
-                "F821" => {
-                    !token.is_some_and(|token| {
-                        MarimoNotebook::runtime_builtin(token) || cell_definitions.contains(token)
-                    })
-                }
+                "F821" => !token.is_some_and(|token| {
+                    MarimoNotebook::runtime_builtin(token) || cell_definitions.contains(token)
+                }),
                 _ => true,
             }
         })

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ruff_db::diagnostic::{Diagnostic as TyDiagnostic, Severity, UnifiedFile};
 use ruff_db::files::{File, system_path_to_file};
-use ruff_db::source::source_text;
+use ruff_db::source::{SourceText, source_text};
 use ruff_notebook::{Notebook, NotebookIndex};
 use ruff_source_file::{LineColumn, LineIndex, OneIndexed};
 use ty_python_semantic::Db as SemanticDb;
@@ -161,22 +161,40 @@ fn check_file(db: &TyDb, file: File) -> Result<Vec<Diagnostic>, Error> {
     let source = source_text(db, file);
     let diagnostics =
         crate::stack::guarded_walk(source.len(), || <TyDb as SemanticDb>::check_file(db, file));
+    // why: one line index per file, not per diagnostic (O(N·L) otherwise).
+    let index = LineIndex::from_source_text(&source);
     Ok(diagnostics
         .iter()
-        .map(|diagnostic| map_diagnostic(db, diagnostic))
+        .map(|diagnostic| map_diagnostic(db, diagnostic, file, &source, &index))
         .collect())
 }
 
-fn map_diagnostic(db: &TyDb, diagnostic: &TyDiagnostic) -> Diagnostic {
+fn map_diagnostic(
+    db: &TyDb,
+    diagnostic: &TyDiagnostic,
+    checked: File,
+    checked_source: &SourceText,
+    checked_index: &LineIndex,
+) -> Diagnostic {
     let (location, end_location) = match diagnostic.primary_span() {
         Some(span) => match span.file() {
             UnifiedFile::Ty(file) => {
-                let source = source_text(db, *file);
-                let index = LineIndex::from_source_text(&source);
+                // The common case: the span points into the checked file, whose
+                // source and line index we already hold. A span into another
+                // file (rare) builds its own.
+                let foreign_source;
+                let foreign_index;
+                let (source, index) = if *file == checked {
+                    (checked_source, checked_index)
+                } else {
+                    foreign_source = source_text(db, *file);
+                    foreign_index = LineIndex::from_source_text(&foreign_source);
+                    (&foreign_source, &foreign_index)
+                };
                 match span.range() {
                     Some(range) => {
-                        let start = index.line_column(range.start(), &source);
-                        let end = index.line_column(range.end(), &source);
+                        let start = index.line_column(range.start(), source);
+                        let end = index.line_column(range.end(), source);
                         (
                             Some(LineCol {
                                 row: start.line.get(),
