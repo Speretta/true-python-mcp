@@ -176,7 +176,11 @@ fn source_docstrings(path: &Path) -> Arc<HashMap<String, String>> {
     {
         return docstrings.clone();
     }
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    // why: a failed read (permissions, non-UTF-8) is transient; caching its
+    // empty result would freeze the failure for the process lifetime.
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Arc::new(HashMap::new());
+    };
     let docstrings = Arc::new(parse_docstrings(&text));
     source_docstrings_cache()
         .write()
