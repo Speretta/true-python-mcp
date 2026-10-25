@@ -49,7 +49,10 @@ use crate::error::Error;
 
 // ---- cache ----
 
-/// A cached build plus the `(mtime, length)` token that validates it.
+/// A cached build plus the `(mtime, length)` token that validates it. Entries
+/// live for the process lifetime (bounded by the distinct ruff config files one
+/// session touches); a server that opens many unrelated trees accumulates one
+/// entry each.
 type CacheEntry = (SystemTime, u64, Arc<Settings>);
 
 fn cache() -> &'static RwLock<HashMap<PathBuf, CacheEntry>> {

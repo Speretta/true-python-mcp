@@ -21,6 +21,9 @@ use super::db::{TySystem, to_system_path};
 type SettingsCacheKey = (PathBuf, Option<PathBuf>);
 
 /// Process-wide cache of the discovery result, keyed by [`SettingsCacheKey`].
+/// Entries live for the process lifetime (bounded by the distinct source roots
+/// and `python` pins one session touches); a server that opens many unrelated
+/// trees accumulates one entry each.
 type SettingsCache = RwLock<HashMap<SettingsCacheKey, Arc<ProgramSettings>>>;
 
 /// Process-wide cache of the discovery result, keyed by the checked file's

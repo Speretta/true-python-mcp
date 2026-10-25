@@ -233,6 +233,9 @@ fn env_dir(var: &str) -> Option<PathBuf> {
         .filter(|value| value.is_absolute())
 }
 
+/// One mutex per locked path, never removed: entries live for the process
+/// lifetime (bounded by the distinct files one session edits) and each costs
+/// one small allocation alongside the OS lock file that already persists.
 fn lock_table() -> &'static RwLock<HashMap<PathBuf, Arc<Mutex<()>>>> {
     static TABLE: OnceLock<RwLock<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
     TABLE.get_or_init(|| RwLock::new(HashMap::new()))

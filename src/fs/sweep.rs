@@ -70,6 +70,9 @@ pub fn sweep_stale_temps(dir: &Path) {
     }
 }
 
+/// Directories already swept this process, so each is walked once. Entries live
+/// for the process lifetime (bounded by the distinct directories one session
+/// writes to).
 fn swept_dirs() -> &'static Mutex<HashSet<PathBuf>> {
     static SWEPT: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
     SWEPT.get_or_init(|| Mutex::new(HashSet::new()))
