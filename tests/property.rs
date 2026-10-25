@@ -24,7 +24,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 
 use proptest::prelude::*;
-use proptest::test_runner::{TestCaseError, TestRunner};
+use proptest::test_runner::{FileFailurePersistence, TestCaseError, TestRunner};
 use serde_json::{Map, Value, json};
 use tpmcp::notebook::{AnyNotebook, JupyterNotebook, Notebook, open};
 
@@ -36,6 +36,20 @@ use std::sync::OnceLock;
 /// Cases per property: the five properties run in well under a second
 /// total at this size, so the budget is generous.
 const CASES: u32 = 256;
+
+/// The cases config. Failing seeds persist to
+/// `tests/property.proptest-regressions` (the nightly bot commits them), and
+/// naming the resolution rule directly keeps the CI log honest: the default
+/// `SourceParallel` reaches the same file only through its `lib.rs`/`main.rs`
+/// fallback and warns on every run as if persistence had failed.
+fn config(cases: u32) -> ProptestConfig {
+    ProptestConfig {
+        failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
+            "proptest-regressions",
+        ))),
+        ..ProptestConfig::with_cases(cases)
+    }
+}
 
 /// Characters that stress JSON escaping, EOL handling and UTF-8 boundaries.
 const TRICKY_CHARS: [char; 15] = [
@@ -266,7 +280,7 @@ fn arb_raw_text() -> impl Strategy<Value = String> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(CASES))]
+    #![proptest_config(config(CASES))]
 
     /// Property 1: the canonical form is a fixpoint — canonical output
     /// always re-parses and re-serializes to identical bytes.
@@ -377,7 +391,7 @@ fn ty_prop_dir() -> &'static Path {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(16))]
+    #![proptest_config(config(16))]
 
     /// Property 6: `ty_check` never panics on arbitrary bounded bytes — the
     /// glue-level containment invariant. ty's own rules are a dependency's
@@ -402,7 +416,7 @@ proptest! {
 /// execute cases for a second.)
 #[test]
 fn generators_are_effective() -> Result<(), TestCaseError> {
-    TestRunner::new(ProptestConfig::with_cases(64)).run(&arb_synthetic_marimo(), |text| {
+    TestRunner::new(config(64)).run(&arb_synthetic_marimo(), |text| {
         prop_assert!(
             matches!(open(&text), Ok(AnyNotebook::Marimo(_))),
             "a synthetic scaffold must be recognized as marimo:\n{}",
