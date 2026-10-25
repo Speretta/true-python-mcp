@@ -401,5 +401,10 @@ pub(super) fn marimo_extra(
 }
 
 pub(super) fn line_start(src: &str, offset: usize) -> usize {
-    src[..offset].rfind('\n').map_or(0, |index| index + 1)
+    // Python ends lines at `\n`, `\r\n`, and a bare `\r` alike; keying on `\n`
+    // alone walks past a CR-terminated line and yields offsets outside the
+    // statement being framed.
+    src[..offset]
+        .rfind(['\n', '\r'])
+        .map_or(0, |index| index + 1)
 }

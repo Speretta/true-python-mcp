@@ -102,12 +102,10 @@ fn broken_cell(text: &str) -> (Cell, CellMeta, String) {
 /// Split the source into contiguous regions at column-0 cell/guard boundaries.
 fn split_regions(src: &str) -> Vec<(usize, usize, Region)> {
     let mut marks: Vec<(usize, Region)> = Vec::new();
-    let mut offset = 0usize;
-    for line in src.split_inclusive('\n') {
+    for (offset, line) in py_lines(src) {
         if let Some(region) = boundary(line) {
             marks.push((offset, region));
         }
-        offset += line.len();
     }
     let marks = rejoin_split_decorator_stacks(&marks, src);
     let mut regions = Vec::new();
@@ -168,13 +166,48 @@ fn dangling_decorator_start(text: &str) -> Option<usize> {
 
 /// The lines of `text` (terminators stripped) paired with their byte offsets.
 fn lines_with_offsets(text: &str) -> Vec<(usize, &str)> {
-    let mut lines = Vec::new();
+    py_lines(text)
+        .map(|(offset, line)| (offset, line.trim_end_matches(['\n', '\r'])))
+        .collect()
+}
+
+/// The lines of `text` on Python's full set of line terminators (`\n`, `\r\n`,
+/// bare `\r`), each still carrying its terminator, paired with byte offsets.
+/// `str::split_inclusive('\n')` alone hides a column-0 boundary behind a bare
+/// `\r`, which Python's lexer still ends a line at — and a hidden `@app.cell`
+/// boundary merges two cells into one region.
+fn py_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut rest = text;
     let mut offset = 0usize;
-    for line in text.split_inclusive('\n') {
-        lines.push((offset, line.trim_end_matches(['\n', '\r'])));
-        offset += line.len();
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let end = line_len(rest);
+        let (line, tail) = rest.split_at(end);
+        rest = tail;
+        let start = offset;
+        offset += end;
+        Some((start, line))
+    })
+}
+
+/// The byte length of `text`'s first line, terminator included.
+fn line_len(text: &str) -> usize {
+    for (index, byte) in text.bytes().enumerate() {
+        match byte {
+            b'\n' => return index + 1,
+            b'\r' => {
+                return if text.as_bytes().get(index + 1) == Some(&b'\n') {
+                    index + 2
+                } else {
+                    index + 1
+                };
+            }
+            _ => {}
+        }
     }
-    lines
+    text.len()
 }
 
 /// Column-0 boundary detection, mirroring marimo's scanner recovery regex.
