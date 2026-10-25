@@ -159,7 +159,12 @@ pub(crate) fn with_db<R>(
 
         cache.slots[index].max_source_len = cache.slots[index].max_source_len.max(source_len);
 
-        let result = work(&mut db);
+        // why: a panic inside `work` drops the checked-out db during unwind;
+        // re-apply the deferred-drop guard there too, sized by the largest
+        // source this db has served, exactly like the eviction and teardown
+        // drop paths (a deep parsed AST's recursive drop would overflow the
+        // worker stack otherwise).
+        let result = crate::stack::guarded(cache.slots[index].max_source_len, || work(&mut db));
         cache.slots[index].db = Some(db);
         result
     })
