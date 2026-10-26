@@ -312,6 +312,43 @@ pub fn move_stream(
     Ok((revision, bytes, note))
 }
 
+/// Deletes `path` and returns the revision of the bytes it removed, so the
+/// caller can say exactly what was deleted. `expected_revision` is the
+/// conflict guard: with it, the file must still hash to that revision (the
+/// check is binary-safe, like [`copy_stream`]'s) or nothing is deleted and
+/// the call fails with [`Error::Conflict`]; without it the delete is
+/// unconditional, the `rm` semantics a delete primitive is expected to have.
+///
+/// The guarded path re-checks the stat fingerprint just before the unlink
+/// (via the same verified stamp [`write`] uses), so an external save landing
+/// between the check and the removal loses instead of having its bytes
+/// deleted unseen.
+pub fn delete(path: &Path, expected_revision: Option<&str>) -> Result<String, Error> {
+    with_file_lock(path, || {
+        let bytes = read_bytes(path)?;
+        let current = revision_of(&bytes);
+        if let Some(revision) = expected_revision {
+            if current != revision {
+                return Err(Error::Conflict {
+                    path: path.to_path_buf(),
+                    expected: revision.to_string(),
+                    current,
+                });
+            }
+            lock::record_verified(
+                &lock::lock_key(path),
+                lock::VerifiedStamp {
+                    stat: stat_fingerprint(path),
+                    revision: current.clone(),
+                },
+            );
+            recheck_unchanged(path, path)?;
+        }
+        fs::remove_file(path).map_err(|error| Error::io(path.to_path_buf(), error))?;
+        Ok(current)
+    })
+}
+
 /// The copy itself: open the source, stream it into the temp file while
 /// hashing, then rename. `reported` is the caller's spelling of `dest`,
 /// used in errors. The source's permission bits are not propagated: `dest`

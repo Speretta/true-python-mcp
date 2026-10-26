@@ -95,6 +95,20 @@ pub struct PyEditArgs {
     pub format: Format,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FileDeleteArgs {
+    /// Path of the file to delete.
+    pub path: PathBuf,
+    /// Current revision of the file (from py_read or a previous mutation) to
+    /// refuse deleting anything but that exact file; omit to delete
+    /// unconditionally, the `rm` semantics of a delete primitive.
+    #[serde(default)]
+    pub revision: Option<String>,
+    /// Result format, "markdown" (default) or "json".
+    #[serde(default)]
+    pub format: Format,
+}
+
 #[tool_router(router = files_router, vis = "pub")]
 impl Tpmcp {
     #[tool(
@@ -337,6 +351,40 @@ impl Tpmcp {
                         "note": note,
                     })
                 },
+            ))
+        })
+        .await
+    }
+
+    #[tool(
+        title = "Delete File",
+        description = "Delete a file through tpmcp — the `rm` of this toolset, for hosts \
+                       without a shell or delete tool. Pass `revision` (the file's current \
+                       revision) to refuse deleting anything but that exact file; omit it to \
+                       delete unconditionally, the `rm` semantics of a delete primitive — \
+                       that is why this tool is destructive. Returns the revision of the \
+                       bytes that were deleted. Prefer the host's native delete tool when \
+                       available.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn file_delete(
+        &self,
+        Parameters(args): Parameters<FileDeleteArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let deleted_revision = fs::delete(&args.path, args.revision.as_deref())?;
+            Ok(mutation_result(
+                args.format,
+                format!("deleted {}", args.path.display()),
+                &args.path,
+                &deleted_revision,
+                || None,
+                || json!({ "deleted": true }),
             ))
         })
         .await

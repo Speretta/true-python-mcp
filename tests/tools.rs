@@ -46,8 +46,15 @@ fn default_tool_surface() {
 fn file_tools_flag_adds_file_tools() {
     let mut server = Server::start(&["--file-tools"]);
     let tools = server.list_tools();
-    assert_eq!(tools.len(), DEFAULT_TOOLS.len() + 5);
-    for name in ["py_read", "py_write", "py_edit", "file_copy", "file_move"] {
+    assert_eq!(tools.len(), DEFAULT_TOOLS.len() + 6);
+    for name in [
+        "py_read",
+        "py_write",
+        "py_edit",
+        "file_copy",
+        "file_move",
+        "file_delete",
+    ] {
         assert!(tools.contains(&name.to_string()), "missing {name}");
     }
 }
@@ -1018,4 +1025,35 @@ fn file_move_over_the_wire() {
         text.contains("moved") && text.contains("blob.bin"),
         "{text}"
     );
+}
+
+/// `file_delete` removes a file and reports the revision it removed. The
+/// optional revision guard refuses to delete anything but that exact file.
+#[test]
+fn file_delete_over_the_wire() {
+    let dir = temp_dir("file-delete");
+    let mut server = Server::start(&["--file-tools"]);
+
+    let path = dir.join("gone.bin");
+    std::fs::write(&path, b"to be deleted").unwrap();
+
+    // A stale revision refuses the delete and keeps the file.
+    let (err, _, sc) = server.call(
+        "file_delete",
+        json!({"path": path, "revision": "0000000000000000", "format": "json"}),
+    );
+    assert!(err, "a stale revision must be refused: {sc}");
+    assert!(path.exists(), "a refused delete must keep the file");
+
+    // The clean delete: the file is gone and the answer names what it removed.
+    let (err, text, sc) = server.call("file_delete", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    assert!(!path.exists());
+    assert_eq!(sc["deleted"], true, "{sc}");
+    assert_eq!(sc["revision"].as_str().unwrap().len(), 16, "{sc}");
+    assert!(text.contains("deleted"), "{text}");
+
+    // Deleting a missing file fails like `rm`.
+    let (err, _, sc) = server.call("file_delete", json!({"path": path}));
+    assert!(err && sc["error"] == "not_found", "{sc}");
 }

@@ -281,6 +281,42 @@ fn move_stream_says_so_when_only_the_removal_fails() {
 }
 
 #[test]
+fn delete_removes_the_file_and_reports_what_was_deleted() {
+    let dir = temp_dir("delete");
+    let path = dir.join("blob.bin");
+    let payload: Vec<u8> = (0_u32..4096).flat_map(|n| n.to_be_bytes()).collect();
+    fs::write(&path, &payload).unwrap();
+
+    let revision = delete(&path, None).unwrap();
+
+    assert_eq!(revision, revision_of(&payload));
+    assert!(!path.exists());
+    assert_eq!(
+        delete(&path, None).unwrap_err().kind(),
+        "not_found",
+        "deleting twice fails like `rm`"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn delete_holds_the_revision_guard_when_given_one() {
+    let dir = temp_dir("delete-guard");
+    let path = dir.join("blob.bin");
+    fs::write(&path, b"the bytes").unwrap();
+
+    // A stale revision refuses the delete and leaves the file standing.
+    let stale = revision_of(b"something else");
+    assert_eq!(delete(&path, Some(&stale)).unwrap_err().kind(), "conflict");
+    assert!(path.exists(), "a refused delete must keep the file");
+
+    let current = revision_of(b"the bytes");
+    assert_eq!(delete(&path, Some(&current)).unwrap(), current);
+    assert!(!path.exists());
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn logical_lines_handles_edges() {
     assert_eq!(logical_lines(""), Vec::<&str>::new());
     assert_eq!(logical_lines("a\nb\n"), ["a", "b"]);
