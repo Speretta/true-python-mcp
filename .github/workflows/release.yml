@@ -12,6 +12,19 @@ on:
   push:
     tags:
       - "v*"
+  # Re-run a release without re-tagging: `gh workflow run release.yml --ref
+  # main -f tag=vX.Y.Z`. The tag input selects what is released and every job
+  # checks that ref out, so the run builds and publishes the tag's code with
+  # this workflow file even when the tag predates it. Every job is idempotent
+  # (the release is created only if missing, uploads use --clobber), so a
+  # cancelled or half-finished run is fixed by dispatching again.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.3.1); defaults to the ref that triggered the run"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -22,29 +35,37 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # What this run releases: the dispatch tag when given, else the pushed tag.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   # The gate: wait for ci.yml (Linux + Windows + msrv) to pass on the tagged
   # commit. ci.yml is triggered by the same push, so poll until it completes.
+  # The window is generous on purpose: a release run once died at its 30-minute
+  # ceiling one second before CI finished (the Windows job's cache steps made
+  # the CI run 31 minutes), and the cancelled waiter cancelled the release.
   wait-for-ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Wait for ci.yml to pass on the tagged commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          sha="$(git rev-parse HEAD)"
           run_id=""
-          for _ in $(seq 1 120); do
-            run_id=$(gh run list --commit "$GITHUB_SHA" --workflow ci.yml \
+          for _ in $(seq 1 300); do
+            run_id=$(gh run list --commit "$sha" --workflow ci.yml \
               --json databaseId,status \
               --jq '.[] | select(.status == "completed") | .databaseId' | head -1)
             [ -n "$run_id" ] && break
             sleep 15
           done
-          [ -n "$run_id" ] || { echo "no completed ci.yml run for $GITHUB_SHA"; exit 1; }
+          [ -n "$run_id" ] || { echo "no completed ci.yml run for $sha"; exit 1; }
           conclusion=$(gh run view "$run_id" --json conclusion --jq .conclusion)
           [ "$conclusion" = "success" ] || { echo "ci.yml conclusion: $conclusion"; exit 1; }
 
@@ -53,12 +74,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Create the GitHub release with notes from CHANGELOG.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           # Notes = this version's CHANGELOG section, leading blank lines trimmed.
           awk -v ver="$version" '
             index($0, "## [" ver "]") == 1 { found = 1; next }
@@ -68,11 +91,11 @@ jobs:
           if [ ! -s notes.md ]; then
             echo "See CHANGELOG.md for details." > notes.md
           fi
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "release $GITHUB_REF_NAME already exists"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists"
           else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "tpmcp $GITHUB_REF_NAME" \
+            gh release create "$RELEASE_TAG" \
+              --title "tpmcp $RELEASE_TAG" \
               --notes-file notes.md
           fi
 
@@ -105,6 +128,12 @@ jobs:
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      # Registry cache on every OS, build tree where it pays for itself; see
+      # .github/actions/cargo-cache for the measurements behind the split.
+      - uses: ./.github/actions/cargo-cache
 
       - name: Install the cross toolchain (Linux only)
         if: runner.os == 'Linux'
@@ -164,7 +193,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           name="tpmcp-$version-$TARGET"
           binary="target/$TARGET/release/tpmcp"
           if [ "${{ runner.os }}" = "Windows" ]; then
@@ -189,7 +218,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ runner.os }}" = "Windows" ]; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --clobber
+            gh release upload "$RELEASE_TAG" dist/*.zip dist/*.sha256 --clobber
           else
-            gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --clobber
+            gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.sha256 --clobber
           fi

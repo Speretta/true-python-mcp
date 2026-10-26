@@ -1,8 +1,9 @@
 name: cargo-cache
 description: >-
-  First-party composite action: cache the cargo directories and build tree
-  keyed on Cargo.lock. Shared by the CI jobs to avoid repeating the block
-  five times; no third-party actions.
+  First-party composite action: cache the cargo directories (every OS) and
+  the build tree (where rebuilding costs more than the cache) keyed on
+  Cargo.lock. Shared by the CI and release jobs to avoid repeating the block;
+  no third-party actions.
 
 inputs:
   suffix:
@@ -13,12 +14,24 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Cache the cargo dirs and the build tree
+    - name: Cache the cargo directories
       uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo${{ inputs.suffix }}-${{ hashFiles('Cargo.lock') }}
-        restore-keys: ${{ runner.os }}-cargo${{ inputs.suffix }}-
+        key: ${{ runner.os }}-cargo-registry${{ inputs.suffix }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-registry${{ inputs.suffix }}-
+
+    # The build tree is cached only where the cache is cheaper than a rebuild.
+    # Measured on this repo's CI (2026-10-26): restore + save costs ~2+2 min
+    # on Linux but ~13+13 min on Windows, against an ~8-12 min cold build —
+    # on Windows the cache was the slowest part of the job, so Windows builds
+    # from scratch and keeps only the registry cache above.
+    - name: Cache the build tree (not on Windows)
+      if: runner.os != 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-target${{ inputs.suffix }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-target${{ inputs.suffix }}-
