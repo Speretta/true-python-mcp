@@ -59,11 +59,13 @@ pub struct PyWriteArgs {
     pub format: Format,
 }
 
+/// Shared by [`Tpmcp::file_copy`] and [`Tpmcp::file_move`]: identical inputs,
+/// two completion semantics (`cp` keeps the source, `mv` removes it).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct StreamCopyArgs {
-    /// Path of the source file to copy from.
+pub struct FileTransferArgs {
+    /// Path of the source file.
     pub source: PathBuf,
-    /// Destination path to write the copied bytes to.
+    /// Destination path to write the bytes to.
     pub dest: PathBuf,
     /// Current revision of `dest` (from py_read or a previous mutation) to
     /// refuse overwriting anything else; omit to overwrite unconditionally,
@@ -239,17 +241,19 @@ impl Tpmcp {
     }
 
     #[tool(
-        title = "Stream Copy File",
-        description = "Copy `source` to `dest` byte-for-byte through tpmcp, without loading \
-                       the content into the caller's context (the agent passes only a path). \
-                       The bytes are streamed in chunks and honor the same size cap as every \
-                       other read; `dest` is written atomically (temp file + rename) so it is \
-                       never observed half-written. Unlike py_write the content may be binary \
-                       (not UTF-8). Pass `revision` (the dest's current revision) to refuse \
-                       overwriting anything but that exact file; omit it to overwrite \
-                       unconditionally, the `cp` semantics of a copy primitive — that is why \
-                       this tool is destructive. Returns the new revision of `dest`. Prefer \
-                       the host's native copy tool when available.",
+        title = "Copy File",
+        description = "Copy `source` to `dest` byte-for-byte through tpmcp — the `cp` of this \
+                       toolset, for hosts without a shell or copy tool. Only the paths travel: \
+                       the bytes stream in chunks without loading into the caller's context, \
+                       honoring the same size cap as every other read; `dest` is written \
+                       atomically (temp file + rename) so it is never observed half-written. \
+                       Unlike py_write the content may be binary (not UTF-8). Pass `revision` \
+                       (the dest's current revision) to refuse overwriting anything but that \
+                       exact file; omit it to overwrite unconditionally, the `cp` semantics of \
+                       a copy primitive — that is why this tool is destructive. Returns the new \
+                       revision of `dest`. Use it to place a source file before streaming its \
+                       content into a notebook cell with `source_file`. Prefer the host's \
+                       native copy tool when available.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -257,9 +261,9 @@ impl Tpmcp {
             open_world_hint = false
         )
     )]
-    async fn stream_copy(
+    async fn file_copy(
         &self,
-        Parameters(args): Parameters<StreamCopyArgs>,
+        Parameters(args): Parameters<FileTransferArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
             let (new_revision, bytes) = fs::with_file_lock(&args.dest, || {
@@ -279,6 +283,58 @@ impl Tpmcp {
                     json!({
                         "source": args.source.display().to_string(),
                         "bytes": bytes,
+                    })
+                },
+            ))
+        })
+        .await
+    }
+
+    #[tool(
+        title = "Move File",
+        description = "Move `source` to `dest` through tpmcp — the `mv` of this toolset, for \
+                       hosts without a shell or move tool: the same verified copy as \
+                       file_copy, then the source is removed. The removal runs only after the \
+                       copy is verified, so a failed move never loses bytes; if only the \
+                       removal fails the answer says so and `dest` stands. Pass `revision` to \
+                       refuse overwriting anything but that exact `dest`; omit it to overwrite \
+                       unconditionally. Returns the new revision of `dest`. Prefer the host's \
+                       native move tool when available.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn file_move(
+        &self,
+        Parameters(args): Parameters<FileTransferArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            let (new_revision, bytes, note) = fs::with_file_lock(&args.dest, || {
+                fs::move_stream(&args.source, &args.dest, args.revision.as_deref())
+            })?;
+            let source = args.source.display().to_string();
+            let dest = args.dest.display().to_string();
+            let summary = match &note {
+                None => format!("moved {source} to {dest}"),
+                Some(_) => format!("copied {source} to {dest}; the source was NOT removed"),
+            };
+            let note_markdown = note.clone();
+            Ok(mutation_result(
+                args.format,
+                summary,
+                &args.dest,
+                &new_revision,
+                move || note_markdown,
+                move || {
+                    json!({
+                        "source": source,
+                        "dest": dest,
+                        "bytes": bytes,
+                        "source_removed": note.is_none(),
+                        "note": note,
                     })
                 },
             ))

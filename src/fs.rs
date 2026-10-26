@@ -287,6 +287,31 @@ pub fn copy_stream(
     }
 }
 
+/// [`copy_stream`] followed by removing `source` — the `mv` semantics a host
+/// without a shell or move tool needs. The removal runs only after the copy
+/// is verified (the rename landed, the bytes were hashed), so a failed move
+/// never loses data. When only the removal fails, the copy stands and the
+/// note says so: `dest` is already correct, and the honest report is
+/// "copied, the source remains" rather than an error that hides the copy.
+/// Returns the `dest` revision, the bytes moved, and that note — `None` when
+/// the source is gone.
+pub fn move_stream(
+    source: &Path,
+    dest: &Path,
+    expected_revision: Option<&str>,
+) -> Result<(String, u64, Option<String>), Error> {
+    let (revision, bytes) = copy_stream(source, dest, expected_revision)?;
+    let note = match fs::remove_file(source) {
+        Ok(()) => None,
+        Err(error) => Some(format!(
+            "the copy to {} succeeded but {} could not be removed: {error}",
+            dest.display(),
+            source.display()
+        )),
+    };
+    Ok((revision, bytes, note))
+}
+
 /// The copy itself: open the source, stream it into the temp file while
 /// hashing, then rename. `reported` is the caller's spelling of `dest`,
 /// used in errors. The source's permission bits are not propagated: `dest`

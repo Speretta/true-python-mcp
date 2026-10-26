@@ -125,7 +125,7 @@ fn copy_stream_roundtrips_bytes_and_revision() {
     let dir = temp_dir("stream");
     let source = dir.join("blob.bin");
     let dest = dir.join("copy.bin");
-    // Binary payload: stream_copy moves raw bytes, not UTF-8 text.
+    // Binary payload: copy_stream moves raw bytes, not UTF-8 text.
     let payload: Vec<u8> = (0_u32..4096).flat_map(|n| n.to_be_bytes()).collect();
     fs::write(&source, &payload).unwrap();
 
@@ -202,6 +202,81 @@ fn copy_stream_does_not_fabricate_missing_parents() {
         copy_stream(&source, &missing, None).unwrap_err().kind(),
         "io_error"
     );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn move_stream_relocates_the_source() {
+    let dir = temp_dir("move");
+    let source = dir.join("blob.bin");
+    let dest = dir.join("moved.bin");
+    let payload: Vec<u8> = (0_u32..4096).flat_map(|n| n.to_be_bytes()).collect();
+    fs::write(&source, &payload).unwrap();
+
+    let (revision, bytes, note) = move_stream(&source, &dest, None).unwrap();
+
+    assert_eq!(bytes, payload.len() as u64);
+    assert_eq!(revision, revision_of(&payload));
+    assert_eq!(fs::read(&dest).unwrap(), payload);
+    assert!(!source.exists(), "a move removes the source");
+    assert!(note.is_none(), "a clean move carries no note: {note:?}");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn move_stream_holds_the_revision_guard_when_given_one() {
+    let dir = temp_dir("move-guard");
+    let source = dir.join("blob.bin");
+    let dest = dir.join("moved.bin");
+    fs::write(&source, b"new bytes").unwrap();
+    fs::write(&dest, b"old bytes").unwrap();
+
+    // A stale revision refuses the move and leaves BOTH sides untouched: no
+    // copy landed and the source is still where it was.
+    let stale = revision_of(b"something else");
+    assert_eq!(
+        move_stream(&source, &dest, Some(&stale))
+            .unwrap_err()
+            .kind(),
+        "conflict"
+    );
+    assert_eq!(fs::read(&dest).unwrap(), b"old bytes");
+    assert!(source.exists(), "a refused move must not remove the source");
+
+    let current = revision_of(b"old bytes");
+    assert!(move_stream(&source, &dest, Some(&current)).is_ok());
+    assert_eq!(fs::read(&dest).unwrap(), b"new bytes");
+    assert!(!source.exists());
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A removal that fails must not turn the whole move into a lie: the copy
+/// stands, the source remains, and the note names what happened. Pinned on
+/// POSIX by making the source's directory read-only after the copy is in
+/// place (a read-only directory forbids unlink but not read).
+#[cfg(unix)]
+#[test]
+fn move_stream_says_so_when_only_the_removal_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("move-note");
+    let locked = dir.join("locked");
+    fs::create_dir(&locked).unwrap();
+    let source = locked.join("blob.bin");
+    let dest = dir.join("moved.bin");
+    fs::write(&source, b"payload").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let (revision, bytes, note) = move_stream(&source, &dest, None).unwrap();
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(bytes, 7);
+    assert_eq!(revision, revision_of(b"payload"));
+    assert_eq!(fs::read(&dest).unwrap(), b"payload", "the copy stands");
+    assert!(source.exists(), "the source could not be removed");
+    let note = note.expect("a failed removal must carry a note");
+    assert!(note.contains("could not be removed"), "{note}");
+    assert!(note.contains("blob.bin"), "{note}");
     fs::remove_dir_all(&dir).unwrap();
 }
 

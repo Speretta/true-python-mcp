@@ -43,11 +43,11 @@ fn default_tool_surface() {
 }
 
 #[test]
-fn file_tools_flag_adds_py_tools() {
+fn file_tools_flag_adds_file_tools() {
     let mut server = Server::start(&["--file-tools"]);
     let tools = server.list_tools();
-    assert_eq!(tools.len(), DEFAULT_TOOLS.len() + 4);
-    for name in ["py_read", "py_write", "py_edit", "stream_copy"] {
+    assert_eq!(tools.len(), DEFAULT_TOOLS.len() + 5);
+    for name in ["py_read", "py_write", "py_edit", "file_copy", "file_move"] {
         assert!(tools.contains(&name.to_string()), "missing {name}");
     }
 }
@@ -905,21 +905,21 @@ fn stream_path_source_into_cells_and_files() {
     );
 }
 
-/// `stream_copy` moves bytes source→dest through tpmcp (binary-safe, chunked,
+/// `file_copy` moves bytes source→dest through tpmcp (binary-safe, chunked,
 /// size-capped) and returns the dest revision.
 #[test]
-fn stream_copy_over_the_wire() {
-    let dir = temp_dir("stream-copy");
+fn file_copy_over_the_wire() {
+    let dir = temp_dir("file-copy");
     let mut server = Server::start(&["--file-tools"]);
 
-    // Binary source: stream_copy moves raw bytes, not just UTF-8 text.
+    // Binary source: file_copy moves raw bytes, not just UTF-8 text.
     let payload: Vec<u8> = (0_u8..=255).cycle().take(4096).collect();
     let source = dir.join("blob.bin");
     std::fs::write(&source, &payload).unwrap();
 
     let dest = dir.join("copy.bin");
     let (err, text, sc) = server.call(
-        "stream_copy",
+        "file_copy",
         json!({"source": source, "dest": dest, "format": "json"}),
     );
     assert!(!err, "{text}");
@@ -932,20 +932,21 @@ fn stream_copy_over_the_wire() {
     // (leaving it untouched), the current one copies through, and omitting
     // it overwrites unconditionally.
     let (err, _, sc) = server.call(
-        "stream_copy",
+        "file_copy",
         json!({"source": source, "dest": dest, "revision": "0000000000000000", "format": "json"}),
     );
     assert!(err, "a stale revision must be refused: {sc}");
     assert_eq!(std::fs::read(&dest).unwrap(), payload, "dest untouched");
     let (err, text, _) = server.call(
-        "stream_copy",
+        "file_copy",
         json!({"source": source, "dest": dest, "revision": current, "format": "json"}),
     );
     assert!(!err, "{text}");
+    assert!(source.exists(), "a copy keeps the source");
 
     // The markdown summary names both paths.
     let (err, text, _) = server.call(
-        "stream_copy",
+        "file_copy",
         json!({"source": source, "dest": dir.join("copy2.bin")}),
     );
     assert!(!err, "{text}");
@@ -961,8 +962,60 @@ fn stream_copy_over_the_wire() {
         file.set_len(33 * 1024 * 1024).unwrap();
     }
     let (err, _, sc) = server.call(
-        "stream_copy",
+        "file_copy",
         json!({"source": huge, "dest": dir.join("huge-copy.bin")}),
     );
     assert!(err && sc["error"] == "too_large", "{sc}");
+}
+
+/// `file_move` is `file_copy` plus source removal: the bytes land at `dest`
+/// and the source is gone. A refused move (stale revision) leaves both sides
+/// untouched; a clean move reports `source_removed: true`.
+#[test]
+fn file_move_over_the_wire() {
+    let dir = temp_dir("file-move");
+    let mut server = Server::start(&["--file-tools"]);
+
+    let payload: Vec<u8> = (0_u8..=255).cycle().take(4096).collect();
+    let source = dir.join("blob.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let dest = dir.join("moved.bin");
+
+    // A stale revision refuses the move and removes nothing.
+    std::fs::write(&dest, b"old bytes").unwrap();
+    let (err, _, sc) = server.call(
+        "file_move",
+        json!({"source": source, "dest": dest, "revision": "0000000000000000", "format": "json"}),
+    );
+    assert!(err, "a stale revision must be refused: {sc}");
+    assert!(source.exists(), "a refused move must keep the source");
+    assert_eq!(
+        std::fs::read(&dest).unwrap(),
+        b"old bytes",
+        "dest untouched"
+    );
+
+    // The clean move: bytes at dest, source gone, note absent.
+    let (err, text, sc) = server.call(
+        "file_move",
+        json!({"source": source, "dest": dest, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["bytes"], payload.len());
+    assert_eq!(std::fs::read(&dest).unwrap(), payload);
+    assert!(!source.exists(), "a move removes the source");
+    assert_eq!(sc["source_removed"], true, "{sc}");
+    assert!(sc["note"].is_null(), "a clean move carries no note: {sc}");
+
+    // The markdown summary says "moved" and names both paths.
+    std::fs::write(&source, b"again").unwrap();
+    let (err, text, _) = server.call(
+        "file_move",
+        json!({"source": source, "dest": dir.join("moved2.bin")}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("moved") && text.contains("blob.bin"),
+        "{text}"
+    );
 }

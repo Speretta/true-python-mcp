@@ -8,8 +8,8 @@ use tpmcp::server::Tpmcp;
 #[command(name = "tpmcp", version, about)]
 struct Cli {
     /// Also expose generic Python/text file tools (py_read, py_write,
-    /// py_edit, stream_copy). Off by default: coding hosts (opencode, Claude
-    /// Code, VS Code, Cursor) already provide native file tools.
+    /// py_edit, file_copy, file_move). Off by default: coding hosts (opencode,
+    /// Claude Code, VS Code, Cursor) already provide native file tools.
     #[arg(long)]
     file_tools: bool,
 }

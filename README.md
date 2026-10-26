@@ -30,7 +30,7 @@ It does two jobs:
 - Byte-exact edits: your diff shows only what you changed
 - Revision guard: stale writes are refused, not silently applied
 - ruff lint and format for any `.py`, not just notebooks
-- 16 tools, plus 3 for plain Python files with `--file-tools`
+- 16 tools, plus 5 file tools with `--file-tools` (`py_read`/`py_write`/`py_edit` for Python files, `file_copy`/`file_move` for any file)
 
 ## Memory footprint
 
@@ -93,8 +93,8 @@ and may change in any release.
 ```
 
 If your tool has no file tools of its own (like plain Claude Desktop), add
-`"args": ["--file-tools"]` to also get `py_read`, `py_write`, `py_edit`, and
-`stream_copy`.
+`"args": ["--file-tools"]` to also get `py_read`, `py_write`, `py_edit`,
+`file_copy`, and `file_move`.
 
 **3. Try it.** Ask your AI: *"Read the cells of demo.ipynb, then fix the typo
 in cell 2."* In a plain Python project: *"Lint main.py with ruff and apply the
@@ -123,7 +123,8 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `py_docs` | Resolve a library symbol (function/method/class/attribute) to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
 | `py_module_members` | List a module's public members with one-line signatures and docstrings. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). `py_write` can take `from_path` instead of `content`. |
-| `stream_copy` | Copy a file byte-for-byte through tpmcp by path, without round-tripping the content through the agent's context (only with `--file-tools`). Takes an optional `revision` to refuse clobbering anything but that exact `dest`; without one it overwrites unconditionally, like `cp`. |
+| `file_copy` | Copy a file byte-for-byte through tpmcp by path, without round-tripping the content through the agent's context (only with `--file-tools`) — the `cp` for hosts without a shell or copy tool. Use it to place a source file before streaming its content into a cell with `source_file`. Takes an optional `revision` to refuse clobbering anything but that exact `dest`; without one it overwrites unconditionally, like `cp`. |
+| `file_move` | The `mv` counterpart (only with `--file-tools`): the same verified copy, then the source is removed. The removal runs only after the copy is verified, so a failed move never loses bytes; if only the removal fails, the answer says so and `dest` stands. |
 
 Notebook outputs, execution counts, and metadata keep their values, and
 only the cell you edit changes. One boundary to know: a file in Jupyter's
@@ -140,9 +141,9 @@ A file can change while the AI is working on it. tpmcp keeps that safe:
 - If the file changed in between, the tool refuses the change and sends the
   new code. Then you read again and retry.
 
-One opt-in exception: `stream_copy` is a copy primitive, so without a
-`revision` it overwrites `dest` unconditionally (like `cp`) and is marked
-destructive. With one, it follows the same refusal rule as every other
+One opt-in exception: `file_copy` and `file_move` are copy primitives, so
+without a `revision` they overwrite `dest` unconditionally (like `cp`) and are
+marked destructive. With one, they follow the same refusal rule as every other
 write.
 
 Two tpmcp processes never overwrite each other: they take a cross-process
