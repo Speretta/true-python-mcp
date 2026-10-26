@@ -77,6 +77,14 @@ cargo build --release
 (`cargo install --path .` also works: it copies the binary into
 `~/.cargo/bin`.)
 
+Prebuilt binaries are on the [releases
+page](https://github.com/Speretta/true-python-mcp/releases). The Linux
+`gnu` builds link the glibc of the image they were built on; if your
+distro is older than that image and the binary refuses to start, use the
+`musl` build instead (fully static, runs anywhere), or build from source
+above. To read a binary's floor:
+`objdump -T tpmcp | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`.
+
 The binary is the product. The `tpmcp` library API behind it is internal
 and may change in any release.
 

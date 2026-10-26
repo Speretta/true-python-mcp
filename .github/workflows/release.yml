@@ -45,7 +45,7 @@ jobs:
   # ceiling one second before CI finished (the Windows job's cache steps made
   # the CI run 31 minutes), and the cancelled waiter cancelled the release.
   wait-for-ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -71,7 +71,7 @@ jobs:
 
   create-release:
     needs: wait-for-ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -105,15 +105,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: x86_64-unknown-linux-musl
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: aarch64-unknown-linux-gnu
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: aarch64-unknown-linux-musl
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: riscv64gc-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc

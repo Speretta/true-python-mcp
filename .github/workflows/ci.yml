@@ -21,7 +21,7 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # The only actions we use are first-party; they run on the runner's
       # Node 24 runtime.
@@ -64,7 +64,7 @@ jobs:
   # running it here closes the web-UI/--no-verify gap and lets the release's
   # wait-for-ci gate on it too (a new advisory blocks a release).
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - name: Install cargo-audit
@@ -74,7 +74,7 @@ jobs:
   # Cargo.toml declares rust-version; this job is the only place that
   # compiles with it. Check only: clippy and the suite ride the stable job.
   msrv:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/cargo-cache
