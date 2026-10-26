@@ -19,8 +19,7 @@ It does two jobs:
    file and changes only the bytes you asked it to change.
 2. **Lint and format any Python file.** ruff is compiled into the binary, so
    `ruff_check` and `ruff_format` work on every `.py`, `.pyi`, and `.ipynb`
-   in your project, not just notebooks. Nothing to install, nothing to
-   configure.
+   in your project. Nothing to install, nothing to configure.
 
 ## At a glance
 
@@ -34,7 +33,7 @@ It does two jobs:
 
 ## Memory footprint
 
-| Server | Idle RAM | After the full profile | Processes idle/after | Ready in | Image size |
+| Server | Idle RAM | After profile + docs | Processes idle/after | Ready in | Image size |
 |---|---|---|---|---|---|
 | [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | 1.6 MiB | 15.0 MiB | 1/1 | 0.1 s | 38 MB |
 | [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | 270.3 MiB | 334.4 MiB | 3/4 | 5.6 s | 549 MB |
@@ -47,7 +46,7 @@ It does two jobs:
 
 Measured 2026-10-26 by the [Bench workflow](.github/workflows/bench.yml) (Linux 6.17.0-1022-azure, docker 28.0.4): median of 3-3 runs per stack (normal mode), each stack in its own minimal Docker container on the same machine. Full method, per-component memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).
 
-_Idle RAM_ and _After the full profile_ are container cgroup totals, not process RSS — the cgroup figure excludes file-backed pages, so `ps` reports higher. tpmcp's profile additionally runs its docs lookups (`py_docs`, `py_module_members`), which the other stacks record as skips; the next refresh splits the memory column at those steps so the shared profile stays directly comparable. Both columns are listed in [COMPARISON.md](COMPARISON.md).
+_Idle RAM_ and _After profile + docs_ are container cgroup totals, not process RSS. The cgroup figure excludes file-backed pages, so `ps` reports higher. tpmcp's profile additionally runs its docs lookups (`py_docs`, `py_module_members`), which the other stacks record as skips; [COMPARISON.md](COMPARISON.md) splits its memory table at those steps so the shared profile stays directly comparable.
 
 ## See it work
 
@@ -123,7 +122,7 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `py_docs` | Resolve a library symbol (function/method/class/attribute) to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
 | `py_module_members` | List a module's public members with one-line signatures and docstrings. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). `py_write` can take `from_path` instead of `content`. |
-| `file_copy` | Copy a file byte-for-byte through tpmcp by path, without round-tripping the content through the agent's context (only with `--file-tools`) — the `cp` for hosts without a shell or copy tool. Use it to place a source file before streaming its content into a cell with `source_file`. Takes an optional `revision` to refuse clobbering anything but that exact `dest`; without one it overwrites unconditionally, like `cp`. |
+| `file_copy` | Copy a file byte-for-byte through tpmcp by path, without round-tripping the content through the agent's context (only with `--file-tools`): the `cp` for hosts without a shell or copy tool. Use it to place a source file before streaming its content into a cell with `source_file`. Takes an optional `revision` to refuse clobbering anything but that exact `dest`; without one it overwrites unconditionally, like `cp`. |
 | `file_move` | The `mv` counterpart (only with `--file-tools`): the same verified copy, then the source is removed. The removal runs only after the copy is verified, so a failed move never loses bytes; if only the removal fails, the answer says so and `dest` stands. |
 
 Notebook outputs, execution counts, and metadata keep their values, and
@@ -131,6 +130,19 @@ only the cell you edit changes. One boundary to know: a file in Jupyter's
 standard layout round-trips byte-for-byte. A file in an unusual layout
 (Windows line endings, two-space indent, exotic number spellings)
 normalizes once on the first tpmcp write; later writes are byte-identical.
+
+## Docs lookups
+
+Both docs tools resolve against your installed code and work offline. context7 is a remote doc-snippet search: a different category, useful for the opposite cases.
+
+| Approach | What you get | Offline | Latency |
+|---|---|---|---|
+| `py_docs` | exact signature, parameters, return type, docstring of one symbol, from your installed code | yes | not measured |
+| `py_module_members` | a module's whole surface, one line per member | yes | not measured |
+| context7 (`resolve-library-id` + `query-docs`) | doc snippets and code examples from a web docs index | no: network round-trips, an API key is recommended for higher rate limits | not measured |
+| reading the source yourself | the exact source bytes, with no summary | yes | not measured |
+
+Latency cells are generated by the [Bench workflow](.github/workflows/bench.yml) from the same runs as the memory table (cold and warm for `py_docs`; the two remote calls are measured separately). A cell that reads *not measured* means the current batch carries no data for it; [COMPARISON.md](COMPARISON.md) carries the measured numbers and the full method. Use context7 for usage examples and for libraries you do not have installed; use `py_docs` for the exact API of the code in front of you.
 
 ## Safe editing with revisions
 

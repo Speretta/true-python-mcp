@@ -89,6 +89,14 @@ style audit). A change that violates one should say why.
     format-specific keys of `Cell.extra` are read through typed accessors
     owned by the model (`Cell::marimo_kind`), never re-spelled in
     renderers. Readability rewrites must be codegen-neutral or cheaper.
+11. **Docs prose: no em-dashes, no hand-typed numbers.** Split a sentence
+    with a period, colon, comma, or parentheses instead. The em-dash `—`
+    survives only as the table glyph for "no value", defined in the legend
+    of the table that uses it, and inside verbatim quotations from other
+    projects. Every measured number in `README.md`/`COMPARISON.md` comes
+    from a `bench/render.py` string, never from typed prose. Say a caveat
+    once per claim; repeating it reads as filler. Avoid set phrases
+    ("apples to apples", "not just X, but Y").
 
 ## Commit messages
 

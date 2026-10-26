@@ -260,20 +260,22 @@ def print_summary(dirpath):
                       file=sys.stderr)
 
 
-def context7_block(dirpath):
-    """Render the remote context7 latency block, or "" when not measured.
+def load_context7(dirpath):
+    """Aggregate the remote context7 runs into one dict, or None when the
+    context7 measurement is absent.
 
     context7_measure.py writes `results/context7/runN/context7.json` with no
-    summary.json, so load() skips it and it never joins the memory tables.
-    Those files are read directly here; per-call latencies are medianed across
-    runs and labeled REMOTE (a network round-trip, unlike every local stack).
+    summary.json, so load() skips it and those files never join the memory
+    tables; they are read directly here. Per-call latencies are medianed
+    across runs and labeled REMOTE (a network round-trip, unlike every local
+    stack).
     """
     root = Path(dirpath) / "context7"
     if not root.is_dir():
-        return ""
+        return None
     files = sorted(root.glob("run*/context7.json"))
     if not files:
-        return ""
+        return None
     resolve_cold, resolve_ms, query_cold, query_ms = [], [], [], []
     endpoint = mode = date = None
     resolve_args = query_args = None
@@ -292,38 +294,187 @@ def context7_block(dirpath):
         if q.get("cold_ms") is not None:
             query_cold.append(q["cold_ms"])
         query_ms.extend(q.get("latencies_ms") or [])
-    rmed, qmed = median(resolve_ms), median(query_ms)
-    rcold, qcold = median(resolve_cold), median(query_cold)
-    rl = (resolve_args or {}).get("libraryName", "Python")
-    rq = (resolve_args or {}).get("query", "json.dumps")
-    qq = (query_args or {}).get("query", "json.dumps")
+    return {
+        "runs": len(files),
+        "endpoint": endpoint,
+        "mode": mode,
+        "date": date,
+        "resolve_args": resolve_args or {},
+        "query_args": query_args or {},
+        "resolve_median": median(resolve_ms),
+        "resolve_cold": median(resolve_cold),
+        "query_median": median(query_ms),
+        "query_cold": median(query_cold),
+    }
+
+
+def pair_latency(cold, warm):
+    """`<cold> cold, <warm> warm`, or "not measured" when neither value exists.
+
+    A missing measurement is never estimated: it renders as the literal
+    "not measured" so the table cannot pass a guess off as a number.
+    """
+    if cold is None and warm is None:
+        return "not measured"
+    parts = []
+    if cold is not None:
+        parts.append(f"{ms_cell(cold)} cold")
+    if warm is not None:
+        parts.append(f"{ms_cell(warm)} warm")
+    return ", ".join(parts)
+
+
+def docs_comparison_lines(results, ctx7):
+    """The docs comparison table: tpmcp's local docs lookups, context7's
+    remote doc search, and the "read the source yourself" row.
+
+    Every latency cell is rendered from data (the docs ops in the stack
+    results, the context7 runs); the last row has no measurement because the
+    harness has no driver step for it, and says so.
+    """
+    tpmcp = results.get("tpmcp", [])
+    docs_latency = pair_latency(op_latencies(tpmcp, "docs-cold"),
+                                op_latencies(tpmcp, "docs-warm"))
+    members = op_latencies(tpmcp, "docs-members")
+    members_latency = ms_cell(members) if members is not None else "not measured"
+    resolve_latency = query_latency = "not measured"
+    if ctx7 is not None:
+        if ctx7["resolve_median"] is not None:
+            resolve_latency = (f"{ms_cell(ctx7['resolve_median'])} median / "
+                               f"{ms_cell(ctx7['resolve_cold'])} first call")
+        if ctx7["query_median"] is not None:
+            query_latency = (f"{ms_cell(ctx7['query_median'])} median / "
+                             f"{ms_cell(ctx7['query_cold'])} first call")
+    rows = [
+        ("tpmcp `py_docs` (LOCAL)",
+         "a dotted symbol (`json.dumps`)",
+         "kind, rendered signature, structured parameters, return type, "
+         "docstring, and the resolution path hop by hop (unique, overloaded, "
+         "or ambiguous)",
+         "the environment named by `python`, or the auto-discovered one: "
+         "typeshed stubs or installed source, in-process via the compiled-in ty",
+         docs_latency,
+         "none: no interpreter, no key, no network",
+         "you need the exact API of the code you actually have installed: "
+         "mid-edit, offline, in CI, or for a pinned old version"),
+        ("tpmcp `py_module_members` (LOCAL)",
+         "a module name (`json`)",
+         "the module surface: every member's kind, one-line signature, "
+         "one-line docstring; ordered public, dunder, underscore, then "
+         "alphabetical; capped with a `truncated` flag on huge packages",
+         "the same local environment; shares the warm discovery cache with "
+         "`py_docs`",
+         members_latency,
+         "none",
+         "\"what does this module expose?\" in one call, instead of reading "
+         "the file"),
+        ("context7 `resolve-library-id` (REMOTE)",
+         "a library name and the question (libraryName `Python`, query "
+         "`json.dumps`)",
+         "a Context7 library ID plus ranked candidates",
+         "Context7's cloud docs index (community-contributed)",
+         resolve_latency,
+         "yes: one HTTP round-trip per call; `Authorization: Bearer <key>`, "
+         "which upstream recommends for higher rate limits",
+         "the library is not installed locally, or you do not know its exact "
+         "name"),
+        ("context7 `query-docs` (REMOTE)",
+         "the library ID and the question (query `json.dumps`; optional "
+         "`language`)",
+         "ranked doc **snippets** with code examples from the library's web "
+         "documentation",
+         "the same cloud index; its own README disclaims accuracy and "
+         "completeness",
+         query_latency,
+         "same as above",
+         "usage examples, setup and config guides, cross-language docs, or "
+         "docs for a version newer than the one installed"),
+        ("Reading the installed source yourself (NOT A TOOL: the agent's own "
+         "file read)",
+         "file paths under site-packages",
+         "the exact source bytes; the agent extracts whatever it needs",
+         "the installed files themselves",
+         "not measured (no driver step exists; see Methodology)",
+         "none",
+         "tpmcp's static resolver cannot see the symbol (runtime-defined "
+         "names, lazy submodule loaders such as `andes.rl`), or you need "
+         "implementation internals rather than the API surface"),
+    ]
+    lines = ["#### Docs lookups: local resolution vs remote doc search vs "
+             "reading the source", ""]
+    lines.append("| Approach | You ask it for | You get back | Where the "
+                 "answer comes from | Latency (median per call) | Network / "
+                 "API key | When it wins |")
+    lines.append("|---|---|---|---|---|---|---|")
+    for row in rows:
+        lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
+    lines.append(
+        "Same question on both sides: symbol `json.dumps`, module `json`, "
+        "query `json.dumps`. LOCAL rows run in-process against the environment "
+        "named by `python` (auto-discovered when omitted); REMOTE rows go to "
+        "the endpoint above. The tpmcp latency cells are the medians rendered "
+        "from the docs ops in the latency table above (`docs-cold`, "
+        "`docs-warm`, `docs-members`); the context7 cells come from "
+        "`bench/results/context7/runN/context7.json`. A cell reading \"not "
+        "measured\" has no data behind it, in this batch or at all. Limits on "
+        "the local rows: resolution is static, so the first segment must be "
+        "importable and every later segment must have a definition ty can "
+        "see. Names created at runtime (module `__getattr__`, lazy submodule "
+        "loaders such as `andes.rl`) return a `did not resolve` error naming "
+        "the failing segment, and `py_module_members` lists such members as "
+        "`other` with a note instead of hiding them.")
+    return lines
+
+
+def context7_block(dirpath, results):
+    """Render the remote context7 latency block plus the docs comparison
+    table, or "" when context7 was not measured.
+
+    The comparison table is emitted here because this is where the remote
+    half of the comparison lives; its local half comes from `results` (the
+    docs ops of the tpmcp runs) so every latency in it is generated, never
+    typed.
+    """
+    ctx7 = load_context7(dirpath)
+    if ctx7 is None:
+        return ""
+    endpoint = ctx7["endpoint"]
+    rl = ctx7["resolve_args"].get("libraryName", "Python")
+    rq = ctx7["resolve_args"].get("query", "json.dumps")
+    qq = ctx7["query_args"].get("query", "json.dumps")
     lines = []
-    lines.append("### Context7 (remote) — doc-snippet search, not symbol resolution")
+    lines.append(
+        "### Context7 (remote): doc-snippet search, not symbol resolution")
     lines.append("")
     lines.append(
         f"Context7 is a **remote** MCP server ([context7.com](https://context7.com), "
-        f"streamable HTTP at `{endpoint}`, `Authorization: Bearer <key>`) — a different "
-        "category from every local stack above. `resolve-library-id` and `query-docs` "
-        "search Context7's cloud documentation index and return doc **snippets**; they "
-        "do not resolve symbols against a local environment, and every call is a "
-        "network round-trip. tpmcp's `py_docs`/`py_module_members` in the latency table "
-        "above are local and in-process (no interpreter, no API key, no network), so "
-        "the two are not apples-to-apples — the rows below are labeled REMOTE to keep "
-        "that honest.")
+        f"streamable HTTP at `{endpoint}`, `Authorization: Bearer <key>`). It is a "
+        "different category from every local stack above. `resolve-library-id` and "
+        "`query-docs` search Context7's cloud documentation index and return doc "
+        "**snippets**; they do not resolve symbols against a local environment. "
+        "tpmcp's `py_docs`/`py_module_members` in the latency table above are local "
+        "and in-process: no interpreter, no API key, no network. The two are not "
+        "directly comparable, so the rows below are labeled REMOTE. Upstream "
+        "recommends an API key for higher rate limits (its README).")
     lines.append("")
     lines.append("| Tool (REMOTE, network round-trip) | Median | First call |")
     lines.append("|---|---|---|")
     lines.append(f"| `resolve-library-id` (libraryName `{rl}`, query `{rq}`) "
-                 f"| {ms_cell(rmed)} | {ms_cell(rcold)} |")
+                 f"| {ms_cell(ctx7['resolve_median'])} "
+                 f"| {ms_cell(ctx7['resolve_cold'])} |")
     lines.append(f"| `query-docs` (query `{qq}`) "
-                 f"| {ms_cell(qmed)} | {ms_cell(qcold)} |")
+                 f"| {ms_cell(ctx7['query_median'])} "
+                 f"| {ms_cell(ctx7['query_cold'])} |")
     lines.append("")
     lines.append(
-        f"Measured {date[:10] if date else '?'} ({mode} mode), median of {len(files)} "
-        "run(s) x the per-call samples. The median covers repeat calls on an "
-        "established session; \"first call\" is the first call in the session, so it "
-        "can include the server-side cold path and connection reuse. Every call is a "
-        "network round-trip.")
+        f"Measured {(ctx7['date'] or '?')[:10]} ({ctx7['mode']} mode), median of "
+        f"{ctx7['runs']} run(s) x the per-call samples. The median covers repeat "
+        "calls on an established session; \"first call\" is the first call in the "
+        "session, so it can include the server-side cold path and connection "
+        "reuse. Every call is a network round-trip.")
+    lines.append("")
+    lines.extend(docs_comparison_lines(results, ctx7))
     lines.append("")
     return "\n".join(lines)
 
@@ -377,8 +528,7 @@ def measured_section(results, ctx7=""):
                  "where supported, delete, re-read, lint, and both conflict "
                  "scenarios where applicable), then a quiesce window. The "
                  "two After columns split it at the docs lookups: `py_docs` "
-                 "(cold, then warm) and `py_module_members`, the "
-                 "context7-style symbol and docstring steps. Only tpmcp has "
+                 "(cold, then warm) and `py_module_members`. Only tpmcp has "
                  "them; every other stack records them as explicit skips and "
                  "its two columns land together. Cgroup memory is the "
                  "headline metric: it counts every "
@@ -560,7 +710,7 @@ def render(dirpath, outfile):
     if not results:
         print("no results found - run bench/measure.sh first", file=sys.stderr)
         return 1
-    ctx7 = context7_block(dirpath)
+    ctx7 = context7_block(dirpath, results)
     doc = static.replace(PLACEHOLDER, measured_section(results, ctx7))
     Path(outfile).write_text(doc)
     print(f"{outfile} generated from {sum(len(v) for v in results.values())} "
@@ -569,12 +719,13 @@ def render(dirpath, outfile):
 
 
 README_HEADING = "## Memory footprint"
+DOCS_HEADING = "## Docs lookups"
 
 
 def build_readme_snippet(results):
     """The README-sized table: heading-anchored, fully generated."""
     present = [s for s in STACK_ORDER if s in results]
-    lines = ["| Server | Idle RAM | After the full profile | Processes "
+    lines = ["| Server | Idle RAM | After profile + docs | Processes "
              "idle/after | Ready in | Image size |",
              "|---|---|---|---|---|---|"]
     for stack in present:
@@ -606,37 +757,103 @@ def build_readme_snippet(results):
         f"memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).")
     lines.append("")
     lines.append(
-        "_Idle RAM_ and _After the full profile_ are container cgroup totals, "
-        "not process RSS — the cgroup figure excludes file-backed pages, so "
-        "`ps` reports higher. Both are listed in [COMPARISON.md](COMPARISON.md).")
+        "_Idle RAM_ and _After profile + docs_ are container cgroup totals, "
+        "not process RSS. The cgroup figure excludes file-backed pages, so "
+        "`ps` reports higher. tpmcp's profile additionally runs its docs "
+        "lookups (`py_docs`, `py_module_members`), which the other stacks "
+        "record as skips; [COMPARISON.md](COMPARISON.md) splits its memory "
+        "table at those steps so the shared profile stays directly "
+        "comparable.")
     return "\n".join(lines)
 
 
+def build_docs_snippet(results, dirpath):
+    """The README docs-lookup table: heading-anchored like the memory
+    section, latency cells filled from the same runs (the docs ops of the
+    tpmcp runs, the context7 runs for the remote rows). A cell without data
+    behind it reads "not measured"; no cell is ever typed by hand."""
+    tpmcp = results.get("tpmcp", [])
+    docs_cold = op_latencies(tpmcp, "docs-cold")
+    docs_warm = op_latencies(tpmcp, "docs-warm")
+    members = op_latencies(tpmcp, "docs-members")
+    ctx7 = load_context7(dirpath)
+    resolve_median = ctx7["resolve_median"] if ctx7 else None
+    query_median = ctx7["query_median"] if ctx7 else None
+    members_latency = ms_cell(members) if members is not None else "not measured"
+    remote_latency = "not measured"
+    if resolve_median is not None and query_median is not None:
+        remote_latency = (f"{ms_cell(resolve_median)} resolve, "
+                          f"{ms_cell(query_median)} query")
+    lines = ["Both docs tools resolve against your installed code and work "
+             "offline. context7 is a remote doc-snippet search: a different "
+             "category, useful for the opposite cases.", "",
+             "| Approach | What you get | Offline | Latency |",
+             "|---|---|---|---|",
+             "| `py_docs` | exact signature, parameters, return type, "
+             "docstring of one symbol, from your installed code | yes | "
+             f"{pair_latency(docs_cold, docs_warm)} |",
+             "| `py_module_members` | a module's whole surface, one line per "
+             f"member | yes | {members_latency} |",
+             "| context7 (`resolve-library-id` + `query-docs`) | doc snippets "
+             "and code examples from a web docs index | no: network "
+             "round-trips, an API key is recommended for higher rate limits "
+             f"| {remote_latency} |",
+             "| reading the source yourself | the exact source bytes, with no "
+             "summary | yes | not measured |",
+             ""]
+    lines.append(
+        "Latency cells are generated by the [Bench workflow]"
+        "(.github/workflows/bench.yml) from the same runs as the memory table "
+        "(cold and warm for `py_docs`; the two remote calls are measured "
+        "separately). A cell that reads *not measured* means the current "
+        "batch carries no data for it; [COMPARISON.md](COMPARISON.md) carries "
+        "the measured numbers and the full method. Use context7 for usage "
+        "examples and for libraries you do not have installed; use `py_docs` "
+        "for the exact API of the code in front of you.")
+    return "\n".join(lines)
+
+
+def replace_section(text, heading, snippet):
+    """Replace the body between `heading` and the next level-2 heading with
+    `snippet`, or None when the heading is missing. The heading is the
+    anchor: no HTML markers live in the README."""
+    start = text.find(heading + "\n")
+    if start == -1:
+        return None
+    body_start = start + len(heading) + 1
+    nxt = text.find("\n## ", body_start)
+    end = (nxt + 1) if nxt != -1 else len(text)
+    return text[:body_start] + "\n" + snippet + "\n\n" + text[end:]
+
+
 def update_readme(dirpath, readme_path):
-    """Replace everything between the Memory-footprint heading and the next
-    level-2 heading with the generated table. The heading is the anchor -
-    no HTML markers live in the README. Missing heading = loud failure."""
+    """Regenerate both generated README sections: the Memory-footprint table
+    and the Docs lookups table. Missing headings are a loud failure."""
     results = load(dirpath)
     if not results:
         print("no results found - run bench/measure.sh first", file=sys.stderr)
         return 1
     path = Path(readme_path)
     text = path.read_text()
-    start = text.find(README_HEADING + "\n")
-    if start == -1:
-        print(f"heading not found in {readme_path}: {README_HEADING!r}",
-              file=sys.stderr)
-        return 1
-    body_start = start + len(README_HEADING) + 1
-    nxt = text.find("\n## ", body_start)
-    end = (nxt + 1) if nxt != -1 else len(text)
-    snippet = build_readme_snippet(results)
-    new_text = text[:body_start] + "\n" + snippet + "\n\n" + text[end:]
-    if new_text == text:
-        print(f"{readme_path}: Memory footprint section already up to date")
+    new_text = text
+    touched = []
+    for heading, snippet in ((README_HEADING, build_readme_snippet(results)),
+                             (DOCS_HEADING,
+                              build_docs_snippet(results, dirpath))):
+        replaced = replace_section(new_text, heading, snippet)
+        if replaced is None:
+            print(f"heading not found in {readme_path}: {heading!r}",
+                  file=sys.stderr)
+            return 1
+        if replaced != new_text:
+            touched.append(heading)
+        new_text = replaced
+    if not touched:
+        print(f"{readme_path}: generated sections already up to date")
         return 0
     path.write_text(new_text)
-    print(f"{readme_path}: Memory footprint section updated")
+    print(f"{readme_path}: sections updated: "
+          + ", ".join(heading.removeprefix("## ") for heading in touched))
     return 0
 
 

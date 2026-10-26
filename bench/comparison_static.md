@@ -22,7 +22,7 @@ The rules this document holds itself to: every version is pinned with `==`; ever
 - cursor-notebook-mcp applies the stale edit over the external change: in our runs it was the only stack that lost the external edit. datalayer returns success while the file on disk keeps the external edit; its in-memory model and the disk silently diverge, a distinct failure mode.
 - tpmcp edits are byte-exact. Change one line and the git diff shows one line; outputs, execution counts, and metadata stay untouched.
 - ruff is compiled into the tpmcp binary and lints any Python file by path. mcp-server-analyzer offers ruff too, as a pip-bundled subprocess that takes code strings and never touches your files. That architecture contrast is why this benchmark includes it. None of the other stacks bundles a file linter (marimo's editor bundles Ruff internally, but that is an editor feature, not an MCP tool for your files).
-- tpmcp also resolves Python symbols and module members locally: `py_docs` (`json.dumps` → signature, parameters, docstring) and `py_module_members` (`json` → the module surface), with the compiled-in ty and no interpreter. context7 does something different and complementary: a hosted `resolve-library-id` + `query-docs` that return doc snippets by query over the network. We measure tpmcp's lookups cold vs warm and label context7's as remote so the distinction stays honest.
+- tpmcp also resolves Python symbols and module members locally: `py_docs` (`json.dumps` → signature, parameters, docstring) and `py_module_members` (`json` → the module surface), with the compiled-in ty and no interpreter. context7 does something different and complementary: a hosted `resolve-library-id` + `query-docs` that return doc snippets by query over the network. We measure tpmcp's lookups cold vs warm and label context7's as remote.
 - tpmcp handles Jupyter `.ipynb` and marimo `.py` offline, as plain files. marimo's own MCP server is experimental, HTTP-only, and read-only: it cannot edit notebooks over MCP at all.
 - tpmcp never runs code, by design: no kernel, no background process, nothing to fight your editor. datalayer and block drive live Jupyter kernels; mcp-run-python executes inside Pyodide (WASM) in Deno; yzfly's interpreter runs submitted code as a host subprocess with no sandbox.
 - Three projects (cursor-notebook-mcp, block/mcp-jupyter, mcp-python-interpreter) needed manual dependency pins before they would even start with today's resolver, and the official mcp-server-analyzer image errors on every analysis tool until it gets a writable workdir. Every such finding is dated, quoted, and reproducible via `bench/`; see [Startup findings](#startup-findings-all-disclosed-all-reproducible).
@@ -52,7 +52,7 @@ This section describes exactly what the harness in [bench/](bench) does. Nothing
 - **Code analysis**: [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer): code strings in, findings out; never touches files.
 - **Code execution**: [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python) (retired upstream), [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter): run submitted code; no notebook awareness.
 
-A sixth category (**remote documentation retrieval**) is surveyed separately for the docs capability: [context7](https://context7.com) is a hosted MCP server that returns doc snippets for a library by query, not a notebook server, so it is compared only on the docs lookups (see [Feature comparison](#feature-comparison) and the Context7 block under Measured results).
+A sixth category (**remote documentation retrieval**) is surveyed separately for the docs capability: [context7](https://context7.com) is a hosted MCP server that returns doc snippets for a library by query, not a notebook server, so it is compared only on the docs lookups (see [Feature comparison](#feature-comparison) and the docs comparison table in the Context7 block under Measured results).
 
 ### One minimal Docker image per stack
 
@@ -158,7 +158,7 @@ Every run directory under `bench/results/<stack>/run<N>/` contains the full audi
 - `meta.json`: image size in bytes, image id (for analyzer, the pulled GHCR digest, the real pin), run mode (fast/normal), UTC timestamp, Docker version, host kernel, host load average, available host memory, driver and sampler exit codes.
 - `ops.json`: every MCP request and every response verbatim, including failed argument variants, skipped steps with their reasons, and the conflict scenarios with their verdicts and the file state they left behind.
 - `procs_idle.txt` and `procs_ops.txt`: the process trees that were counted, with PID, PPID, RSS, and the full command line of each process.
-- `samples_raw.json`: every individual sample, not just the medians.
+- `samples_raw.json`: every individual sample behind the medians.
 - `driver.log`, `sampler.log`, and the server's own stderr: the consoles of all three processes.
 
 The injected section of this document is built only from these files. If a number appears in the table, the run directory behind it says exactly how it came about.
@@ -173,7 +173,7 @@ The injected section of this document is built only from these files. If a numbe
 - the **latency matrix**: median per call for every profile operation, ready time included;
 - the **conflict verdict table**: 0 s / 10 s verdicts and whether the external edit survived;
 - the **operation outcomes** per stack;
-- the **Context7 (remote) latency block**: only when a context7 measurement is present;
+- the **Context7 (remote) latency block** and the docs comparison table: only when a context7 measurement is present;
 - the **raw process audit**: the captured process lists verbatim.
 
 ### Pinned versions
@@ -331,7 +331,7 @@ Execution in session 'default' (inline mode):
 
 The snippet prints nothing, and the response carries no return-value section in this mode.
 
-**context7** ([upstash/context7](https://github.com/upstash/context7), 63,439★, MIT, pushed 2026-10-21) is surveyed here as a **distinct category** (remote documentation retrieval), not a notebook editor or executor. It exposes two MCP tools, `resolve-library-id` and `query-docs`, which search Context7's cloud documentation index and return doc **snippets** for a library/framework, cross-language. It is a **remote** MCP server: streamable HTTP at `https://mcp.context7.com/mcp`, authenticated with `Authorization: Bearer <API key>` (the same server also runs locally over stdio via `npx @upstash/context7-mcp`). This is **not** what tpmcp does: tpmcp's `py_docs`/`py_module_members` resolve a dotted Python symbol against a local environment, in-process, with no interpreter, no API key, and no network, while context7 returns documentation snippets matched by query, over the network, and needs an API key. The two are complementary, and this document keeps that difference explicit rather than pretending one substitutes for the other.
+**context7** ([upstash/context7](https://github.com/upstash/context7), 63,439★, MIT, pushed 2026-10-21) is surveyed here as a **distinct category** (remote documentation retrieval), not a notebook editor or executor. It exposes two MCP tools, `resolve-library-id` and `query-docs`, which search Context7's cloud documentation index and return doc **snippets** for a library/framework, cross-language. It is a **remote** MCP server: streamable HTTP at `https://mcp.context7.com/mcp`, authenticated with `Authorization: Bearer <API key>`, which upstream's README recommends for higher rate limits (checked 2026-10-26); the same server also runs locally over stdio via `npx @upstash/context7-mcp`. This is **not** what tpmcp does: tpmcp's `py_docs`/`py_module_members` resolve a dotted Python symbol against a local environment, in-process, with no interpreter, no API key, and no network, while context7 returns documentation snippets matched by query, over the network. The two are complementary.
 
 ## Startup findings (all disclosed, all reproducible)
 
@@ -384,7 +384,7 @@ Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (th
 | [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | never writes files: nothing to guard | never | yes: ruff/ty/vulture bundled as pip deps; Biome tools need external Node.js 22+ | no | no: no notebook awareness | no | no: takes code strings, not files | no: never touches user files | stdio | MIT | 2026-08-30 (checked 2026-10-16) |
 | [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | n/a: execution-only, writes no files | yes: Pyodide (CPython→WASM) inside Deno | no | no | no | no | no | no | stdio (streamable-HTTP modes exist) | MIT | archived: final release 0.0.22, 2025-12-11 |
 | [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | none advertised: file tools exist, no notebook awareness | yes: host subprocess in the selected environment, no sandbox | no | no | no (generic `read_file`/`write_file`, no notebook structure) | no | runs `.py` files; reads/writes them as generic files | generic file writes only | stdio | **NOASSERTION** (GitHub license field) | 2026-07-02 (checked 2026-10-16) |
-| [context7](https://context7.com) | remote docs retrieval (HTTP) | n/a: read-only doc search | no | no | yes: `resolve-library-id` + `query-docs`, doc-snippet search over its cloud index, cross-language; NOT local symbol resolution | no | no | no | no: remote API, needs an API key | streamable HTTP (`https://mcp.context7.com/mcp`; stdio via npx `@upstash/context7-mcp`) | MIT | active: 63,439★, pushed 2026-10-21 |
+| [context7](https://context7.com) | remote docs retrieval (HTTP) | n/a: read-only doc search | no | no | yes: `resolve-library-id` + `query-docs`, doc-snippet search over its cloud index, cross-language; NOT local symbol resolution | no | no | no | no: remote API; an API key is recommended for higher rate limits (checked 2026-10-26) | streamable HTTP (`https://mcp.context7.com/mcp`; stdio via npx `@upstash/context7-mcp`) | MIT | active: 63,439★, pushed 2026-10-21 |
 
 ## Projects we looked at and left out
 
