@@ -291,9 +291,7 @@ mod tests {
     fn extract_names_the_state_it_found() {
         let dir = std::env::temp_dir().join(format!("tpmcp-enrich-tests-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let probe = |name: &str| {
-            SystemPathBuf::from(dir.join(name).to_string_lossy().into_owned())
-        };
+        let probe = |name: &str| SystemPathBuf::from(dir.join(name).to_string_lossy().into_owned());
 
         std::fs::write(
             dir.join("readable.py"),
