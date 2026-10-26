@@ -113,7 +113,7 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 
 | Tool | What it does |
 | --- | --- |
-| `notebook_read` | Shows the cells of a notebook. Can list them as an outline, search their text, and attach validation and lint findings. |
+| `notebook_read` | Shows the cells of a notebook. Can list them as an outline, search their text, and attach validation and lint findings. A file that is not a notebook (a `.md` export, a corrupt `.ipynb`) comes back as raw numbered text under a fallback marker instead of an error. |
 | `notebook_create` | Creates a new notebook (`.ipynb` or marimo `.py`), or converts an existing one (`from_path`; `.md` exports to markdown). |
 | `cell_edit` | Replaces a piece of text inside one cell. |
 | `cell_set_source` | Replaces a whole cell, or a line range in it. |

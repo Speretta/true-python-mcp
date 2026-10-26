@@ -136,7 +136,10 @@ impl Tpmcp {
                        markdown or JSON, with optional outline, content search and diagnostics \
                        (see the detail, query and diagnostics parameters). Returns the file \
                        revision required by all mutating tools. Never read notebooks as raw JSON \
-                       or raw Python; use this tool. On large notebooks prefer detail=outline or \
+                       or raw Python; use this tool. A file that is not a notebook (a .md export, \
+                       a corrupt .ipynb, any readable text) comes back as raw numbered lines \
+                       under an explicit fallback marker — there start/limit page through lines \
+                       and query filters them. On large notebooks prefer detail=outline or \
                        query over reading every cell.",
         annotations(
             read_only_hint = true,
@@ -150,7 +153,15 @@ impl Tpmcp {
         Parameters(args): Parameters<NotebookReadArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
-            let (snapshot, notebook) = read_notebook(&args.path)?;
+            // A file that is not a notebook is not a read failure: `.md`
+            // exports and corrupt `.ipynb` files come back as raw text under
+            // an explicit fallback marker (see `read::fallback`), because a
+            // caller without file tools otherwise cannot see them at all.
+            let snapshot = fs::read(&args.path)?;
+            let notebook = match notebook::open(&snapshot.content) {
+                Ok(notebook) => notebook,
+                Err(reason) => return read::fallback(&args, &snapshot, &reason),
+            };
             let fs::Snapshot { content, revision } = snapshot;
             let path = args.path.display().to_string();
             let found = search_matches(&args, &notebook)?;

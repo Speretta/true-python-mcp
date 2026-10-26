@@ -1057,3 +1057,72 @@ fn file_delete_over_the_wire() {
     let (err, _, sc) = server.call("file_delete", json!({"path": path}));
     assert!(err && sc["error"] == "not_found", "{sc}");
 }
+
+/// A file that is not a notebook is not a read failure: it comes back as raw
+/// numbered lines under an explicit fallback marker, with the revision and
+/// an honest note about what does not apply. This is how a caller without
+/// file tools verifies a rendered .md export.
+#[test]
+fn notebook_read_falls_back_to_raw_text() {
+    let dir = temp_dir("read-fallback");
+    let mut server = Server::start(&[]);
+    let path = dir.join("notes.md");
+    std::fs::write(&path, "# C1\nfirst line\nsecond line\n").unwrap();
+
+    let (err, text, sc) = server.call("notebook_read", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    assert_eq!(sc["fallback"], true, "{sc}");
+    assert_eq!(sc["revision"].as_str().unwrap().len(), 16, "{sc}");
+    assert!(
+        sc["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not a recognized notebook"),
+        "{sc}"
+    );
+    assert_eq!(sc["total_lines"], 3, "{sc}");
+    assert_eq!(sc["lines"][0]["text"], "# C1", "{sc}");
+    assert_eq!(sc["lines"][0]["line"], 1, "{sc}");
+    let note = sc["note"].as_str().unwrap();
+    assert!(note.contains("not notebook cells"), "{note}");
+
+    // Markdown carries the same disclosure and numbered lines.
+    let (err, text, _) = server.call("notebook_read", json!({"path": path}));
+    assert!(!err, "{text}");
+    assert!(text.contains("fallback: raw text"), "{text}");
+    assert!(text.contains("1: # C1"), "{text}");
+}
+
+/// In fallback mode query filters lines (case-insensitive substring, the
+/// cell-search semantics) and start/limit page through the matches.
+#[test]
+fn notebook_read_fallback_query_pages_lines() {
+    let dir = temp_dir("read-fallback-query");
+    let mut server = Server::start(&[]);
+    let path = dir.join("big.txt");
+    let body: String = (1..=10)
+        .map(|n| format!("line {n} needle {}\n", n % 2))
+        .collect();
+    std::fs::write(&path, body).unwrap();
+
+    let (err, text, sc) = server.call(
+        "notebook_read",
+        json!({"path": path, "query": "NEEDLE 1", "limit": 2, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["matched_lines"], 5, "five lines carry 'needle 1': {sc}");
+    assert_eq!(
+        sc["lines"].as_array().unwrap().len(),
+        2,
+        "limit pages: {sc}"
+    );
+    assert_eq!(sc["truncated"], true, "{sc}");
+
+    // A corrupt .ipynb falls back too, with the parse error as the reason.
+    let broken = dir.join("broken.ipynb");
+    std::fs::write(&broken, "{not json").unwrap();
+    let (err, text, sc) = server.call("notebook_read", json!({"path": broken, "format": "json"}));
+    assert!(!err, "{text}");
+    assert_eq!(sc["fallback"], true, "{sc}");
+    assert!(sc["reason"].as_str().unwrap().len() > 10, "{sc}");
+}
