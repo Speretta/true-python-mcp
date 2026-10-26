@@ -187,13 +187,17 @@ impl TyDb {
             virtual_source: None,
         };
         let program_settings = discover_settings(src_root, python)?;
+        // Per-rule severities from the project's `ty.toml` / `[tool.ty.rules]`
+        // (see [`crate::ty::rules`]); ty's built-in defaults floor whatever the
+        // config leaves alone.
+        let rule_selection = crate::ty::rules::resolve(src_root.as_std_path())?.selection;
         let db = Self {
             storage: salsa::Storage::new(None),
             files: Files::default(),
             system,
             vendored,
             program_settings,
-            rule_selection: RuleSelection::from_registry(default_lint_registry()),
+            rule_selection,
             analysis_settings: AnalysisSettings::default(),
         };
         db.program_settings

@@ -42,15 +42,18 @@ const SLOTS_PER_THREAD: usize = 4;
 const IDLE_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Identifies one database: the first-party search root plus the optional
-/// explicit `python` override that pinned environment discovery. The in-memory
-/// virtual source (a notebook's concatenated cells, a docs synthetic module) is
-/// deliberately *not* part of the key — it is swapped in via
-/// [`super::db::TyDb::serve_virtual`] before every query — so one database per
-/// (root, python) serves every query against that tree.
+/// explicit `python` override that pinned environment discovery, plus a
+/// fingerprint of the rule config in effect (see [`super::rules`]) so an
+/// edited `ty.toml` rebuilds instead of serving stale severities. The
+/// in-memory virtual source (a notebook's concatenated cells, a docs
+/// synthetic module) is deliberately *not* part of the key — it is swapped in
+/// via [`super::db::TyDb::serve_virtual`] before every query — so one
+/// database per (root, python, rules) serves every query against that tree.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CacheKey {
     pub(crate) src_root: PathBuf,
     pub(crate) python: Option<PathBuf>,
+    rules_rev: u64,
 }
 
 impl CacheKey {
@@ -58,6 +61,7 @@ impl CacheKey {
         Self {
             src_root: src_root.to_path_buf(),
             python: python.map(Path::to_path_buf),
+            rules_rev: super::rules::token(src_root),
         }
     }
 

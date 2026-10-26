@@ -1,6 +1,6 @@
 //! `ty_check` tool tests: Astral's type checker compiled in, read-only.
 //! The fixture-driven oracle + unit tests below pin the embedded checker
-//! against the real `ty 0.0.18` binary (see tests/data/ty/, captured with
+//! against the real `ty 0.0.19` binary (see tests/data/ty/, captured with
 //! `--output-format concise --python-version 3.11`).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
@@ -8,7 +8,9 @@ mod common;
 
 use std::path::Path;
 
-use common::{ground_truth_ty, run_ty, scaffold_venv, server::Server, site_packages_dir, temp_dir};
+use common::{
+    ground_truth_ty, run_ty, run_ty_in, scaffold_venv, server::Server, site_packages_dir, temp_dir,
+};
 use serde_json::{Value, json};
 use tpmcp::ty;
 
@@ -120,6 +122,56 @@ fn ty_check_discloses_python_target() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `ty_check` also discloses which rule config it ran under and what in it
+/// was not applied: the config file's path (or an explicit "ty defaults"),
+/// one note per ignored key, and one per rule name ty would not apply.
+#[test]
+fn ty_check_discloses_the_rule_config() {
+    let dir = temp_dir("ty-check-rules-disclose");
+    let path = dir.join("probe.py");
+    std::fs::write(&path, "import definitely_not_a_module_xyz\n").unwrap();
+    std::fs::write(
+        dir.join("ty.toml"),
+        "[tool.nonsense]\nx = 1\n[rules]\nunresolved-import = \"ignore\"\nsome-unknown-rule = \"warn\"\n",
+    )
+    .unwrap();
+    let mut server = Server::start(&[]);
+
+    let (err, text, sc) = server.call("ty_check", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    let config = sc["rules_config"]
+        .as_str()
+        .unwrap_or_else(|| panic!("rules_config disclosed: {sc}"));
+    assert!(
+        config.ends_with("ty.toml"),
+        "the config file is named: {sc}"
+    );
+    assert_eq!(
+        sc["diagnostic_count"], 0,
+        "the ignored rule must stay silent: {sc}"
+    );
+    let notes = sc["config_notes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("config_notes disclosed: {sc}"));
+    let joined = notes
+        .iter()
+        .filter_map(|note| note.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(joined.contains("`tool`"), "an ignored key is named: {sc}");
+    assert!(
+        joined.contains("some-unknown-rule"),
+        "an unusable rule is named: {sc}"
+    );
+
+    // Markdown carries the same disclosure.
+    let (err, text, _) = server.call("ty_check", json!({"path": path}));
+    assert!(!err, "{text}");
+    assert!(text.contains("rules_config:"), "{text}");
+    assert!(text.contains("some-unknown-rule"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// `version_info` is the library surface of the same disclosure.
 #[test]
 fn version_info_reports_the_targeted_environment() {
@@ -181,7 +233,30 @@ fn concise_codes(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-/// Ground truth (ty 0.0.18, --output-format concise --python-version 3.11):
+/// `(severity, code)` pairs of our diagnostics — what the rule-config parity
+/// test compares: ty carries the severity in the message prefix.
+fn entries(diagnostics: &[tpmcp::ruff::Diagnostic]) -> Vec<(String, String)> {
+    diagnostics
+        .iter()
+        .map(|d| (d.severity.clone(), code(d).to_string()))
+        .collect()
+}
+
+/// `(severity, code)` pairs of ty's `concise` output, whose lines read
+/// `path:line:col: error[code]: message`.
+fn concise_entries(stdout: &str) -> Vec<(String, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let start = line.find('[')?;
+            let end = line.find(']')?;
+            let severity = line[..start].rsplit([' ', ':']).next()?;
+            (end > start).then(|| (severity.to_string(), line[start + 1..end].to_string()))
+        })
+        .collect()
+}
+
+/// Ground truth (ty 0.0.19, --output-format concise --python-version 3.11):
 ///   invalid-assignment 1:10, invalid-return-type 5:12, invalid-argument-type 12:8
 #[test]
 fn check_python_matches_ty_ground_truth() {
@@ -209,7 +284,7 @@ fn check_python_matches_ty_ground_truth() {
     assert!(assignment.message.contains("not assignable"));
 }
 
-/// Ground truth (ty 0.0.18): notebook cells are 1-based (cell=3); tpmcp
+/// Ground truth (ty 0.0.19): notebook cells are 1-based (cell=3); tpmcp
 /// reports them 0-based (2) to match the cell tools, with rows relative to
 /// the cell.
 #[test]
@@ -222,7 +297,7 @@ fn check_notebook_maps_cells_to_zero_based() {
     assert_eq!(row_col(diagnostic), (1, 8));
 }
 
-/// Ground truth (ty 0.0.18): a `%%bash` cell contributes no source to the
+/// Ground truth (ty 0.0.19): a `%%bash` cell contributes no source to the
 /// concatenation and is skipped; the sibling typed cell still reports.
 #[test]
 fn magic_cell_is_skipped_like_ruff() {
@@ -263,7 +338,7 @@ fn marimo_py_is_checked_as_plain_python() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Ground truth (ty 0.0.18): a `.pyi` with an undefined name in an annotation
+/// Ground truth (ty 0.0.19): a `.pyi` with an undefined name in an annotation
 /// reports unresolved-reference. (A `.pyi` "wrong" annotation is green — a
 /// stub's own annotations are trusted — so this is the stub error to pin.)
 #[test]
@@ -274,7 +349,7 @@ fn stub_pyi_is_checked() {
     assert_eq!(row_col(&diagnostics[0]), (1, 12));
 }
 
-/// Ground truth (ty 0.0.18): a stdlib-operator type error maps to
+/// Ground truth (ty 0.0.19): a stdlib-operator type error maps to
 /// unsupported-operator at the value span.
 #[test]
 fn stdlib_operator_mismatch_is_mapped() {
@@ -284,7 +359,7 @@ fn stdlib_operator_mismatch_is_mapped() {
     assert_eq!(row_col(&diagnostics[0]), (1, 10));
 }
 
-/// Ground truth (ty 0.0.18): a first-party import resolves across files — the
+/// Ground truth (ty 0.0.19): a first-party import resolves across files — the
 /// `add` signature lives in defs.py, so the `add(1, "two")` call in
 /// uses_defs.py is checked against it and reports invalid-argument-type. This
 /// pins that the embedded checker follows imports, not just the single file.
@@ -312,7 +387,7 @@ fn clean_and_untyped_files_are_empty() {
     }
 }
 
-/// Re-verify the embedded checker against the real `ty==0.0.18` binary: for
+/// Re-verify the embedded checker against the real `ty==0.0.19` binary: for
 /// every fixture the codes must match exactly. `--python-version 3.11` pins
 /// the CLI to `PythonVersion::default()` (PY311), which the CLI would infer
 /// from the environment instead. Skipped when the binary is absent;
@@ -359,9 +434,79 @@ fn check_matches_ty_ground_truth() {
         let our_codes = codes(&ty::check_path(Path::new(&path)).unwrap());
         assert_eq!(
             cli_codes, our_codes,
-            "{file}: codes diverge from ty==0.0.18"
+            "{file}: codes diverge from ty==0.0.19"
         );
         assert_eq!(our_codes, expected, "{file}: frozen counts drifted");
+    }
+}
+
+/// The rule config (`ty.toml` `[rules]`, `pyproject.toml` `[tool.ty.rules]`)
+/// is honored exactly as the real ty CLI honors it: same file, same config,
+/// same verdicts and severities. `ty` discovers its configuration from its
+/// **cwd**, not from the checked file, so the CLI runs with cwd = the fixture
+/// directory — which is also the anchor tpmcp walks up from. Skipped when the
+/// binary is absent; `TPMCP_REQUIRE_GROUND_TRUTH=1` fails instead.
+#[test]
+fn rule_config_matches_ty_ground_truth() {
+    let Some(ty_bin) = ground_truth_ty() else {
+        return;
+    };
+    // (config file name, config body, expected (severity, code) verdicts).
+    type Verdicts = &'static [(&'static str, &'static str)];
+    let cases: &[(&str, &str, Verdicts)] = &[
+        ("ty.toml", "[rules]\nunresolved-import = \"ignore\"\n", &[]),
+        (
+            "ty.toml",
+            "[rules]\nunresolved-import = \"warn\"\n",
+            &[("warning", "unresolved-import")],
+        ),
+        (
+            "ty.toml",
+            "[rules]\nunresolved-import = \"error\"\n",
+            &[("error", "unresolved-import")],
+        ),
+        (
+            "pyproject.toml",
+            "[tool.ty.rules]\nunresolved-import = \"ignore\"\n",
+            &[],
+        ),
+        // A config with no overrides: the default verdict stands.
+        ("ty.toml", "[rules]\n", &[("error", "unresolved-import")]),
+    ];
+    for (index, &(config_name, config_body, expected)) in cases.iter().enumerate() {
+        let dir = temp_dir(&format!("ty-rules-{index}"));
+        std::fs::write(dir.join("probe.py"), "import definitely_not_a_module_xyz\n").unwrap();
+        std::fs::write(dir.join(config_name), config_body).unwrap();
+
+        let cli = concise_entries(&run_ty_in(
+            &ty_bin,
+            &dir,
+            &[
+                "check",
+                "--output-format",
+                "concise",
+                "--color",
+                "never",
+                "--no-progress",
+                "--python-version",
+                "3.11",
+                "probe.py",
+            ],
+        ));
+        let ours = entries(&ty::check_path(&dir.join("probe.py")).unwrap());
+        let ours_refs: Vec<(&str, &str)> = ours
+            .iter()
+            .map(|(severity, code)| (severity.as_str(), code.as_str()))
+            .collect();
+        assert_eq!(
+            cli, ours,
+            "{config_name} {config_body:?}: verdicts diverge from the ty CLI"
+        );
+        assert_eq!(
+            ours_refs, expected,
+            "{config_name} {config_body:?}: the frozen verdict drifted"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

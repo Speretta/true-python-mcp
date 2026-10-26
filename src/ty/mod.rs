@@ -9,6 +9,7 @@
 pub(crate) mod cache;
 mod check;
 mod db;
+pub(crate) mod rules;
 mod settings;
 pub(crate) mod worker;
 

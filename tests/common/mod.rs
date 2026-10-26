@@ -119,6 +119,19 @@ pub fn run_ty(ty: &str, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("utf-8 output")
 }
 
+/// [`run_ty`] with `cwd` as the working directory. `ty` discovers its
+/// configuration (ty.toml / [tool.ty]) from its **cwd**, not from the checked
+/// file, so a rule-config parity check must run the CLI from the fixture
+/// directory.
+pub fn run_ty_in(ty: &str, cwd: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new(ty)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("spawn ty binary");
+    String::from_utf8(output.stdout).expect("utf-8 output")
+}
+
 // ---- virtual-environment scaffold ----
 
 /// The on-disk site-packages path for a scaffolded venv, per platform: Windows

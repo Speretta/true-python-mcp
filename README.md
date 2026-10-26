@@ -119,7 +119,7 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `notebook_check` | Finds problems without changing anything: a broken notebook structure, merge conflict marks, or marimo graph errors (two cells defining the same name, a cycle). |
 | `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file (uses the nearest project ruff/pyproject config, falling back to the global user config). With `fix: true` it repairs the safe ones. |
 | `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
-| `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in; no interpreter, no subprocess). Pass `python` to check against a specific venv; otherwise auto-discovers it. Notebook diagnostics carry a 0-based `cell` index. |
+| `ty_check` | Type-checks any `.py`, `.pyi`, or `.ipynb` against annotations and imports (Astral's ty, compiled in; no interpreter, no subprocess). Pass `python` to check against a specific venv; otherwise auto-discovers it. Notebook diagnostics carry a 0-based `cell` index. Per-rule severities come from the project's `ty.toml` `[rules]` or `pyproject.toml` `[tool.ty.rules]` (`ignore`/`warn`/`error`); the answer names the config that applied and anything in it tpmcp did not honor. |
 | `py_docs` | Resolve a library symbol (function/method/class/attribute) to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
 | `py_module_members` | List a module's public members with one-line signatures and docstrings. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). `py_write` can take `from_path` instead of `content`. |
@@ -158,6 +158,12 @@ refused.
 - marimo `setup`, `function`, and `class_definition` blocks are read-only.
   You can see them, but not edit them.
 - SQL cells in marimo are not checked for graph errors yet.
+- It honors only the rules section of ty's configuration (`ty.toml`
+  `[rules]`, `pyproject.toml` `[tool.ty.rules]`). Other sections
+  (`environment`, `src`, ...) are named and ignored: the environment comes
+  from `python` and the checked file's tree instead. The config is also
+  discovered from the checked file's directory, where the `ty` CLI looks
+  from its working directory.
 
 ## Development
 

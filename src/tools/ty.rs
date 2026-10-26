@@ -46,8 +46,11 @@ impl Tpmcp {
                        `.venv`/`venv` ancestor walk, then the system Python). Notebook \
                        diagnostics carry a 0-based `cell` index and a cell-relative line. marimo \
                        .py files are checked as plain Python (their cells are untyped defs, so \
-                       cross-cell types are not statically visible). Reports the current \
-                       revision; read-only.",
+                       cross-cell types are not statically visible). Per-rule severities come \
+                       from the project's ty.toml [rules] or pyproject.toml [tool.ty.rules] \
+                       (ignore/warn/error); the response discloses which config applied and \
+                       anything in it tpmcp did not honor. Reports the current revision; \
+                       read-only.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -64,17 +67,37 @@ impl Tpmcp {
             // revision and the bytes the checker parses, so a notebook's
             // diagnostics are computed from exactly these bytes.
             let snapshot = fs::read(&args.path)?;
+            let src_root = args.path.parent().unwrap_or_else(|| Path::new("."));
             let diagnostics =
                 ty::check_snapshot_with_python(&args.path, &snapshot, args.python.as_deref())?;
             // Disclose the environment the check actually targeted: which
             // Python version, where it was measured, and the interpreter
-            // prefix — never a silent static assumption.
-            let src_root = args.path.parent().unwrap_or_else(|| Path::new("."));
+            // prefix — never a silent static assumption. The rule config is
+            // resolved again here (cheap, and the same anchor the check's
+            // database used) purely to disclose it: which file its severities
+            // came from, and everything in it tpmcp did not apply.
             let target = ty::version_info(src_root, args.python.as_deref())?;
+            let rules = ty::rules::resolve(src_root)?;
             Ok(respond(
                 args.format,
-                || ty_markdown(&args.path, &snapshot.revision, &diagnostics, &target),
-                || ty_json(&args.path, &snapshot.revision, &diagnostics, &target),
+                || {
+                    ty_markdown(
+                        &args.path,
+                        &snapshot.revision,
+                        &diagnostics,
+                        &target,
+                        &rules,
+                    )
+                },
+                || {
+                    ty_json(
+                        &args.path,
+                        &snapshot.revision,
+                        &diagnostics,
+                        &target,
+                        &rules,
+                    )
+                },
             ))
         })
         .await
@@ -98,11 +121,16 @@ fn ty_markdown(
     revision: &str,
     diagnostics: &[Diagnostic],
     target: &ty::PythonTarget,
+    rules: &ty::rules::RuleConfig,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("ty check: {}\n", path.display()));
     out.push_str(&format!("revision: {revision}\n"));
     target_markdown(&mut out, target);
+    out.push_str(&format!("rules_config: {}\n", rules_label(rules)));
+    for note in &rules.notes {
+        out.push_str(&format!("note: {note}\n"));
+    }
     if diagnostics.is_empty() {
         out.push_str("no type errors found\n");
         return out;
@@ -120,6 +148,7 @@ fn ty_json(
     revision: &str,
     diagnostics: &[Diagnostic],
     target: &ty::PythonTarget,
+    rules: &ty::rules::RuleConfig,
 ) -> serde_json::Value {
     json!({
         "path": path.display().to_string(),
@@ -128,7 +157,17 @@ fn ty_json(
         "version_source": target.version_source,
         "environment": target.environment,
         "note": target.note,
+        "rules_config": rules_label(rules),
+        "config_notes": rules.notes,
         "diagnostic_count": diagnostics.len(),
         "diagnostics": diagnostics,
     })
+}
+
+/// Which rule config the check ran under — never a silent default.
+fn rules_label(rules: &ty::rules::RuleConfig) -> String {
+    match &rules.source {
+        Some(path) => path.display().to_string(),
+        None => "ty defaults (no ty.toml or [tool.ty] found)".to_string(),
+    }
 }
