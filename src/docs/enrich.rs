@@ -123,24 +123,28 @@ fn enrich_from_cpython(
 
     let source_str = source_path.as_str().to_string();
     match extract_docstring(&source_path, resolved_name) {
-        Some(docstring) => Enrichment::Found { docstring },
-        None => {
-            // Distinguish "the module is a C extension (no `.py` at all)" from
-            // "the `.py` exists but the definition has no docstring", so the
-            // note names what was actually checked.
-            let note = if source_path.as_std_path().is_file() {
-                format!(
-                    "no docstring: the stub has none and the CPython source `{source_str}` has \
-                     none to fall back to (looked at: `{stub_path}`, `{source_str}`)"
-                )
-            } else {
-                format!(
-                    "no docstring: the stub has none and no CPython source was found to fall \
-                     back to (looked at: `{stub_path}`, `{source_str}`)"
-                )
-            };
-            Enrichment::Missing { note }
-        }
+        Extract::Found(docstring) => Enrichment::Found { docstring },
+        // Each state names what actually happened to the lookup: the source
+        // exists without a docstring, it exists but could not be read, or
+        // there is none at all (the module is a C extension).
+        Extract::NoDocstring => Enrichment::Missing {
+            note: format!(
+                "no docstring: the stub has none and the CPython source `{source_str}` has \
+                 none to fall back to (looked at: `{stub_path}`, `{source_str}`)"
+            ),
+        },
+        Extract::Unreadable => Enrichment::Missing {
+            note: format!(
+                "no docstring: the stub has none and the CPython source `{source_str}` could \
+                 not be read (permissions or encoding; looked at: `{stub_path}`, `{source_str}`)"
+            ),
+        },
+        Extract::Absent => Enrichment::Missing {
+            note: format!(
+                "no docstring: the stub has none and no CPython source was found to fall \
+                 back to (looked at: `{stub_path}`, `{source_str}`)"
+            ),
+        },
     }
 }
 
@@ -155,11 +159,32 @@ fn map_stub_to_source(stub_path: &str, stdlib: &SystemPath) -> Option<SystemPath
     Some(stdlib.join(rest).with_extension("py"))
 }
 
-/// The terminal definition's docstring from the real source, or `None`.
-fn extract_docstring(source_path: &SystemPath, resolved_name: &str) -> Option<String> {
-    source_docstrings(source_path.as_std_path())
-        .get(resolved_name)
-        .cloned()
+/// What a CPython source lookup yielded: the docstring, or why there is none —
+/// the source exists without one, it exists but could not be read (permissions,
+/// non-UTF-8), or there is no source file at all. The states carry their own
+/// honest notes; a bare `None` would hide which of them happened.
+enum Extract {
+    Found(String),
+    NoDocstring,
+    Unreadable,
+    Absent,
+}
+
+/// The terminal definition's docstring from the real source, or the reason
+/// there is none.
+fn extract_docstring(source_path: &SystemPath, resolved_name: &str) -> Extract {
+    let Some(docstrings) = source_docstrings(source_path.as_std_path()) else {
+        // A read failure is not "no docstring": report which one it was.
+        return if source_path.as_std_path().is_file() {
+            Extract::Unreadable
+        } else {
+            Extract::Absent
+        };
+    };
+    match docstrings.get(resolved_name) {
+        Some(docstring) => Extract::Found(docstring.clone()),
+        None => Extract::NoDocstring,
+    }
 }
 
 /// Process-wide cache of a real source file's `name -> docstring` map, keyed by
@@ -168,25 +193,27 @@ fn extract_docstring(source_path: &SystemPath, resolved_name: &str) -> Option<St
 /// the same `Lib/*.py` once per member.
 type SourceDocstrings = RwLock<HashMap<PathBuf, Arc<HashMap<String, String>>>>;
 
-fn source_docstrings(path: &Path) -> Arc<HashMap<String, String>> {
+/// The cached `name -> docstring` map of a real source file, or `None` when
+/// the file could not be read.
+fn source_docstrings(path: &Path) -> Option<Arc<HashMap<String, String>>> {
     if let Some(docstrings) = source_docstrings_cache()
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(path)
     {
-        return docstrings.clone();
+        return Some(docstrings.clone());
     }
-    // why: a failed read (permissions, non-UTF-8) is transient; caching its
-    // empty result would freeze the failure for the process lifetime.
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Arc::new(HashMap::new());
-    };
+    // why: a failed read (permissions, non-UTF-8) may well be permanent, and
+    // caching an empty result would freeze the failure for the process
+    // lifetime. Not caching reports the failure honestly and lets a later
+    // call retry.
+    let text = std::fs::read_to_string(path).ok()?;
     let docstrings = Arc::new(parse_docstrings(&text));
     source_docstrings_cache()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(path.to_path_buf(), docstrings.clone());
-    docstrings
+    Some(docstrings)
 }
 
 fn source_docstrings_cache() -> &'static SourceDocstrings {
@@ -242,6 +269,8 @@ fn body_docstring(body: &[ast::Stmt]) -> Option<String> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 
+    use ruff_db::system::SystemPathBuf;
+
     use super::*;
 
     #[test]
@@ -253,5 +282,42 @@ mod tests {
             map_stub_to_source("stdlib\\antigravity.pyi", stdlib).unwrap(),
             stdlib.join("antigravity").with_extension("py")
         );
+    }
+
+    /// Every lookup state is named, never a silent `None`: the docstring, a
+    /// readable source without one, a source that could not be read
+    /// (non-UTF-8), or no source at all.
+    #[test]
+    fn extract_names_the_state_it_found() {
+        let dir = std::env::temp_dir().join(format!("tpmcp-enrich-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let probe = |name: &str| {
+            SystemPathBuf::from(dir.join(name).to_string_lossy().into_owned())
+        };
+
+        std::fs::write(
+            dir.join("readable.py"),
+            "def f():\n    \"doc\"\n\ndef bare():\n    pass\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("unreadable.py"), b"def f():\n    \"\xff\xfe\"\n").unwrap();
+
+        assert!(matches!(
+            extract_docstring(&probe("readable.py"), "f"),
+            Extract::Found(doc) if doc == "doc"
+        ));
+        assert!(matches!(
+            extract_docstring(&probe("readable.py"), "bare"),
+            Extract::NoDocstring
+        ));
+        assert!(matches!(
+            extract_docstring(&probe("unreadable.py"), "f"),
+            Extract::Unreadable
+        ));
+        assert!(matches!(
+            extract_docstring(&probe("absent.py"), "f"),
+            Extract::Absent
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
