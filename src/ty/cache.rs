@@ -24,6 +24,7 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::error::Error;
 
@@ -32,6 +33,13 @@ use super::db::TyDb;
 /// Databases kept alive per worker before evicting the least-recently-used.
 /// Four covers "check + docs + members" against one tree.
 const SLOTS_PER_THREAD: usize = 4;
+
+/// How long an unused database stays cached. Long enough that any interactive
+/// session stays warm (a rebuild costs ~3 ms for a check database, 35-180 ms
+/// for a docs one), short enough that an abandoned tree's database does not
+/// live as long as the server does. Process hygiene, not a benchmark knob: a
+/// session in use refreshes its slot on every call and never expires.
+const IDLE_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Identifies one database: the first-party search root plus the optional
 /// explicit `python` override that pinned environment discovery. The in-memory
@@ -73,6 +81,8 @@ struct DbSlot {
     key: CacheKey,
     db: Option<TyDb>,
     last_used: u64,
+    /// When the slot was last checked out, for [`IDLE_TTL`] expiry.
+    last_used_at: Instant,
     /// Largest source length the slot has ever served; sizes the deferred drop
     /// guard (see [`crate::stack::guarded`]).
     max_source_len: usize,
@@ -143,6 +153,25 @@ impl ThreadCache {
             crate::stack::guarded(evicted.max_source_len, move || drop(db));
         }
     }
+
+    /// Drops the databases idle past `ttl`, under the same stack guard as
+    /// eviction. A long-lived server must not hold a tree's database forever
+    /// after the tree is abandoned; any session still in use refreshes its
+    /// slot on every checkout and never expires.
+    fn expire_idle(&mut self, ttl: Duration) {
+        let now = Instant::now();
+        let mut index = 0;
+        while index < self.slots.len() {
+            if now.duration_since(self.slots[index].last_used_at) > ttl {
+                let expired = self.slots.swap_remove(index);
+                if let Some(db) = expired.db {
+                    crate::stack::guarded(expired.max_source_len, move || drop(db));
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
 }
 
 impl Drop for ThreadCache {
@@ -179,11 +208,16 @@ pub(crate) fn with_db<R>(
 ) -> Result<R, Error> {
     CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
+        // Databases idle past the TTL go before a slot is picked, so a truly
+        // abandoned tree is released at the next call of any kind.
+        cache.expire_idle(IDLE_TTL);
         let now = cache.tick();
+        let now_at = Instant::now();
 
         let index = match cache.slots.iter().position(|slot| slot.key == key) {
             Some(index) => {
                 cache.slots[index].last_used = now;
+                cache.slots[index].last_used_at = now_at;
                 index
             }
             None => {
@@ -194,6 +228,7 @@ pub(crate) fn with_db<R>(
                     key,
                     db: None,
                     last_used: now,
+                    last_used_at: now_at,
                     max_source_len: 0,
                 });
                 cache.slots.len() - 1
@@ -260,5 +295,26 @@ mod tests {
             |_| Ok(()),
         );
         assert!(served.is_ok(), "the cache must serve the key after a panic");
+    }
+
+    /// A slot idle past the TTL goes at the next sweep, and one that is not
+    /// stays — process hygiene without touching the warm path.
+    #[test]
+    fn idle_slots_expire_but_live_ones_stay() {
+        let root = Path::new(".");
+        let mut cache = ThreadCache::default();
+        cache.slots.push(DbSlot {
+            key: CacheKey::new(root, None),
+            db: Some(TyDb::for_src_root(root, None).unwrap()),
+            last_used: 1,
+            last_used_at: Instant::now(),
+            max_source_len: 0,
+        });
+
+        cache.expire_idle(Duration::from_secs(60));
+        assert_eq!(cache.slots.len(), 1, "a fresh slot must not expire");
+
+        cache.expire_idle(Duration::ZERO);
+        assert!(cache.slots.is_empty(), "an idle slot must be dropped");
     }
 }
