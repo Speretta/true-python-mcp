@@ -39,7 +39,7 @@ const SLOTS_PER_THREAD: usize = 4;
 /// deliberately *not* part of the key — it is swapped in via
 /// [`super::db::TyDb::serve_virtual`] before every query — so one database per
 /// (root, python) serves every query against that tree.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CacheKey {
     pub(crate) src_root: PathBuf,
     pub(crate) python: Option<PathBuf>,
@@ -51,6 +51,18 @@ impl CacheKey {
             src_root: src_root.to_path_buf(),
             python: python.map(Path::to_path_buf),
         }
+    }
+
+    /// The key for work anchored at a directory root: `None` means the current
+    /// directory, matching every docs entry point.
+    pub(crate) fn for_root(src_root: Option<&Path>, python: Option<&Path>) -> Self {
+        Self::new(src_root.unwrap_or_else(|| Path::new(".")), python)
+    }
+
+    /// The key for work on `path`'s tree: its parent directory is the root,
+    /// matching what the check passes build their databases from.
+    pub(crate) fn for_file(path: &Path, python: Option<&Path>) -> Self {
+        Self::new(path.parent().unwrap_or_else(|| Path::new(".")), python)
     }
 }
 

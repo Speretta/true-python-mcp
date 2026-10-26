@@ -21,6 +21,7 @@ use ty_python_semantic::{Db as SemanticDb, SemanticModel};
 
 use crate::error::Error;
 use crate::ty::cache::{CacheKey, with_db};
+use crate::ty::worker;
 use crate::ty::{DOCS_VIRTUAL_PATH, TyDb};
 
 use super::enrich::resolve_docstring;
@@ -80,15 +81,24 @@ pub fn resolve_module_members(
 ) -> Result<DocModule, Error> {
     // A member listing is per-module, so only a single import segment is
     // accepted; empty or dotted input is a caller error, not a resolution
-    // failure. `ModuleName::new` enforces Python identifier syntax.
+    // failure. `ModuleName::new` enforces Python identifier syntax. Rejected
+    // here, before the round-trip to the worker.
     if module.is_empty() || module.contains('.') || ModuleName::new(module).is_none() {
         return Err(Error::invalid_input(format!(
             "module must be a single importable module name, got {module:?}"
         )));
     }
+    worker::members(module, src_root, python)
+}
 
-    let src_root = src_root.unwrap_or_else(|| Path::new("."));
-
+/// [`resolve_module_members`]'s body, run on the sticky worker pinned to
+/// `(src_root, python)` (see [`crate::ty::worker`]); `src_root` is already
+/// defaulted to the current directory.
+pub(crate) fn resolve_module_members_inner(
+    module: &str,
+    src_root: &Path,
+    python: Option<&Path>,
+) -> Result<DocModule, Error> {
     // The synthetic module is a few bytes per member; docs never builds a deep
     // AST, so the deferred drop guard is a no-op for this source.
     with_db(

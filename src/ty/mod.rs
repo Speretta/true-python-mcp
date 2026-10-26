@@ -10,6 +10,7 @@ pub(crate) mod cache;
 mod check;
 mod db;
 mod settings;
+pub(crate) mod worker;
 
 use std::path::Path;
 
@@ -41,6 +42,10 @@ pub fn check_snapshot(path: &Path, snapshot: &fs::Snapshot) -> Result<Vec<Diagno
 /// (a path to a Python interpreter or a virtual-environment root) instead of
 /// relying on the implicit discovery order. `None` behaves like
 /// [`check_snapshot`].
+///
+/// The work runs on the sticky worker pinned to the file's tree (see
+/// [`worker`]): the thread-local database cache is then hit rather than
+/// rebuilt on whichever blocking-pool thread the call happens to land on.
 pub fn check_snapshot_with_python(
     path: &Path,
     snapshot: &fs::Snapshot,
@@ -51,5 +56,5 @@ pub fn check_snapshot_with_python(
     // teardown, where `cache` re-applies `crate::stack::guarded` sized by the
     // largest source it served. The semantic-index/inference recursion itself
     // is still grown inside `check_file` (`guarded_walk`).
-    check::check_snapshot_inner(path, snapshot, python)
+    worker::check(path, snapshot, python)
 }

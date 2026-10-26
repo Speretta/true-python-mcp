@@ -44,7 +44,7 @@ pub(super) fn check_snapshot_inner(
     })?;
 
     with_db(
-        CacheKey::new(src_root, python),
+        CacheKey::for_file(path, python),
         snapshot.content.len(),
         || TyDb::new(src_root_sys.as_path(), python),
         |db| {
@@ -82,7 +82,7 @@ fn check_notebook(
     })?;
 
     with_db(
-        CacheKey::new(src_root, python),
+        CacheKey::for_file(path, python),
         source.len(),
         || TyDb::new(src_root_sys.as_path(), python),
         |db| {

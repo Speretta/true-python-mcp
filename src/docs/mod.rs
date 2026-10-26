@@ -54,10 +54,12 @@ use ty_python_semantic::{Db as SemanticDb, HasType, SemanticModel};
 
 use crate::error::Error;
 use crate::ty::cache::{CacheKey, with_db};
+use crate::ty::worker;
 use crate::ty::{DOCS_VIRTUAL_PATH, TyDb};
 
 use doctest::extract_doctests;
 use enrich::resolve_docstring;
+pub(crate) use members::resolve_module_members_inner;
 pub use members::{DocModule, DocModuleMember, resolve_module_members};
 use rank::{
     disambiguation_of, is_reexported_of, is_stub_of, kind_of_resolved, rank_candidates,
@@ -155,8 +157,22 @@ pub fn resolve_symbol_with_python(
     src_root: Option<&Path>,
     python: Option<&Path>,
 ) -> Result<DocSymbol, Error> {
+    // Bad input is rejected here, before the round-trip to the worker.
+    split_segments(symbol)?;
+    worker::docs(symbol, src_root, python)
+}
+
+/// [`resolve_symbol_with_python`]'s body, run on the sticky worker pinned to
+/// `(src_root, python)` (see [`crate::ty::worker`]); `src_root` is already
+/// defaulted to the current directory. The worker pins the thread-local
+/// database cache to one thread per tree, so warm calls hit instead of
+/// rebuilding on whichever blocking-pool thread they land on.
+pub(crate) fn resolve_symbol_inner(
+    symbol: &str,
+    src_root: &Path,
+    python: Option<&Path>,
+) -> Result<DocSymbol, Error> {
     let segments = split_segments(symbol)?;
-    let src_root = src_root.unwrap_or_else(|| Path::new("."));
 
     // The synthetic module is a few bytes per segment; docs never builds a deep
     // AST, so the deferred drop guard is a no-op for this source and any small
