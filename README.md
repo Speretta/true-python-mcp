@@ -47,7 +47,7 @@ It does two jobs:
 
 Measured 2026-10-26 by the [Bench workflow](.github/workflows/bench.yml) (Linux 6.17.0-1022-azure, docker 28.0.4): median of 3-3 runs per stack (normal mode), each stack in its own minimal Docker container on the same machine. Full method, per-component memory, latency and conflict tables: [COMPARISON.md](COMPARISON.md).
 
-_Idle RAM_ and _After the full profile_ are container cgroup totals, not process RSS — the cgroup figure excludes file-backed pages, so `ps` reports higher. Both are listed in [COMPARISON.md](COMPARISON.md).
+_Idle RAM_ and _After the full profile_ are container cgroup totals, not process RSS — the cgroup figure excludes file-backed pages, so `ps` reports higher. tpmcp's profile additionally runs its docs lookups (`py_docs`, `py_module_members`), which the other stacks record as skips; the next refresh splits the memory column at those steps so the shared profile stays directly comparable. Both columns are listed in [COMPARISON.md](COMPARISON.md).
 
 ## See it work
 

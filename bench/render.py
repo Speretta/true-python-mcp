@@ -68,6 +68,12 @@ def mib(x):
     return f"{x / 1024 / 1024:.1f}"
 
 
+def mib_cell(x):
+    if x is None:
+        return "n/a"
+    return f"{mib(x)} MiB"
+
+
 def ms_cell(ms):
     if ms is None:
         return "—"
@@ -145,10 +151,13 @@ def aggregate(runs):
     return {
         "runs": len(vals),
         "idle_cgroup": median([r.get("idle", {}).get("cgroup_median_bytes") for r in vals]),
+        "profile_cgroup": median([r.get("profile", {}).get("cgroup_median_bytes") for r in vals]),
         "ops_cgroup": median([r.get("ops", {}).get("cgroup_median_bytes") for r in vals]),
         "idle_rss": median([r.get("idle", {}).get("rss_sum_median_bytes") for r in vals]),
+        "profile_rss": median([r.get("profile", {}).get("rss_sum_median_bytes") for r in vals]),
         "ops_rss": median([r.get("ops", {}).get("rss_sum_median_bytes") for r in vals]),
         "procs_idle": median([r.get("idle", {}).get("proc_count") for r in vals]),
+        "procs_profile": median([r.get("profile", {}).get("proc_count") for r in vals]),
         "procs_ops": median([r.get("ops", {}).get("proc_count") for r in vals]),
         "image_mb": median([r.get("image_size_bytes") for r in vals]),
         "ready_ms": median(ready),
@@ -348,16 +357,17 @@ def measured_section(results, ctx7=""):
 
     # ---- headline table ----
     lines.append("| Server | Category | Idle RAM (cgroup) | After the full "
-                 "profile (cgroup) | Idle RAM (RSS sum) | Processes "
-                 "idle/after | Ready in | Image size | Runs |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+                 "profile (cgroup) | After + docs (cgroup) | Idle RAM (RSS "
+                 "sum) | Processes idle/after | Ready in | Image size | Runs |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for stack in present:
         a = aggregate(results[stack])
         ready = f"{a['ready_ms'] / 1000:.1f} s" if a["ready_ms"] else "n/a"
         img = f"{a['image_mb'] / 1024 / 1024:.0f} MB" if a["image_mb"] else "n/a"
         lines.append(
-            f"| {link(stack)} | {LINKS[stack][2]} | {mib(a['idle_cgroup'])} MiB "
-            f"| {mib(a['ops_cgroup'])} MiB | {mib(a['idle_rss'])} MiB "
+            f"| {link(stack)} | {LINKS[stack][2]} | {mib_cell(a['idle_cgroup'])} "
+            f"| {mib_cell(a['profile_cgroup'])} | {mib_cell(a['ops_cgroup'])} "
+            f"| {mib_cell(a['idle_rss'])} "
             f"| {a['procs_idle']}/{a['procs_ops']} | {ready} | {img} "
             f"| {a['runs']} |")
     lines.append("")
@@ -365,8 +375,13 @@ def measured_section(results, ctx7=""):
                  "quiesce window. After = after the full operation profile "
                  "(read, check, edit, insert an algorithm cell, execute "
                  "where supported, delete, re-read, lint, and both conflict "
-                 "scenarios where applicable), then a quiesce window. "
-                 "Cgroup memory is the headline metric: it counts every "
+                 "scenarios where applicable), then a quiesce window. The "
+                 "two After columns split it at the docs lookups: `py_docs` "
+                 "(cold, then warm) and `py_module_members`, the "
+                 "context7-style symbol and docstring steps. Only tpmcp has "
+                 "them; every other stack records them as explicit skips and "
+                 "its two columns land together. Cgroup memory is the "
+                 "headline metric: it counts every "
                  "process in the container exactly once and excludes "
                  "file-cache pages. The RSS sum double-counts pages shared "
                  "between processes (for example libpython between a "

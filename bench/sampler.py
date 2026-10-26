@@ -211,12 +211,29 @@ def main():
     )
 
     control("run-ops")
+    err = wait_phase(args.status, "profile-done", ready_timeout)
+    if err:
+        return fail(err)
+
+    # Window 1: the shared profile — everything but the docs lookups.
+    time.sleep(ops_q)
+    result["profile"], profile_procs = sample_window(cid, samples, interval, raw)
+    (out / "procs_profile.txt").write_text(
+        "PID PPID RSS_KB THREADS CMD\n"
+        + "".join(f"{p['pid']} {p['ppid']} {p['rss_bytes'] // 1024} {p['threads']} {p['cmd']}\n"
+                  for p in profile_procs)
+    )
+
+    # Window 2: the same process after the docs lookups. For stacks without
+    # a docs tool that phase is recorded skips, so the two windows land
+    # together and the column honestly shows no docs cost.
+    control("run-docs")
     err = wait_phase(args.status, "ops-done", ready_timeout)
     if err:
         return fail(err)
     for line in Path(args.status).read_text().splitlines():
         if line.startswith("op="):
-            result.setdefault("ops", []).append(line)
+            result.setdefault("op_status", []).append(line)
 
     time.sleep(ops_q)
     result["ops"], ops_procs = sample_window(cid, samples, interval, raw)
@@ -229,7 +246,8 @@ def main():
     control("exit")
     (out / "samples_raw.json").write_text(json.dumps(raw, indent=2))
     (out / "summary.json").write_text(json.dumps(result, indent=2))
-    print(f"[sampler] {args.stack}: idle={result['idle']} ops={result['ops']}")
+    print(f"[sampler] {args.stack}: idle={result['idle']} "
+          f"profile={result['profile']} ops={result['ops']}")
     return 0
 
 

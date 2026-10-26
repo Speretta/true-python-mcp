@@ -796,8 +796,18 @@ def main():
         client.close()
         return 1
 
+    # The steps split into the shared profile (every stack runs these) and
+    # the docs lookups (tpmcp's py_docs/py_module_members; recorded as
+    # explicit skips on stacks without a docs tool). They run as two phases
+    # so the sampler can measure the shared profile's memory and the docs
+    # cost in separate windows instead of one blended number.
+    steps = PROFILES[args.stack](ctx)
+    shared = [st for st in steps if not st["label"].startswith("docs-")]
+    docs = [st for st in steps if st["label"].startswith("docs-")]
+
     results = []
-    for st in PROFILES[args.stack](ctx):
+
+    def run_one(st):
         t0 = now_ms()
         try:
             ok = run_step(client, st, ctx, ops_log)
@@ -811,6 +821,9 @@ def main():
         else:
             results.append((st["label"], ok, now_ms() - t0))
             coord.status(f"op={st['label']} {'ok' if ok else 'error'}")
+
+    for st in shared:
+        run_one(st)
 
     # Conflict scenarios: the file changes between the AI's read and its
     # write. Stacks that never write files get an honest skip instead.
@@ -837,6 +850,17 @@ def main():
             ops_log.append({"label": label, "skipped": reason})
             results.append((label, "skipped", 0))
             coord.status(f"op={label} skipped")
+
+    # The shared profile is complete (conflict scenarios included): let the
+    # sampler take its window before the docs lookups run.
+    coord.status("phase=profile-done")
+    if not coord.wait_control("run-docs", timeout=900):
+        coord.status("phase=error msg=run-docs signal never arrived")
+        client.close()
+        return 1
+
+    for st in docs:
+        run_one(st)
 
     with open(args.ops_out, "w") as f:
         json.dump({
