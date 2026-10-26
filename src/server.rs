@@ -83,7 +83,10 @@ impl ServerHandler for Tpmcp {
                  randomness.\n\
                  - When unsure of an API, resolve it with py_docs (kind, signature, return type) \
                  and confirm the call with ty_check before relying on it. Fail loudly with the \
-                 offending value instead of continuing silently.",
+                 offending value instead of continuing silently.\n\
+                 - Very long cell code: keep it in a .py file and stream it in with `source_file` \
+                 (any readable path) instead of pasting it; keep a project copy only to re-sync \
+                 it later.",
             )
     }
 }

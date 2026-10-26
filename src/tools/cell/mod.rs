@@ -82,7 +82,8 @@ impl Tpmcp {
                        inclusive line range start_line..=end_line (use notebook_read with \
                        detail=full to see line numbers). Provide the source inline, or via \
                        source_file to stream a large payload from disk without round-tripping \
-                       it through your context. Returns the new cell source and revision. \
+                       it through your context (e.g. a long generated cell kept in a .py \
+                       file). Returns the new cell source and revision. \
                        Outputs and metadata are preserved. When the new source is code, keep it \
                        explicit and re-runnable in any order: no wildcard imports, no dependence \
                        on ambient state or prior execution.",
@@ -161,7 +162,8 @@ impl Tpmcp {
         description = "Insert a new cell of type cell_type (code, markdown, raw) into a \
                        notebook at a 0-based index; omit index to append at the end. source \
                        may be empty; pass source_file instead to stream a large payload from \
-                       disk without round-tripping it through your context. Returns the new \
+                       disk without round-tripping it through your context (e.g. a long \
+                       generated cell kept in a .py file). Returns the new \
                        revision. Write code cells that stand alone: every name the cell uses is \
                        imported or defined in the notebook, and optional call results are \
                        guarded before use.",
