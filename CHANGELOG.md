@@ -3,6 +3,49 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.3.0] - 2026-10-26
+
+### Added
+
+- give stream_copy an opt-in revision guard
+- canonicalize cell returns/signatures after every edit
+- support PEP 723 script headers in marimo files
+- stream large cell/file content from a path
+- flag markdown cells referencing mo with no definition
+
+### Fixed
+
+- say when a CPython source could not be read
+- make the marimo filter instance-level where it can be
+- refuse to format a marimo notebook instead of mangling it
+- stop reporting the header's names as undefined in marimo cells
+- rejoin a leading dangling decorator with its cell block
+- guard the database drop on every checkout exit path
+- keep a regenerated cell block valid Python
+- read bare CR as a line terminator like Python does
+- treat a failed source read as a cache miss
+- guard the db drop on the panic-unwind path
+- lint marimo cells individually to drop scaffold false positives
+
+### Changed
+
+- bring every dependency to its current release
+- run cargo fmt over the lookup-state test
+- Merge origin/main: the nightly's persisted regression seed
+- state the candidate dedup as a choice, not a limit
+- name the seed-persistence rule explicitly
+- state the lifetime bound of the process caches
+- own the unshared settings directly instead of through Arc
+- state why the candidate dedup stays a scan
+- build one line index per file, not per diagnostic
+- check builtin names per name instead of building the list
+- analyze cell bodies once per check
+- persist new property regression seeds
+- Merge branch 'feat/marimo-cell-lint'
+- Merge branch 'feat/autonomous-return'
+- Merge branch 'feat/stream-cell-source'
+- Merge branch 'feat/pep723-header'
+
 ## [0.2.2] - 2026-10-21
 
 ### Added
