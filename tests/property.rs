@@ -2,9 +2,10 @@
 //! to the corpus-pinned frozen suites (roundtrip.rs, check.rs): structured
 //! generators (arbitrary notebook JSON, mutations of real fixtures,
 //! synthetic marimo scaffolds) plus raw bytes for the rejection paths.
-//! Counterexamples shrink and persist under `tests/regressions/`.
+//! Counterexamples shrink and persist under
+//! `tests/property.proptest-regressions`.
 //!
-//! The five properties are the model's byte-level contracts:
+//! The seven properties are the model's byte-level contracts:
 //! 1. Jupyter canonical form is idempotent: anything that parses serializes
 //!    to a canonical form that re-parses and re-serializes identically.
 //! 2. marimo serialization is the identity for every recognized file,
@@ -12,8 +13,13 @@
 //! 3. Editing a marimo file never corrupts it: a refused edit leaves the
 //!    bytes untouched; an accepted edit yields a file that parses again
 //!    with every unedited cell's source preserved.
-//! 4. `check()` never panics on any recognized notebook.
-//! 5. `open()` never panics on arbitrary bytes or text.
+//! 4. Editing a Jupyter notebook never corrupts it: the file parses again,
+//!    the cell count survives, every unedited cell keeps its full JSON
+//!    identity (source, outputs, execution_count, metadata, ids), and the
+//!    edited cell round-trips exactly the source it was given.
+//! 5. `check()` never panics on any recognized notebook.
+//! 6. Format detection and parsing of arbitrary bytes and text never panic.
+//! 7. `ty_check` never panics on arbitrary bounded bytes.
 //!
 //! The synthetic marimo alphabet deliberately omits the characters that
 //! spell scaffolding keywords (`@`, `(`, letters beyond a/B), so generated
@@ -30,6 +36,7 @@ use tpmcp::notebook::{AnyNotebook, JupyterNotebook, Notebook, open};
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -270,6 +277,26 @@ fn arb_marimo_text() -> impl Strategy<Value = String> {
     ]
 }
 
+/// A notebook cell's full JSON identity: its type, its source text, and every
+/// extra field (outputs, execution_count, metadata, id) — whole-cell equality
+/// for the edit property. Nothing outside `cell_type`/`source` may move when
+/// another cell is edited.
+fn jupyter_fingerprint(
+    notebook: &JupyterNotebook,
+) -> Vec<(String, String, BTreeMap<String, Value>)> {
+    notebook
+        .cells()
+        .iter()
+        .map(|cell| {
+            (
+                cell.cell_type.clone(),
+                cell.source.text().into_owned(),
+                cell.extra.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Arbitrary raw input: lossy-decoded random bytes and adversarial text.
 fn arb_raw_text() -> impl Strategy<Value = String> {
     prop_oneof![
@@ -365,7 +392,57 @@ proptest! {
         }
     }
 
-    /// Property 4: validation turns problems into findings, never panics.
+    /// Property 4: an edit to a Jupyter notebook either is refused or yields
+    /// a file that parses again with the cell count intact, every unedited
+    /// cell keeping its FULL JSON identity — source, outputs,
+    /// execution_count, metadata, ids — and the edited cell round-tripping
+    /// exactly the source it was given. The marimo twin (property 3) checks
+    /// sources only; a notebook's cells carry much more to protect.
+    #[test]
+    fn jupyter_edits_never_corrupt_untouched_cells(
+        (text, index, body) in (arb_notebook_text(), any::<usize>(), arb_text(60))
+    ) {
+        let Ok(mut notebook) = JupyterNotebook::parse(&text) else {
+            return Ok(());
+        };
+        let count = notebook.cells().len();
+        if count == 0 {
+            return Ok(());
+        }
+        let index = index % count;
+        let before = jupyter_fingerprint(&notebook);
+        if notebook.set_source(index, &body).is_err() {
+            // A refused edit must leave the notebook itself untouched.
+            prop_assert_eq!(jupyter_fingerprint(&notebook), before, "a refused edit changed cells");
+            return Ok(());
+        }
+        let serialized = notebook.serialize();
+        let Ok(reopened) = JupyterNotebook::parse(&serialized) else {
+            prop_assert!(
+                false,
+                "an edited .ipynb must still parse as a notebook:\n{serialized}"
+            );
+            return Ok(());
+        };
+        prop_assert_eq!(
+            reopened.cells().len(),
+            count,
+            "cell count must survive an edit"
+        );
+        let after = jupyter_fingerprint(&reopened);
+        for (position, (old, new)) in before.iter().zip(&after).enumerate() {
+            if position != index {
+                prop_assert_eq!(new, old, "cell {} was not edited but changed", position);
+            }
+        }
+        prop_assert_eq!(
+            &after[index].1,
+            &body,
+            "the edited cell must round-trip its new source"
+        );
+    }
+
+    /// Property 5: validation turns problems into findings, never panics.
     #[test]
     fn check_never_panics(
         text in prop_oneof![1 => arb_notebook_text(), 2 => arb_marimo_text(), 1 => arb_fixture_mutation()]
@@ -375,7 +452,7 @@ proptest! {
         }
     }
 
-    /// Property 5: format detection and parsing of arbitrary bytes and text
+    /// Property 6: format detection and parsing of arbitrary bytes and text
     /// always decide cleanly — Ok or Err, never a panic.
     #[test]
     fn open_never_panics(text in arb_raw_text()) {
@@ -393,7 +470,7 @@ fn ty_prop_dir() -> &'static Path {
 proptest! {
     #![proptest_config(config(16))]
 
-    /// Property 6: `ty_check` never panics on arbitrary bounded bytes — the
+    /// Property 7: `ty_check` never panics on arbitrary bounded bytes — the
     /// glue-level containment invariant. ty's own rules are a dependency's
     /// surface and are deliberately NOT asserted; only that the process
     /// survives, on both the plain (.py) and notebook (.ipynb) read paths.
