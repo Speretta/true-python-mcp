@@ -172,7 +172,9 @@ impl Tpmcp {
                        never drop content silently: cells that cannot convert exactly are kept \
                        and reported as per-cell warnings. A fresh marimo .py with no cells is a \
                        0-cell file, which marimo flags as having errors until a cell is added; \
-                       prefer providing at least one initial cell.",
+                       prefer providing at least one initial cell. Seed initial code cells with \
+                       explicit, idempotent setup (imports, paths, seeds, dtypes) so any cell \
+                       can re-run later without repair.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

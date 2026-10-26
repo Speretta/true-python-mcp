@@ -65,7 +65,25 @@ impl ServerHandler for Tpmcp {
                  first write and stay byte-stable after, so git diffs show only the lines you \
                  changed. marimo cells render body-only (the trailing return is regenerated); \
                  setup/function/class blocks are read-only; cells in a syntax-error file are \
-                 marked broken; mo.md cells are markdown cells and re-wrap on edit.",
+                 marked broken; mo.md cells are markdown cells and re-wrap on edit.\n\n\
+                 Writing code into notebook cells or .py files: be explicit and re-runnable.\n\
+                 - Name things and write conversions out: no wildcard imports (`from x import \
+                 *`), no implicit casts, dtypes, paths or seeds (use e.g. \
+                 `np.random.default_rng(seed)`), no reliance on ambient state.\n\
+                 - Every code cell must see each name it uses defined exactly once — in the cell \
+                 itself or in one setup/utility cell — not in whatever happened to run before. \
+                 marimo runs cells in dependency order and rejects two cells defining the same \
+                 name; notebook_check reports cycles and multiple definitions.\n\
+                 - Check what a call returned before using it. Optional returns are common \
+                 (`qpsolvers.solve_qp` -> ndarray | None; `cvxpy.Variable.value` is None until a \
+                 successful solve): guard the result, report the failure, then proceed — never \
+                 index or forward an unchecked value.\n\
+                 - Make setup idempotent so a re-run reproduces: guard creations and downloads \
+                 (`exist_ok=True`), re-derive state instead of accumulating it, re-seed \
+                 randomness.\n\
+                 - When unsure of an API, resolve it with py_docs (kind, signature, return type) \
+                 and confirm the call with ty_check before relying on it. Fail loudly with the \
+                 offending value instead of continuing silently.",
             )
     }
 }

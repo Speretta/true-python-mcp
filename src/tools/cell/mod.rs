@@ -28,9 +28,12 @@ impl Tpmcp {
     #[tool(
         title = "Edit Cell",
         description = "Surgically edit one notebook cell: replace an exact old_string with \
-                       new_string inside the cell source (like an editor's edit tool). \
-                       old_string must be unique unless replace_all is set. Returns a unified \
-                       diff and the new revision. Outputs and metadata are preserved.",
+                       new_string inside the cell source (like an editor's edit tool; use \
+                       cell_set_source to replace a whole cell). old_string must be unique \
+                       unless replace_all is set. Returns a unified diff and the new revision. \
+                       Outputs and metadata are preserved. Keep the cell re-runnable: make the \
+                       edited code explicit (names, imports, conversions) and check what calls \
+                       return before using the result.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -80,7 +83,9 @@ impl Tpmcp {
                        detail=full to see line numbers). Provide the source inline, or via \
                        source_file to stream a large payload from disk without round-tripping \
                        it through your context. Returns the new cell source and revision. \
-                       Outputs and metadata are preserved.",
+                       Outputs and metadata are preserved. When the new source is code, keep it \
+                       explicit and re-runnable in any order: no wildcard imports, no dependence \
+                       on ambient state or prior execution.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -157,7 +162,9 @@ impl Tpmcp {
                        notebook at a 0-based index; omit index to append at the end. source \
                        may be empty; pass source_file instead to stream a large payload from \
                        disk without round-tripping it through your context. Returns the new \
-                       revision.",
+                       revision. Write code cells that stand alone: every name the cell uses is \
+                       imported or defined in the notebook, and optional call results are \
+                       guarded before use.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
