@@ -3,6 +3,26 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.3.1] - 2026-10-26
+
+### Added
+
+- render the docs comparison table, de-AI generated prose
+- teach the long-cell streaming workflow
+- rename stream_copy to file_copy and add file_move
+- teach the code-writing contract in instructions and tool nudges
+- honor ty.toml [rules] and [tool.ty.rules]
+- split the memory profile at the docs lookups
+- expire idle databases after ten minutes
+
+### Changed
+
+- bring toml to its current release
+- pin the lazy-submodule non-resolution
+- pin engine work to sticky per-tree worker threads
+- fuzz the Jupyter edit contract like marimo's
+- refresh comparison measurements [skip ci]
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
