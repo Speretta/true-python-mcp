@@ -227,6 +227,81 @@ fn nested_dead_end_names_failing_segment() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A package whose submodules are fabricated at runtime (PEP 562
+/// `__getattr__`, the shape `andes.rl` has: the submodule only appears on
+/// first use). Nothing about `lazypkg.lazy_mod` exists statically.
+const LAZY_PKG: &str = r#""""Fabricate submodules at runtime, like a lazy loader."""
+import sys
+import types
+
+
+def __getattr__(name):
+    module = types.ModuleType(f"{__name__}.{name}")
+    module.LazyEnv = type("LazyEnv", (), {})
+    sys.modules[f"{__name__}.{name}"] = module
+    return module
+"#;
+
+/// Write the lazy package scaffold under `dir`.
+fn scaffold_lazy_pkg(dir: &Path) {
+    std::fs::create_dir_all(dir.join("lazypkg")).unwrap();
+    std::fs::write(dir.join("lazypkg").join("__init__.py"), LAZY_PKG).unwrap();
+}
+
+/// A lazily fabricated submodule has no static definition: `py_docs` must
+/// fail with the `did not resolve` error naming the failing segment, never
+/// invent a signature for what the lazy loader would return at runtime.
+#[test]
+fn lazy_submodule_does_not_resolve() {
+    let dir = temp_dir("docs-lazy");
+    scaffold_lazy_pkg(&dir);
+    let error = resolve_symbol("lazypkg.lazy_mod.LazyEnv", Some(&dir)).unwrap_err();
+    assert_eq!(error.kind(), "analysis_error");
+    let message = error.to_string();
+    assert!(message.contains("did not resolve"), "{message}");
+    assert!(message.contains("segment `lazy_mod`"), "{message}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The same dead end over the wire: `py_docs` is an honest tool error that
+/// names the segment that failed, not a panic and not a guessed symbol.
+#[test]
+fn py_docs_lazy_submodule_fails_over_the_wire() {
+    let mut server = Server::start(&[]);
+    let dir = temp_dir("docs-lazy-wire");
+    scaffold_lazy_pkg(&dir);
+    let (err, text, sc) = server.call(
+        "py_docs",
+        json!({
+            "symbol": "lazypkg.lazy_mod.LazyEnv",
+            "path": dir.to_str().unwrap(),
+            "format": "json"
+        }),
+    );
+    assert!(err, "a lazy submodule must be an error, got: {text}");
+    assert!(text.contains("did not resolve"), "{text}");
+    assert!(text.contains("segment `lazy_mod`"), "{text}");
+    assert_eq!(sc["error"], "analysis_error");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `py_module_members` on the same lazy package lists only what exists
+/// statically: the fabricated submodule must not appear as a member, so the
+/// listing can never promise a symbol the resolver then fails on.
+#[test]
+fn lazy_submodule_members_are_not_invented() {
+    let dir = temp_dir("docs-lazy-members");
+    scaffold_lazy_pkg(&dir);
+    let module = resolve_module_members("lazypkg", Some(&dir), None).unwrap();
+    assert_eq!(module.resolved_name, "lazypkg");
+    let names: Vec<&str> = module.members.iter().map(|m| m.name.as_str()).collect();
+    assert!(
+        !names.contains(&"lazy_mod"),
+        "the lazy submodule is fabricated at runtime, not a member: {names:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// `print` has two `@overload`s: one symbol, two signatures, `disambiguation:
 /// overloads` — not `multiple`.
 #[test]
