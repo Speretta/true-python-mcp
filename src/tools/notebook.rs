@@ -101,6 +101,14 @@ pub struct NotebookCreateArgs {
     /// binary outputs are kept or reported as per-cell warnings.
     #[serde(default)]
     pub from_path: Option<PathBuf>,
+    /// Revision of the `from_path` source (from a read). Providing it turns
+    /// the create into a move: the target is written and verified first, then
+    /// the source is deleted. The create is refused with a conflict error
+    /// before anything is written if the source no longer hashes to this
+    /// revision, so nothing is ever deleted unverified. Omit to keep the
+    /// source (a plain conversion). Requires `from_path`.
+    #[serde(default)]
+    pub source_revision: Option<String>,
     /// Override the format inferred from the extension: "jupyter" or
     /// "marimo" (not valid for a .md export target).
     #[serde(default)]
@@ -170,7 +178,11 @@ impl Tpmcp {
                        notebook_format overrides Jupyter/marimo. Fails if the file already \
                        exists; use the cell tools to modify existing notebooks. Conversions \
                        never drop content silently: cells that cannot convert exactly are kept \
-                       and reported as per-cell warnings. A fresh marimo .py with no cells is a \
+                       and reported as per-cell warnings. Pass `source_revision` (the source's \
+                       current revision) with `from_path` to make it a move: the target is \
+                       written and verified first, then the source is deleted; a stale \
+                       revision refuses the create before anything is written. A fresh marimo \
+                       .py with no cells is a \
                        0-cell file, which marimo flags as having errors until a cell is added; \
                        prefer providing at least one initial cell. Seed initial code cells with \
                        explicit, idempotent setup (imports, paths, seeds, dtypes) so any cell \
@@ -206,6 +218,22 @@ impl Tpmcp {
                 return Err(Error::invalid_input(
                     "notebook_format does not apply to a .md export target",
                 ));
+            }
+            if args.source_revision.is_some() && args.from_path.is_none() {
+                return Err(Error::invalid_input("source_revision requires from_path"));
+            }
+            // A move must never delete a source the caller has not seen: the
+            // revision is checked before anything is written, so a stale one
+            // refuses the whole create under the usual conflict contract.
+            if let (Some(from_path), Some(expected)) = (&args.from_path, &args.source_revision) {
+                let current = fs::read(from_path)?.revision;
+                if current != *expected {
+                    return Err(Error::Conflict {
+                        path: from_path.clone(),
+                        expected: expected.clone(),
+                        current,
+                    });
+                }
             }
             let (content, cell_count, warnings) = match &args.from_path {
                 Some(from_path) => convert_notebook(from_path, &args.path, args.notebook_format)?,
@@ -262,21 +290,56 @@ impl Tpmcp {
                 ),
                 None => format!("created notebook with {cell_count} cells"),
             };
+            // The move half of `source_revision`: only after the target exists
+            // and is verified is the source removed, guarded by the same
+            // revision. If the source changed in flight or cannot be removed,
+            // the target stands and the answer says so — never an error that
+            // hides the created file, never silence about the leftover.
+            let mut source_removed = None;
+            let mut source_note = None;
+            if let (Some(from_path), Some(expected)) = (&args.from_path, &args.source_revision) {
+                match fs::delete(from_path, Some(expected)) {
+                    Ok(_) => source_removed = Some(true),
+                    Err(Error::Conflict { .. }) => {
+                        source_removed = Some(false);
+                        source_note = Some(format!(
+                            "the source changed during the move and was NOT removed: {}",
+                            from_path.display()
+                        ));
+                    }
+                    Err(error) => {
+                        source_removed = Some(false);
+                        source_note = Some(format!("the source could not be removed: {error}"));
+                    }
+                }
+            }
             Ok(mutation_result(
                 args.format,
                 summary,
                 &args.path,
                 &new_revision,
                 || {
-                    (!warnings.is_empty()).then(|| {
+                    let mut parts = Vec::new();
+                    if !warnings.is_empty() {
                         let lines: Vec<String> = warnings
                             .iter()
                             .map(|warning| format!("- {warning}"))
                             .collect();
-                        format!("warnings:\n{}", lines.join("\n"))
+                        parts.push(format!("warnings:\n{}", lines.join("\n")));
+                    }
+                    if let Some(note) = &source_note {
+                        parts.push(format!("note: {note}"));
+                    }
+                    (!parts.is_empty()).then(|| parts.join("\n\n"))
+                },
+                || {
+                    json!({
+                        "cell_count": cell_count,
+                        "warnings": &warnings,
+                        "source_removed": source_removed,
+                        "note": source_note,
                     })
                 },
-                || json!({"cell_count": cell_count, "warnings": &warnings}),
             ))
         })
         .await
