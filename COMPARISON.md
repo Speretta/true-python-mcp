@@ -38,18 +38,18 @@ The fixed operation profile runs, in order: read, check, edit cell 4, insert an 
 
 All values are medians, taken across the samples inside each window and across runs. The process lists and raw operation results under the table are part of the audit. They show exactly which processes were counted and what every tool call returned.
 
-**Environment.** 24 measured runs, mode: normal; docker 28.0.4; kernel Linux 6.17.0-1022-azure; measured 2026-10-21. Every stack ran on the same machine, one at a time; host load average (1 min) during the runs: 0.00-0.41.
+**Environment.** 24 measured runs, mode: normal; docker 28.0.4; kernel Linux 6.17.0-1022-azure; measured 2026-10-26. Every stack ran on the same machine, one at a time; host load average (1 min) during the runs: 0.00-0.13.
 
 | Server | Category | Idle RAM (cgroup) | After the full profile (cgroup) | Idle RAM (RSS sum) | Processes idle/after | Ready in | Image size | Runs |
 |---|---|---|---|---|---|---|---|---|
-| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | notebook editor (files) | 1.5 MiB | 2.0 MiB | 6.5 MiB | 1/1 | 0.1 s | 37 MB | 3 |
-| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | live Jupyter pairing | 273.7 MiB | 337.3 MiB | 344.2 MiB | 3/4 | 5.6 s | 549 MB | 3 |
-| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | live Jupyter pairing | 140.5 MiB | 196.5 MiB | 177.0 MiB | 2/3 | 3.6 s | 491 MB | 3 |
-| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | notebook editor (files) | 62.1 MiB | 72.9 MiB | 82.1 MiB | 1/1 | 0.8 s | 238 MB | 3 |
-| [marimo built-in MCP](https://github.com/marimo-team/marimo) | editor-embedded (read-only MCP) | 90.1 MiB | 90.2 MiB | 117.1 MiB | 2/2 | 2.2 s | 378 MB | 3 |
-| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | 71.0 MiB | 71.3 MiB | 81.7 MiB | 1/1 | 2.5 s | 246 MB | 3 |
-| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | 79.0 MiB | 252.4 MiB | 122.6 MiB | 2/2 | 4.0 s | 295 MB | 3 |
-| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | 44.8 MiB | 45.0 MiB | 59.6 MiB | 1/1 | 0.6 s | 205 MB | 3 |
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | notebook editor (files) | 1.6 MiB | 15.0 MiB | 6.6 MiB | 1/1 | 0.1 s | 38 MB | 3 |
+| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | live Jupyter pairing | 270.3 MiB | 334.4 MiB | 340.5 MiB | 3/4 | 5.6 s | 549 MB | 3 |
+| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | live Jupyter pairing | 141.6 MiB | 198.1 MiB | 177.7 MiB | 2/3 | 3.5 s | 492 MB | 3 |
+| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | notebook editor (files) | 62.1 MiB | 73.0 MiB | 82.2 MiB | 1/1 | 0.8 s | 239 MB | 3 |
+| [marimo built-in MCP](https://github.com/marimo-team/marimo) | editor-embedded (read-only MCP) | 90.2 MiB | 90.7 MiB | 116.6 MiB | 2/2 | 2.2 s | 379 MB | 3 |
+| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | 70.8 MiB | 70.5 MiB | 81.3 MiB | 1/1 | 2.5 s | 246 MB | 3 |
+| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | 78.7 MiB | 238.6 MiB | 122.2 MiB | 2/2 | 3.7 s | 296 MB | 3 |
+| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | 44.8 MiB | 44.8 MiB | 59.5 MiB | 1/1 | 0.6 s | 206 MB | 3 |
 
 Idle = after the MCP handshake and tools/list, then a quiesce window. After = after the full operation profile (read, check, edit, insert an algorithm cell, execute where supported, delete, re-read, lint, and both conflict scenarios where applicable), then a quiesce window. Cgroup memory is the headline metric: it counts every process in the container exactly once and excludes file-cache pages. The RSS sum double-counts pages shared between processes (for example libpython between a Jupyter server and its kernels), so treat it as the conservative upper view. Ready = container start plus handshake up to the answered tools/list. All values are medians across the runs in the last column.
 
@@ -59,47 +59,62 @@ Per-process RSS from the median run of each stack (the same data as the audit li
 
 | Server | Component | Idle RSS | After profile RSS |
 |---|---|---|---|
-| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | tpmcp static binary | 6.7 MiB | 14.0 MiB |
-| | **cgroup total (headline)** | **1.5 MiB** | **2.0 MiB** |
-| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | jupyter-mcp-server (Python) | 137.4 MiB | 151.6 MiB |
-|  | JupyterLab server (Python) | 152.2 MiB | 167.6 MiB |
-|  | ipykernel (Python) | 55.3 MiB | 108.2 MiB |
-| | **cgroup total (headline)** | **273.7 MiB** | **337.3 MiB** |
-| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter | 85.5 MiB | 86.0 MiB |
-|  | JupyterLab server (Python) | 90.8 MiB | 105.3 MiB |
-|  | ipykernel (Python) | — | 55.6 MiB |
-| | **cgroup total (headline)** | **140.5 MiB** | **196.5 MiB** |
-| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | cursor-notebook-mcp (Python) | 82.1 MiB | 92.7 MiB |
-| | **cgroup total (headline)** | **62.1 MiB** | **72.9 MiB** |
-| [marimo built-in MCP](https://github.com/marimo-team/marimo) | marimo server (Python) | 104.8 MiB | 104.9 MiB |
-|  | /usr/local/bin/python3.12 -c from multiprocessing.resource_t | 12.4 MiB | 12.4 MiB |
-| | **cgroup total (headline)** | **90.1 MiB** | **90.2 MiB** |
-| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | mcp-server-analyzer (Python) | 81.4 MiB | 81.5 MiB |
-| | **cgroup total (headline)** | **71.0 MiB** | **71.3 MiB** |
-| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | mcp-run-python launcher (Python) | 63.5 MiB | 63.5 MiB |
-|  | Deno + Pyodide (WASM sandbox) | 59.1 MiB | 241.7 MiB |
-| | **cgroup total (headline)** | **79.0 MiB** | **252.4 MiB** |
-| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | mcp-python-interpreter (Python) | 59.5 MiB | 59.6 MiB |
-| | **cgroup total (headline)** | **44.8 MiB** | **45.0 MiB** |
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | tpmcp static binary | 6.6 MiB | 39.4 MiB |
+| | **cgroup total (headline)** | **1.6 MiB** | **15.0 MiB** |
+| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | jupyter-mcp-server (Python) | 135.6 MiB | 147.9 MiB |
+|  | JupyterLab server (Python) | 149.1 MiB | 164.1 MiB |
+|  | ipykernel (Python) | 55.8 MiB | 108.6 MiB |
+| | **cgroup total (headline)** | **270.3 MiB** | **334.4 MiB** |
+| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter | 87.1 MiB | 88.1 MiB |
+|  | JupyterLab server (Python) | 90.6 MiB | 106.8 MiB |
+|  | ipykernel (Python) | — | 55.8 MiB |
+| | **cgroup total (headline)** | **141.6 MiB** | **198.1 MiB** |
+| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | cursor-notebook-mcp (Python) | 82.4 MiB | 93.5 MiB |
+| | **cgroup total (headline)** | **62.1 MiB** | **73.0 MiB** |
+| [marimo built-in MCP](https://github.com/marimo-team/marimo) | marimo server (Python) | 104.2 MiB | 104.4 MiB |
+|  | /usr/local/bin/python3.12 -c from multiprocessing.resource_t | 12.5 MiB | 12.5 MiB |
+| | **cgroup total (headline)** | **90.2 MiB** | **90.7 MiB** |
+| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | mcp-server-analyzer (Python) | 81.3 MiB | 81.4 MiB |
+| | **cgroup total (headline)** | **70.8 MiB** | **70.5 MiB** |
+| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | mcp-run-python launcher (Python) | 63.8 MiB | 63.8 MiB |
+|  | Deno + Pyodide (WASM sandbox) | 58.5 MiB | 210.5 MiB |
+| | **cgroup total (headline)** | **78.7 MiB** | **238.6 MiB** |
+| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | mcp-python-interpreter (Python) | 59.5 MiB | 59.5 MiB |
+| | **cgroup total (headline)** | **44.8 MiB** | **44.8 MiB** |
 
 ### Operation latency (median per call)
 
 | Operation | tpmcp (this project) | datalayer/jupyter-mcp-server | block/mcp-jupyter | jbeno/cursor-notebook-mcp | marimo built-in MCP | Anselmoo/mcp-server-analyzer | pydantic/mcp-run-python (retired upstream) | yzfly/mcp-python-interpreter |
 |---|---|---|---|---|---|---|---|---|
-| **ready** (start → tools/list) | 121 ms | 5.6 s | 3.6 s | 818 ms | 2.2 s | 2.5 s | 4.0 s | 618 ms |
-| **read** | 1 ms | 9 ms | 1.5 s | 37 ms | 3 ms | — | — | — |
-| **check** | 1 ms | — | — | 4 ms | — | — | — | — |
-| **edit** | 1 ms | 13 ms | 3.0 s | 5 ms | — | — | — | — |
-| **insert** | 1 ms | 39 ms | 3.0 s | 6 ms | — | — | — | — |
-| **execute** | — | 1.0 s | 3.1 s | — | — | — | 2.0 s | 4 ms |
-| **delete** | 1 ms | 15 ms | 3.0 s | 5 ms | — | — | — | — |
-| **reread** | 1 ms | 9 ms | 1.5 s | 3 ms | — | — | — | — |
-| **lint** | 4 ms | — | — | — | — | 18 ms | — | — |
-| **analyze** | — | — | — | — | — | 211 ms | — | — |
-| **conflict-0s** | 502 ms | 524 ms | 3.5 s | 510 ms | — | — | — | — |
+| **ready** (start → tools/list) | 101 ms | 5.6 s | 3.5 s | 805 ms | 2.2 s | 2.5 s | 3.7 s | 595 ms |
+| **read** | 1 ms | 11 ms | 1.5 s | 37 ms | 4 ms | — | — | — |
+| **check** | 0 ms | — | — | 5 ms | — | — | — | — |
+| **edit** | 2 ms | 16 ms | 3.0 s | 5 ms | — | — | — | — |
+| **insert** | 1 ms | 40 ms | 3.0 s | 6 ms | — | — | — | — |
+| **execute** | — | 1.0 s | 3.1 s | — | — | — | 2.2 s | 4 ms |
+| **delete** | 1 ms | 17 ms | 3.0 s | 5 ms | — | — | — | — |
+| **reread** | 1 ms | 10 ms | 1.5 s | 4 ms | — | — | — | — |
+| **lint** | 4 ms | — | — | — | — | 21 ms | — | — |
+| **analyze** | — | — | — | — | — | 226 ms | — | — |
+| **docs-cold** | 30 ms | — | — | — | — | — | — | — |
+| **docs-warm** | 26 ms | — | — | — | — | — | — | — |
+| **docs-members** | 8 ms | — | — | — | — | — | — | — |
+| **conflict-0s** | 503 ms | 526 ms | 3.5 s | 511 ms | — | — | — | — |
 | **conflict-10s** | 10.5 s | 10.5 s | 13.5 s | 10.5 s | — | — | — | — |
 
-“—” = the stack has no such tool or it cannot run headless (the reason is recorded per run in the audit); “n/a” = the operation was not attempted. execute means “run the bubble-sort cell” for notebook stacks and “run the same source as a snippet” for execution-only servers. lint means ruff on the same marimo-format fixture: by file path for tpmcp, as a code string for mcp-server-analyzer (its only input shape).
+“—” = the stack has no such tool or it cannot run headless (the reason is recorded per run in the audit); “n/a” = the operation was not attempted. execute means “run the bubble-sort cell” for notebook stacks and “run the same source as a snippet” for execution-only servers. lint means ruff on the same marimo-format fixture: by file path for tpmcp, as a code string for mcp-server-analyzer (its only input shape). docs-cold is the FIRST `py_docs` call in a fresh server process (empty discovery and docstring caches); docs-warm is the identical repeat call (caches populated); docs-members is `py_module_members`, a distinct tool that shares the already-warm discovery cache but enumerates the module itself.
+
+### Context7 (remote) — doc-snippet search, not symbol resolution
+
+Context7 is a **remote** MCP server ([context7.com](https://context7.com), streamable HTTP at `https://mcp.context7.com/mcp`, `Authorization: Bearer <key>`) — a different category from every local stack above. `resolve-library-id` and `query-docs` search Context7's cloud documentation index and return doc **snippets**; they do not resolve symbols against a local environment, and every call is a network round-trip. tpmcp's `py_docs`/`py_module_members` in the latency table above are local and in-process (no interpreter, no API key, no network), so the two are not apples-to-apples — the rows below are labeled REMOTE to keep that honest.
+
+| Tool (REMOTE, network round-trip) | Median | First call |
+|---|---|---|
+| `resolve-library-id` (libraryName `Python`, query `json.dumps`) | 1.4 s | 1.6 s |
+| `query-docs` (query `json.dumps`) | 1.2 s | 1.3 s |
+
+Measured 2026-10-26 (normal mode), median of 3 run(s) x the per-call samples. The median covers repeat calls on an established session; "first call" is the first call in the session, so it can include the server-side cold path and connection reuse. Every call is a network round-trip.
+
 
 ### The file changes while the AI works
 
@@ -130,111 +145,111 @@ Scenario: the AI reads cell 4, the file is then changed on disk behind its back 
 **Process audit.** What was actually running in each container, captured from the host during the median run (idle window, then after the profile):
 
 ````text
-# tpmcp (idle) - run 2
+# tpmcp (idle) - run 1
 PID PPID RSS_KB THREADS CMD
-6814 6790 6828 2 /tpmcp
+6515 6491 6748 2 /tpmcp
 ````
 
 ````text
-# tpmcp (after profile) - run 2
+# tpmcp (after profile) - run 1
 PID PPID RSS_KB THREADS CMD
-6814 6790 14292 2 /tpmcp
+6515 6491 40388 2 /tpmcp
 ````
 
 ````text
-# datalayer (idle) - run 2
+# datalayer (idle) - run 1
 PID PPID RSS_KB THREADS CMD
-8616 8590 140748 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
-8642 8616 155812 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
-8652 8642 56604 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-bcecf6ca-317d-4b6e-90a9-1e0dbf5f1de0.json
+8274 8249 138880 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
+8301 8274 152664 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+8311 8301 57144 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-05f410f0-445d-471c-b092-673dd8e96423.json
 ````
 
 ````text
-# datalayer (after profile) - run 2
+# datalayer (after profile) - run 1
 PID PPID RSS_KB THREADS CMD
-8616 8590 155212 8 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
-8642 8616 171588 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
-8767 8642 54224 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-f59eb233-c80d-4e2a-af0c-a675fec64dc0.json
-8652 8642 56604 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-bcecf6ca-317d-4b6e-90a9-1e0dbf5f1de0.json
+8274 8249 151484 8 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
+8301 8274 168068 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+8423 8301 54028 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-d29a05bb-4302-44a2-9a84-06cd7e545a38.json
+8311 8301 57144 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-05f410f0-445d-471c-b092-673dd8e96423.json
 ````
 
 ````text
-# block (idle) - run 2
+# block (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-10069 10044 87552 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
-10096 10069 93020 1 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+10522 10495 89192 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
+10549 10522 92748 1 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
 ````
 
 ````text
-# block (after profile) - run 2
+# block (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-10069 10044 88064 5 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
-10096 10069 107812 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
-10196 10096 56956 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /work/.local/share/jupyter/runtime/kernel-75bee11a-1e76-40aa-80d8-63c628901703.json
+10522 10495 90216 5 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
+10549 10522 109332 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+10652 10549 57100 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /work/.local/share/jupyter/runtime/kernel-ad02abe3-4529-45c2-9e24-4e597d29130d.json
 ````
 
 ````text
-# cursor (idle) - run 1
+# cursor (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-11262 11237 84020 3 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
+12040 12014 84352 3 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
 ````
 
 ````text
-# cursor (after profile) - run 1
+# cursor (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-11262 11237 94968 4 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
+12040 12014 95740 4 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
 ````
 
 ````text
 # marimo (idle) - run 1
 PID PPID RSS_KB THREADS CMD
-12475 12447 107328 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
-12525 12475 12748 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
+12533 12510 106720 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
+12584 12533 12752 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
 ````
 
 ````text
 # marimo (after profile) - run 1
 PID PPID RSS_KB THREADS CMD
-12475 12447 107456 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
-12525 12475 12748 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
+12533 12510 106876 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
+12584 12533 12752 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
 ````
 
 ````text
-# analyzer (idle) - run 1
+# analyzer (idle) - run 2
 PID PPID RSS_KB THREADS CMD
-13659 13634 83348 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
+14209 14183 83232 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
 ````
 
 ````text
-# analyzer (after profile) - run 1
+# analyzer (after profile) - run 2
 PID PPID RSS_KB THREADS CMD
-13659 13634 83476 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
+14209 14183 83360 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
 ````
 
 ````text
 # runpython (idle) - run 2
 PID PPID RSS_KB THREADS CMD
-16317 16293 65036 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
-16381 16317 60504 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
+16367 16342 65284 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
+16433 16367 59872 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
 ````
 
 ````text
 # runpython (after profile) - run 2
 PID PPID RSS_KB THREADS CMD
-16317 16293 65036 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
-16381 16317 247520 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
+16367 16342 65284 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
+16433 16367 215508 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
 ````
 
 ````text
-# yzfly (idle) - run 2
+# yzfly (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-17578 17551 60928 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
+18070 18044 60964 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
 ````
 
 ````text
-# yzfly (after profile) - run 2
+# yzfly (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-17578 17551 61056 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
+18070 18044 60964 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
 ````
 
 
