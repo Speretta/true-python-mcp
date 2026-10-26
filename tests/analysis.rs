@@ -337,11 +337,10 @@ fn plain_python_still_reports_unused_import() {
 }
 
 /// A synthetic marimo `.py` linted per cell drops the scaffolding false
-/// positives — F401(`marimo`), F811(`mo`), and the cell `return` (PLR1711) /
-/// import-block (I001) noise — while a genuine C408 and F821 survive. The
-/// whole-file lint would have flagged `import marimo` (F401) and each cell's
-/// trailing `return` (PLR1711). A reference to the header's `app` is not an
-/// undefined name either.
+/// positives — the scaffold cell's F401(`marimo`), F811(`mo`) redefinition,
+/// and the cell `return` (PLR1711) noise — while a USER cell's own unused
+/// `import marimo` survives along with a genuine C408 and F821. A reference
+/// to the header's `app` is not an undefined name either.
 #[test]
 fn marimo_lint_filters_scaffolding_noise() {
     let dir = temp_dir("marimo-lint");
@@ -361,13 +360,13 @@ app = marimo.App()
 
 @app.cell
 def _():
-    import marimo
     import marimo as mo
     return
 
 
 @app.cell
 def _(mo):
+    import marimo
     mo = 1
     result = dict(a=1)
     print(undefined_name)
@@ -383,9 +382,16 @@ if __name__ == "__main__":
 
     let outcome = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
     let codes: Vec<&str> = outcome.diagnostics.iter().map(code).collect();
-    assert_eq!(codes, vec!["C408", "F821"], "{:?}", outcome.diagnostics);
+    assert_eq!(
+        codes,
+        vec!["F401", "C408", "F821"],
+        "{:?}",
+        outcome.diagnostics
+    );
 
-    // Both real findings map to cell 1 (the second @app.cell), 0-based.
+    // All three real findings map to cell 1 (the second @app.cell), 0-based:
+    // the user's own unused `import marimo` SURVIVES (only the scaffold
+    // cell's is dropped), and the F811/PLR1711/I001 scaffolding noise is gone.
     assert!(
         outcome.diagnostics.iter().all(|d| d.cell == Some(1)),
         "{:?}",
@@ -399,6 +405,60 @@ if __name__ == "__main__":
         .find(|d| code(d) == "F821")
         .expect("F821 present");
     assert!(f821.message.contains("undefined_name"), "{}", f821.message);
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// I001 in marimo cell lint keeps exactly the flavor ruff-on-the-file
+/// reports: an import ORDER violation survives (the real file's `def` flags
+/// it too), while the "blank line after the import block" complaint — which
+/// isort enforces only at module level — is the concatenation's artifact
+/// and goes.
+#[test]
+fn marimo_i001_keeps_order_and_drops_the_formatting_artifact() {
+    let dir = temp_dir("marimo-i001");
+    fs::write(dir.join("ruff.toml"), "[lint]\nselect = [\"I001\"]\n").unwrap();
+    let path = dir.join("notebook.py");
+    fs::write(
+        &path,
+        r#"import marimo
+
+__generated_with = "0.25.2"
+app = marimo.App()
+
+
+@app.cell
+def _():
+    import os
+    print(os)
+    return
+
+
+@app.cell
+def _():
+    import sys
+    import os
+    print(os, sys)
+    return
+
+
+if __name__ == "__main__":
+    app.run()
+"#,
+    )
+    .unwrap();
+
+    let outcome = ruff::check(&path, SafeFixes::ReportOnly, snap(&path)).unwrap();
+    let codes: Vec<&str> = outcome.diagnostics.iter().map(code).collect();
+    assert_eq!(codes, vec!["I001"], "{:?}", outcome.diagnostics);
+    // The kept one is cell 1's unsorted pair; cell 0's import+code is clean
+    // where the real file puts it (nested in the def).
+    assert_eq!(
+        outcome.diagnostics[0].cell,
+        Some(1),
+        "{:?}",
+        outcome.diagnostics
+    );
 
     fs::remove_dir_all(&dir).unwrap();
 }

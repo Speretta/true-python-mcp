@@ -15,7 +15,6 @@
 //! is re-parsed and re-emitted canonically, so fixing or formatting a
 //! notebook never introduces diff noise in untouched cells.
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use ruff_db::diagnostic::Diagnostic as RuffDiagnostic;
@@ -140,16 +139,15 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
         && crate::notebook::is_marimo(&snapshot.content))
     .then(|| MarimoNotebook::parse(&snapshot.content).ok())
     .flatten();
-    let (source_kind, source_type, cell_definitions) = match marimo {
+    let (source_kind, source_type, marimo_notebook) = match marimo {
         Some(notebook) => {
             if fixes == SafeFixes::Apply {
                 return Err(Error::invalid_input(
                     "fixing marimo notebooks is not supported yet (phase 1 is lint-only)",
                 ));
             }
-            let cell_definitions = notebook.cell_definitions();
             let kind = marimo_source_kind(&notebook, path)?;
-            (kind, PySourceType::Ipynb, Some(cell_definitions))
+            (kind, PySourceType::Ipynb, Some(notebook))
         }
         None => {
             let kind = source_kind_from(snapshot.content, source_type, path)?;
@@ -216,8 +214,8 @@ pub fn check(path: &Path, fixes: SafeFixes, snapshot: fs::Snapshot) -> Result<Ch
     };
 
     let mut diagnostics = map_diagnostics(&pass.diagnostics, path, pass.notebook_index)?;
-    if let Some(cell_definitions) = cell_definitions {
-        diagnostics = filter_marimo(diagnostics, &cell_definitions);
+    if let Some(notebook) = &marimo_notebook {
+        diagnostics = filter_marimo(diagnostics, notebook, &settings, path);
     }
     Ok(CheckOutcome {
         diagnostics,
@@ -449,10 +447,23 @@ fn marimo_source_kind(marimo: &MarimoNotebook, path: &Path) -> Result<SourceKind
 /// runtime supplies it as a builtin, the file header binds it
 /// (`header_binds`), or some cell defines it at its top level
 /// (`cell_definitions`), so an F821 against those is a provided name, not a
-/// genuine undefined one. PLR1711/I001/C408 are untouched: PLR1711
-/// disappears because `lint_cells` strips the trailing `return`, and the rest
-/// are real lint findings.
-fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> Vec<Diagnostic> {
+/// genuine undefined one. PLR1711/C408 are untouched: PLR1711 disappears
+/// because `lint_cells` strips the trailing `return`, and C408 is a real lint
+/// finding.
+fn filter_marimo(
+    diags: Vec<Diagnostic>,
+    notebook: &MarimoNotebook,
+    settings: &Settings,
+    path: &Path,
+) -> Vec<Diagnostic> {
+    let cell_definitions = notebook.cell_definitions();
+    let scaffold_import_cell = notebook.scaffold_import_cell();
+    let mut bodies = vec![String::new(); notebook.cells().len()];
+    for (index, body) in notebook.lint_cells() {
+        if let Some(slot) = bodies.get_mut(index) {
+            *slot = body;
+        }
+    }
     diags
         .into_iter()
         .filter(|diagnostic| {
@@ -461,13 +472,22 @@ fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> 
             };
             let token = backtick_token(&diagnostic.message);
             match code {
-                // The scaffold `import marimo` (or `import marimo as mo`) is
-                // never a user mistake; marimo owns it.
-                "F401" => !matches!(
-                    token,
-                    Some(token) if token == "marimo" || token.starts_with("marimo.")
-                ),
-                // `mo`/`marimo` are redefined by the graph across cells.
+                // The scaffold import cell is marimo's own, so an unused
+                // `marimo` import there is scaffolding. Every other F401
+                // naming `marimo` sits in a user cell and survives.
+                "F401" => match token {
+                    Some(token) if token == "marimo" || token.starts_with("marimo.") => !matches!(
+                        scaffold_import_cell,
+                        Some(cell) if diagnostic.cell == Some(cell)
+                    ),
+                    _ => true,
+                },
+                // `mo`/`marimo` redefinitions across cells are the graph's
+                // normal shape, and a real duplicate surfaces as the graph's
+                // own multiple-definition finding — so the ruff echo is
+                // dropped whole, including a user's own duplicate import
+                // (the message names only the redefinition site, which does
+                // not say which instance is the scaffold's).
                 "F811" => !matches!(token, Some(token) if token == "mo" || token == "marimo"),
                 // A name the file provides is not "undefined": marimo's
                 // builtins, the header's bindings, and cell defs.
@@ -476,10 +496,52 @@ fn filter_marimo(diags: Vec<Diagnostic>, cell_definitions: &HashSet<String>) -> 
                         || MarimoNotebook::header_binds(token)
                         || cell_definitions.contains(token)
                 }),
+                // Only the flavor ruff-on-the-file would report survives.
+                "I001" => diagnostic
+                    .cell
+                    .is_some_and(|cell| nested_isort_flags(settings, path, &bodies[cell])),
                 _ => true,
             }
         })
         .collect()
+}
+
+/// Whether isort would flag `body`'s imports where the real marimo file puts
+/// them: nested in the cell's `def`. Cell bodies are linted concatenated at
+/// module level, where isort additionally enforces its blank-line-after-
+/// imports shape — ruff flags `import os` + `print(os)` at module level but
+/// reports nothing for the same lines under `def _():`. The nested re-check
+/// keeps exactly the I001 flavor ruff-on-the-file reports (import order) and
+/// drops the concatenation's formatting artifact. An unparseable re-check
+/// keeps the finding: an oracle that failed must never suppress.
+fn nested_isort_flags(settings: &Settings, path: &Path, body: &str) -> bool {
+    let mut module = String::from("async def _():\n");
+    for line in body.lines() {
+        module.push_str("    ");
+        module.push_str(line);
+        module.push('\n');
+    }
+    let source_len = module.len();
+    let Ok(Some(source_kind)) =
+        SourceKind::from_source_code(module, SourceType::Python(PySourceType::Python))
+    else {
+        return true;
+    };
+    let result = crate::stack::guarded_walk(source_len, || {
+        lint_only(
+            path,
+            None,
+            &settings.linter,
+            Noqa::Enabled,
+            &source_kind,
+            PySourceType::Python,
+            ParseSource::None,
+        )
+    });
+    result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.secondary_code_or_id() == "I001")
 }
 
 /// The first backtick-quoted token of a ruff message: `` `marimo` imported but

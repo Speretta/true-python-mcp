@@ -22,7 +22,9 @@ pub const MARIMO_VERSION: &str = "0.25.2";
 /// The import markdown cells need: every `mo.md(...)` cell takes `mo` as a
 /// graph reference, and marimo's own converter adds this cell when a file
 /// gains markdown cells without a definition of `mo`.
-const MO_IMPORT: &str = "import marimo as mo";
+/// The scaffold import marimo's converter (and [`MarimoNotebook::ensure_mo_definition`])
+/// injects for markdown cells: its body shape identifies the scaffold cell.
+pub(super) const MO_IMPORT: &str = "import marimo as mo";
 
 impl MarimoNotebook {
     /// A new empty marimo notebook (header + run guard, no cells). When

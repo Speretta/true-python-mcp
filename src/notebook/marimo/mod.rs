@@ -327,6 +327,18 @@ impl MarimoNotebook {
     pub(crate) fn header_binds(name: &str) -> bool {
         matches!(name, "marimo" | "app" | "__generated_with")
     }
+
+    /// The cell holding marimo's scaffold import (exactly [`create::MO_IMPORT`],
+    /// the shape [`Self::ensure_mo_definition`] injects): an unused `marimo`
+    /// import in *that* cell is scaffolding, not the user's. The first such
+    /// cell — where the auto-fix would place it. `None` when no cell carries
+    /// the shape; a user cell repeating the exact scaffold line in a notebook
+    /// with no scaffold is indistinguishable and counted as scaffolding.
+    pub(crate) fn scaffold_import_cell(&self) -> Option<usize> {
+        self.cells.iter().zip(&self.metas).position(|(cell, meta)| {
+            meta.md.is_none() && cell.source.text().trim() == create::MO_IMPORT
+        })
+    }
 }
 
 impl Notebook for MarimoNotebook {
