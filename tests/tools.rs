@@ -926,6 +926,22 @@ fn stream_copy_over_the_wire() {
     assert_eq!(sc["bytes"], payload.len());
     assert_eq!(sc["revision"].as_str().unwrap().len(), 16);
     assert_eq!(std::fs::read(&dest).unwrap(), payload);
+    let current = sc["revision"].as_str().unwrap().to_string();
+
+    // The revision guard: a stale `revision` refuses to clobber `dest`
+    // (leaving it untouched), the current one copies through, and omitting
+    // it overwrites unconditionally.
+    let (err, _, sc) = server.call(
+        "stream_copy",
+        json!({"source": source, "dest": dest, "revision": "0000000000000000", "format": "json"}),
+    );
+    assert!(err, "a stale revision must be refused: {sc}");
+    assert_eq!(std::fs::read(&dest).unwrap(), payload, "dest untouched");
+    let (err, text, _) = server.call(
+        "stream_copy",
+        json!({"source": source, "dest": dest, "revision": current, "format": "json"}),
+    );
+    assert!(!err, "{text}");
 
     // The markdown summary names both paths.
     let (err, text, _) = server.call(

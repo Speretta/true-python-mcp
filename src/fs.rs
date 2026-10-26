@@ -219,6 +219,32 @@ pub fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
+/// Verify a copy target's current bytes match `revision` before overwriting
+/// it — binary-safe, unlike [`read_verified`] (a copy target may be any
+/// bytes). Same [`Error::Conflict`] contract, and like [`read_verified`] the
+/// stat fingerprint is recorded first so [`recheck_unchanged`] catches an
+/// external save landing mid-copy.
+fn verify_revision(path: &Path, reported: &Path, revision: &str) -> Result<(), Error> {
+    let stat = stat_fingerprint(path);
+    let bytes = read_bytes(path)?;
+    let current = revision_of(&bytes);
+    if current != revision {
+        return Err(Error::Conflict {
+            path: reported.to_path_buf(),
+            expected: revision.to_string(),
+            current,
+        });
+    }
+    lock::record_verified(
+        &lock::lock_key(path),
+        lock::VerifiedStamp {
+            stat,
+            revision: current,
+        },
+    );
+    Ok(())
+}
+
 /// Stream-copy `source` to `dest` byte-for-byte, honoring the same size cap
 /// as every other read. The bytes move in fixed-size chunks — never buffered
 /// whole — and the destination lands atomically via a sibling temp file +
@@ -229,12 +255,25 @@ pub fn exists(path: &Path) -> bool {
 /// round-tripping them through the LLM's context. Returns the `dest`
 /// revision (over the raw bytes) and the number of bytes copied.
 ///
+/// `expected_revision` is the conflict guard, and it is optional on purpose:
+/// without it the copy overwrites `dest` unconditionally, the `cp` semantics
+/// a copy primitive is expected to have. With it, `dest` must still hash to
+/// that revision (of any existing bytes — the check is binary-safe) or the
+/// copy is refused with [`Error::Conflict`], exactly like [`write`].
+///
 /// Writes follow symlinks exactly like [`write`]: `dest` is resolved first
 /// and the rename lands next to the resolved target. The parent directory
 /// must exist; like [`write`], this never fabricates directories from a
 /// typo'd path.
-pub fn copy_stream(source: &Path, dest: &Path) -> Result<(String, u64), Error> {
+pub fn copy_stream(
+    source: &Path,
+    dest: &Path,
+    expected_revision: Option<&str>,
+) -> Result<(String, u64), Error> {
     let target = resolve_target(dest);
+    if let Some(revision) = expected_revision {
+        verify_revision(&target, dest, revision)?;
+    }
     if let Some(parent) = target.parent() {
         sweep::sweep_stale_temps(parent);
     }
@@ -285,6 +324,10 @@ fn copy_via_temp(
         writer.write_all(&buffer[..count]).map_err(io)?;
     }
     writer.sync_all().map_err(io)?;
+    // The verified stamp (when the caller supplied a revision) is rechecked
+    // here: an external save landing between the check and this rename must
+    // lose, exactly as in [`write`].
+    recheck_unchanged(target, reported)?;
     fs::rename(tmp, target).map_err(io)?;
     let revision = hasher.finalize().to_hex()[..16].to_string();
     Ok((revision, copied))

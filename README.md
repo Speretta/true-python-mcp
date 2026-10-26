@@ -123,7 +123,7 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 | `py_docs` | Resolve a library symbol (function/method/class/attribute) to its signature, return type, parameters and docstring; fully local, no interpreter, no external API; pass `python` to target a specific venv. |
 | `py_module_members` | List a module's public members with one-line signatures and docstrings. |
 | `py_read` / `py_write` / `py_edit` | Read, write, and edit plain Python files (only with `--file-tools`). `py_write` can take `from_path` instead of `content`. |
-| `stream_copy` | Copy a file byte-for-byte through tpmcp by path, without round-tripping the content through the agent's context (only with `--file-tools`). |
+| `stream_copy` | Copy a file byte-for-byte through tpmcp by path, without round-tripping the content through the agent's context (only with `--file-tools`). Takes an optional `revision` to refuse clobbering anything but that exact `dest`; without one it overwrites unconditionally, like `cp`. |
 
 Notebook outputs, execution counts, and metadata keep their values, and
 only the cell you edit changes. One boundary to know: a file in Jupyter's
@@ -139,6 +139,11 @@ A file can change while the AI is working on it. tpmcp keeps that safe:
 - Every change must send that code back.
 - If the file changed in between, the tool refuses the change and sends the
   new code. Then you read again and retry.
+
+One opt-in exception: `stream_copy` is a copy primitive, so without a
+`revision` it overwrites `dest` unconditionally (like `cp`) and is marked
+destructive. With one, it follows the same refusal rule as every other
+write.
 
 Two tpmcp processes never overwrite each other: they take a cross-process
 lock, and every write re-checks the file a moment before it lands. An

@@ -65,6 +65,11 @@ pub struct StreamCopyArgs {
     pub source: PathBuf,
     /// Destination path to write the copied bytes to.
     pub dest: PathBuf,
+    /// Current revision of `dest` (from py_read or a previous mutation) to
+    /// refuse overwriting anything else; omit to overwrite unconditionally,
+    /// the `cp` semantics of a copy primitive.
+    #[serde(default)]
+    pub revision: Option<String>,
     /// Result format, "markdown" (default) or "json".
     #[serde(default)]
     pub format: Format,
@@ -240,8 +245,11 @@ impl Tpmcp {
                        The bytes are streamed in chunks and honor the same size cap as every \
                        other read; `dest` is written atomically (temp file + rename) so it is \
                        never observed half-written. Unlike py_write the content may be binary \
-                       (not UTF-8). Returns the new revision of `dest`. Prefer the host's \
-                       native copy tool when available.",
+                       (not UTF-8). Pass `revision` (the dest's current revision) to refuse \
+                       overwriting anything but that exact file; omit it to overwrite \
+                       unconditionally, the `cp` semantics of a copy primitive — that is why \
+                       this tool is destructive. Returns the new revision of `dest`. Prefer \
+                       the host's native copy tool when available.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -254,8 +262,9 @@ impl Tpmcp {
         Parameters(args): Parameters<StreamCopyArgs>,
     ) -> Result<CallToolResult, Error> {
         blocking(move || {
-            let (new_revision, bytes) =
-                fs::with_file_lock(&args.dest, || fs::copy_stream(&args.source, &args.dest))?;
+            let (new_revision, bytes) = fs::with_file_lock(&args.dest, || {
+                fs::copy_stream(&args.source, &args.dest, args.revision.as_deref())
+            })?;
             Ok(mutation_result(
                 args.format,
                 format!(
