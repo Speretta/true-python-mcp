@@ -581,8 +581,13 @@ def profile_tpmcp(ctx):
             "source": ALGO_SOURCE, "revision": c["revision"]}],
             after=grab_revision),
         step("execute", None, [], skip="never executes code, by design"),
-        step("delete", "cell_delete", [lambda c: {
-            "path": NB, "cell": 20, "revision": c["revision"]}],
+        step("delete", "cell_delete", [
+            # The tool-surface redesign renamed the target arg to
+            # `cells: [...]` (delete takes several cells); the old
+            # single-`cell` form is kept as a variant so pre-redesign
+            # binaries still measure instead of erroring.
+            lambda c: {"path": NB, "cells": [20], "revision": c["revision"]},
+            lambda c: {"path": NB, "cell": 20, "revision": c["revision"]}],
             after=grab_revision),
         step("reread", "notebook_read", [{"path": NB}], after=grab_revision),
         step("lint", "ruff_check", [{"path": NB_PY}]),
@@ -1074,29 +1079,46 @@ def run_workflow_probe(stack, client, ctx, host_dir):
     if stack == "tpmcp":
         # tpmcp writes are revision-guarded, so the honest sequence starts
         # with a read to obtain the revision and ends with the read-back;
-        # execute is a recorded skip (tpmcp never executes code).
-        f = fresh("tpmcp")
-        steps = []
-        entry, resp = do("read (get revision)", "notebook_read", {"path": f})
-        steps.append(entry)
-        rev = find_revision(result_text(resp)) if resp else None
-        for i, (label, src) in enumerate(
-                (("add cell 1", WF_CELL_1), ("add cell 2", WF_CELL_2))):
-            if not rev:
-                steps.append({"label": label, "calls": 0, "ok": False,
-                              "note": "no revision - write not attempted"})
-                continue
-            entry, resp = do(label, "cell_insert", {
-                "path": f, "index": 21 + i, "cell_type": "code",
-                "source": src, "revision": rev})
-            if resp is not None:
-                rev = find_revision(result_text(resp)) or rev
+        # execute is a recorded skip (tpmcp never executes code). Two
+        # variants, mirroring nb-cli's: one insert per cell, and both cells
+        # in one batched cell_insert (the `cells: [...]` batch form - the
+        # call count is the point of this probe).
+        def tpmcp_variant(name, file_name, adds):
+            f = fresh(file_name)
+            steps = []
+            entry, resp = do("read (get revision)", "notebook_read", {"path": f})
             steps.append(entry)
-        steps.append({"label": "execute", "calls": 0,
-                      "skipped": "never executes code, by design"})
-        entry, _ = do("read back", "notebook_read", {"path": f})
-        steps.append(entry)
-        run_variant("tpmcp MCP tool calls", f, steps)
+            rev = find_revision(result_text(resp)) if resp else None
+            for label, tool, args in adds(f):
+                if not rev:
+                    steps.append({"label": label, "calls": 0, "ok": False,
+                                  "note": "no revision - write not attempted"})
+                    continue
+                entry, resp = do(label, tool, dict(args, revision=rev))
+                if resp is not None:
+                    rev = find_revision(result_text(resp)) or rev
+                steps.append(entry)
+            steps.append({"label": "execute", "calls": 0,
+                          "skipped": "never executes code, by design"})
+            entry, _ = do("read back", "notebook_read", {"path": f})
+            steps.append(entry)
+            run_variant(name, f, steps)
+
+        tpmcp_variant("tpmcp MCP tool calls, one insert per cell", "tpmcp",
+                      lambda f: [
+                          ("add cell 1", "cell_insert",
+                           {"path": f, "index": 21, "cell_type": "code",
+                            "source": WF_CELL_1}),
+                          ("add cell 2", "cell_insert",
+                           {"path": f, "index": 22, "cell_type": "code",
+                            "source": WF_CELL_2})])
+        tpmcp_variant("tpmcp MCP tool calls, both cells in one batched insert",
+                      "tpmcp-batch",
+                      lambda f: [
+                          ("add 2 cells (batch)", "cell_insert",
+                           {"path": f, "index": 21, "cells": [
+                               {"cell_type": "code", "source": WF_CELL_1},
+                               {"cell_type": "code", "source": WF_CELL_2}]})])
     else:
         # nb-cli, variant A: one `nb` command per cell (4 invocations).
         f = fresh("one-per-cell")
