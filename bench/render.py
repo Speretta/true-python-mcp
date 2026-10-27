@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-STACK_ORDER = ["tpmcp", "datalayer", "block", "cursor", "marimo",
+STACK_ORDER = ["tpmcp", "datalayer", "block", "cursor", "nbcli", "marimo",
                "analyzer", "runpython", "yzfly"]
 
 # label, repository URL, category - the clickable identity of each stack.
@@ -36,6 +36,9 @@ LINKS = {
     "cursor": ("jbeno/cursor-notebook-mcp",
                "https://github.com/jbeno/cursor-notebook-mcp",
                "notebook editor (files)"),
+    "nbcli": ("jupyter-ai-contrib/nb-cli",
+              "https://github.com/jupyter-ai-contrib/nb-cli",
+              "notebook CLI (no resident process)"),
     "marimo": ("marimo built-in MCP",
                "https://github.com/marimo-team/marimo",
                "editor-embedded (read-only MCP)"),
@@ -49,6 +52,12 @@ LINKS = {
               "https://github.com/yzfly/mcp-python-interpreter",
               "code execution (subprocess)"),
 }
+
+# Stacks with no resident process: each operation is one shell command, so
+# idle/after memory is the container baseline and the per-call cost lives
+# in the peak-RSS columns instead. The label is printed with the memory
+# values so a ~0 MiB row can never be misread as a memory win.
+CLI_STACKS = {"nbcli"}
 
 OP_ORDER = ["read", "check", "edit", "insert", "execute", "delete",
             "reread", "lint", "analyze", "docs-cold", "docs-warm",
@@ -94,6 +103,10 @@ def classify(cmd):
     """Map a process command line to its role, for the component table."""
     if "/tpmcp" in cmd and "python" not in cmd:
         return "tpmcp static binary"
+    if cmd.strip() in ("sh", "sh -s", "bash", "sleep", "sleep infinity"):
+        return "container shell (no resident notebook process)"
+    if cmd.startswith("nb ") or cmd.endswith("/nb") or "/nb " in cmd:
+        return "nb binary (Rust, per call)"
     if "jupyter-mcp-server" in cmd:
         return "jupyter-mcp-server (Python)"
     if "jupyter-lab" in cmd:
@@ -451,6 +464,34 @@ def load_context7(dirpath):
     }
 
 
+def op_peaks(runs):
+    """Per-op per-call peak RSS (CLI stacks) -> (nb binary, with kernel).
+
+    Values are medians of the per-run peaks the driver captured from
+    /proc/<pid>/status while each `nb` invocation ran; MCP stacks have no
+    per-call peaks and simply contribute nothing.
+    """
+    nb, tree = {}, {}
+    for _, r in runs:
+        for e in (r.get("_ops") or {}).get("op_results", []):
+            if e.get("peak_nb_rss_bytes") is not None:
+                nb.setdefault(e["label"], []).append(e["peak_nb_rss_bytes"])
+            if e.get("peak_tree_rss_bytes") is not None:
+                tree.setdefault(e["label"], []).append(e["peak_tree_rss_bytes"])
+    return ({k: median(v) for k, v in nb.items()},
+            {k: median(v) for k, v in tree.items()})
+
+
+def op_calls(runs, label):
+    """Median number of calls (tool calls / shell invocations) per op."""
+    vals = []
+    for _, r in runs:
+        for e in (r.get("_ops") or {}).get("op_results", []):
+            if e.get("label") == label and e.get("calls") is not None:
+                vals.append(e["calls"])
+    return median(vals)
+
+
 def pair_latency(cold, warm):
     """`<cold> cold, <warm> warm`, or "not measured" when neither value exists.
 
@@ -604,18 +645,31 @@ def measured_section(results, ctx7=""):
     # ---- headline table ----
     lines.append("| Server | Category | Idle RAM (cgroup) | After the full "
                  "profile (cgroup) | After + docs (cgroup) | Idle RAM (RSS "
-                 "sum) | Processes idle/after | Ready in | Image size | Runs |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+                 "sum) | Processes idle/after | Ready in | Image size | "
+                 "Per-call peak RSS (nb / with kernel) | Runs |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    cli_present = False
     for stack in present:
         a = aggregate(results[stack])
         ready = f"{a['ready_ms'] / 1000:.1f} s" if a["ready_ms"] else "n/a"
         img = f"{a['image_mb'] / 1024 / 1024:.0f} MB" if a["image_mb"] else "n/a"
+        nb_by_op, tree_by_op = op_peaks(results[stack])
+        nb_peak, tree_peak = median(list(nb_by_op.values())), \
+            median(list(tree_by_op.values()))
+        peaks = "—" if nb_peak is None and tree_peak is None else \
+            f"{mib(nb_peak)} / {mib(tree_peak)} MiB"
+        mem = mib_cell
+        if stack in CLI_STACKS:
+            cli_present = True
+            note = " (no resident process)"
+            mem = lambda v: mib_cell(v) + note
+            ready += " (first spawn; no handshake)"
         lines.append(
-            f"| {link(stack)} | {LINKS[stack][2]} | {mib_cell(a['idle_cgroup'])} "
-            f"| {mib_cell(a['profile_cgroup'])} | {mib_cell(a['ops_cgroup'])} "
-            f"| {mib_cell(a['idle_rss'])} "
+            f"| {link(stack)} | {LINKS[stack][2]} | {mem(a['idle_cgroup'])} "
+            f"| {mem(a['profile_cgroup'])} | {mem(a['ops_cgroup'])} "
+            f"| {mem(a['idle_rss'])} "
             f"| {a['procs_idle']}/{a['procs_ops']} | {ready} | {img} "
-            f"| {a['runs']} |")
+            f"| {peaks} | {a['runs']} |")
     lines.append("")
     lines.append("Idle = after the MCP handshake and tools/list, then a "
                  "quiesce window. After = after the full operation profile "
@@ -634,7 +688,16 @@ def measured_section(results, ctx7=""):
                  "the cgroup leaves out, so it reads higher than the cost. "
                  "Ready = container start plus "
                  "handshake up to the answered tools/list. All values are "
-                 "medians across the runs in the last column.")
+                 "medians across the runs in the Runs column.")
+    if cli_present:
+        lines.append("")
+        lines.append("The CLI row's memory values are labeled *no resident "
+                     "process* on purpose: `nb` is one shell command per "
+                     "operation, so idle and after-profile hold nothing but "
+                     "the container's bare shell - the ~0 MiB row is not a "
+                     "memory win. Its real per-call cost is the peak-RSS "
+                     "column and the per-call table below; its Ready figure "
+                     "is the first `nb` spawn (there is no handshake).")
     lines.append("")
 
     # ---- component breakdown ----
@@ -722,6 +785,39 @@ def measured_section(results, ctx7=""):
         lines.append(ctx7)
         if not lines[-1].endswith("\n\n"):
             lines.append("")
+
+    # ---- per-call peak RSS (CLI stacks) ----
+    if cli_present:
+        lines.append("### Per-call peak RSS: the CLI's real memory cost")
+        lines.append("")
+        lines.append("A CLI has no resident process, so the Idle/After "
+                     "columns above hold no notebook process at all. What "
+                     "each call actually costs is the peak RSS of the `nb` "
+                     "process while it runs (its VmHWM, read from "
+                     "/proc/pid/status during the call); *with kernel* is "
+                     "the peak summed RSS of the call's whole process tree, "
+                     "which is where the kernel `nb execute` spawns shows "
+                     "up. Medians of the per-run peaks; calls per op counts "
+                     "shell invocations (1 per operation unless the variant "
+                     "retries).")
+        lines.append("")
+        lines.append("| Operation | nb binary peak | with kernel | calls "
+                     "per op |")
+        lines.append("|---|---|---|---|")
+        for stack in present:
+            if stack not in CLI_STACKS:
+                continue
+            nb_by_op, tree_by_op = op_peaks(results[stack])
+            for op in OP_ORDER:
+                if op not in nb_by_op and op not in tree_by_op:
+                    continue
+                calls = op_calls(results[stack], op)
+                lines.append(
+                    f"| **{op}** ({LINKS[stack][0]}) "
+                    f"| {mib_cell(nb_by_op.get(op))} "
+                    f"| {mib_cell(tree_by_op.get(op))} "
+                    f"| {calls if calls is not None else '—'} |")
+        lines.append("")
 
 
     # ---- conflict verdicts ----
@@ -828,8 +924,9 @@ def build_readme_snippet(results):
         a = aggregate(results[stack])
         ready = f"{a['ready_ms'] / 1000:.1f} s" if a["ready_ms"] else "n/a"
         img = f"{a['image_mb'] / 1024 / 1024:.0f} MB" if a["image_mb"] else "n/a"
-        lines.append(f"| {link(stack)} | {mib(a['idle_cgroup'])} MiB "
-                     f"| {mib(a['ops_cgroup'])} MiB "
+        note = " (no resident process)" if stack in CLI_STACKS else ""
+        lines.append(f"| {link(stack)} | {mib(a['idle_cgroup'])} MiB{note} "
+                     f"| {mib(a['ops_cgroup'])} MiB{note} "
                      f"| {a['procs_idle']}/{a['procs_ops']} | {ready} | {img} |")
 
     dockers, kernels, dates, modes = set(), set(), [], set()
