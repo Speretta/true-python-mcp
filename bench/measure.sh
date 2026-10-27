@@ -3,7 +3,8 @@
 #
 #   bench/measure.sh [--fast] [--runs N] [--no-build] [--stack NAME]...
 #
-# Stacks: tpmcp datalayer block cursor marimo   (default: all five)
+# Stacks: tpmcp datalayer block cursor nbcli marimo analyzer runpython yzfly
+#         (default: all)
 #
 # Per stack and run: a pristine copy of bench/fixture lands in bench/work/
 # (the fixtures themselves are never modified), the container starts, the
@@ -17,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ALL_STACKS="tpmcp datalayer block cursor marimo analyzer runpython yzfly"
+ALL_STACKS="tpmcp datalayer block cursor nbcli marimo analyzer runpython yzfly"
 fast=false
 runs=1
 do_build=true
@@ -50,7 +51,7 @@ build_stack() {
             docker build -q -t bench-jlab-base:pin -f jlab-base.Dockerfile . >/dev/null
             docker build -q -t "bench-$1:pin" "$1" >/dev/null
             ;;
-        cursor | marimo | runpython | yzfly)
+        cursor | marimo | runpython | yzfly | nbcli)
             docker build -q -t "bench-$1:pin" "$1" >/dev/null
             ;;
         analyzer)
@@ -97,7 +98,7 @@ run_one() {
     # `docker exec` instead (same bytes on disk, another writer).
     user_flags=()
     case "$stack" in
-        tpmcp | cursor | block)
+        tpmcp | cursor | block | nbcli)
             user_flags=(--user "$(id -u):$(id -g)" -e HOME=/work)
             ;;
     esac
@@ -145,6 +146,17 @@ run_one() {
                 server_cmd=(docker run -i --rm --name "bench-$stack-$run_index"
                     --cidfile "$cf" -v "$vol"
                     "bench-$stack:pin" --dir /work)
+                ;;
+            nbcli)
+                # nb-cli is a CLI, not a server: the process measured here is
+                # a plain shell inside the image (the shell an agent's
+                # terminal would have), and the driver feeds it one `nb`
+                # command per operation (driver.py's CliClient). Idle/after
+                # cgroup therefore holds no notebook process at all - the
+                # per-call cost lives in the peak-RSS numbers instead.
+                server_cmd=(docker run -i --rm --name "bench-$stack-$run_index"
+                    "${user_flags[@]}" --cidfile "$cf" -v "$vol"
+                    --entrypoint sh "bench-$stack:pin")
                 ;;
             *)
                 server_cmd=(docker run -i --rm --name "bench-$stack-$run_index"
