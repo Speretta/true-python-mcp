@@ -859,7 +859,7 @@ def measured_section(results, ctx7=""):
     lines.append("")
     for stack in present:
         _, r = results[stack][0]
-        ops = r.get("ops") or []
+        ops = r.get("op_status") or []
         rendered = ", ".join(
             o.split("=", 1)[1].replace(" ", ": ") if "=" in o else o
             for o in ops) or "none recorded"
