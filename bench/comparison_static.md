@@ -54,6 +54,8 @@ This section describes exactly what the harness in [bench/](bench) does. Nothing
 
 A sixth category (**remote documentation retrieval**) is surveyed separately for the docs capability: [context7](https://context7.com) is a hosted MCP server that returns doc snippets for a library by query, not a notebook server, so it is compared only on the docs lookups (see [Feature comparison](#feature-comparison) and the docs comparison table in the Context7 block under Measured results).
 
+A seventh is not an MCP server at all and is measured anyway: **command-line tooling**. [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) (jupyter-ai-contrib, Rust, BSD-3) edits and executes notebooks through one `nb` binary invoked from a shell, which is how an agent with a shell tool works anyway. It is measured as a stack because it competes for the same job, and compared on the same operation profile, both conflict races, and per-call peak memory (a CLI has no resident process, so the idle columns say exactly that). See [The CLI alternative: nb-cli](#the-cli-alternative-nb-cli).
+
 ### One minimal Docker image per stack
 
 - **tpmcp** ([bench/tpmcp/Dockerfile](bench/tpmcp/Dockerfile)): `FROM scratch` plus the static musl binary, the same artifact published as a release asset and built in CI. No OS, no runtime. The image is the binary.
@@ -372,7 +374,7 @@ The post-operation process list shows both kernels. We report what the lists sho
 
 ## Feature comparison
 
-Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (the three new stacks re-checked 2026-10-16 where noted); context7 checked 2026-10-21. Push dates from the GitHub API. One linked stack name per row; the guard column states what the projects advertise *and* what our conflict runs observed. The "Docs / symbol lookup" column is the new capability this benchmark measures: only tpmcp resolves symbols locally, and context7 (the last row) is a remote doc-snippet search, a different category, listed so the contrast is explicit.
+Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (the three new stacks re-checked 2026-10-16 where noted); context7 checked 2026-10-21; nb-cli checked 2026-10-28 against its repo, its SKILL.md and our own conflict runs. Push dates from the GitHub API. One linked stack name per row; the guard column states what the projects advertise *and* what our conflict runs observed. The "Docs / symbol lookup" column is the new capability this benchmark measures: only tpmcp resolves symbols locally, and context7 (the last row) is a remote doc-snippet search, a different category, listed so the contrast is explicit.
 
 | Server | Category | Revision/conflict guard | Executes code | Lint/format | Docs / symbol lookup | `.ipynb` | marimo `.py` | plain `.py` | Offline file editing | Transport | License | Last push |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -384,7 +386,36 @@ Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (th
 | [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | never writes files: nothing to guard | never | yes: ruff/ty/vulture bundled as pip deps; Biome tools need external Node.js 22+ | no | no: no notebook awareness | no | no: takes code strings, not files | no: never touches user files | stdio | MIT | 2026-08-30 (checked 2026-10-16) |
 | [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | n/a: execution-only, writes no files | yes: Pyodide (CPython→WASM) inside Deno | no | no | no | no | no | no | stdio (streamable-HTTP modes exist) | MIT | archived: final release 0.0.22, 2025-12-11 |
 | [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | none advertised: file tools exist, no notebook awareness | yes: host subprocess in the selected environment, no sandbox | no | no | no (generic `read_file`/`write_file`, no notebook structure) | no | runs `.py` files; reads/writes them as generic files | generic file writes only | stdio | **NOASSERTION** (GitHub license field) | 2026-07-02 (checked 2026-10-16) |
+| [nb-cli (jupyter-ai-contrib)](https://github.com/jupyter-ai-contrib/nb-cli) | notebook CLI (no resident process) | none: the stale write was applied over the external edit in every run (6/6, both conflict variants, observed by us) | yes: local kernels over ZeroMQ, plus server and kernel-gateway execution | no | no | yes: edits `.ipynb` on disk | no | no | yes: direct file operations, works with no server | shell: one `nb` invocation per operation | BSD-3-Clause | active: crate 0.0.10, 2026-07-31 |
 | [context7](https://context7.com) | remote docs retrieval (HTTP) | n/a: read-only doc search | no | no | yes: `resolve-library-id` + `query-docs`, doc-snippet search over its cloud index, cross-language; NOT local symbol resolution | no | no | no | no: remote API; an API key is recommended for higher rate limits (checked 2026-10-26) | streamable HTTP (`https://mcp.context7.com/mcp`; stdio via npx `@upstash/context7-mcp`) | MIT | active: 63,439★, pushed 2026-10-21 |
+
+## The CLI alternative: nb-cli
+
+[nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) is the Jupyter ecosystem's own answer to "agents work with notebooks as artifacts": one Rust binary (`nb`) invoked from a shell, no MCP server and no resident process. Its [skills/notebook-cli](https://github.com/jupyter-ai-contrib/nb-cli) SKILL.md teaches agents to prefer `nb` over built-in file tools. It is measured here as a stack, on the same operation profile and both conflict races, because an agent with a shell reaches for it instead of us.
+
+The measured contrast (3 runs, normal mode; the races and the counts are ours):
+
+| | tpmcp (MCP) | nb-cli (shell) |
+|---|:---:|:---:|
+| Resident process between calls | 1 (1.5 MiB idle) | **none** |
+| Stale write refused (conflict race) | **yes** | no: applied over the external edit, 6/6 |
+| Executes code | no (by design) | **yes** (kernel, server or gateway) |
+| marimo `.py` | **yes** | no |
+| Lint, format, type check, symbol docs | **yes** (ruff + ty in the binary) | no |
+| Cell references that survive reordering | **yes** (id, name, index) | yes (id, index) |
+| Failed cells lookup / output search | **yes** (`notebook_search`) | yes (`nb search --with-errors`, `--scope output`) |
+| Batch cell operations | **yes** | **yes** |
+| Live collaboration in JupyterLab | no | **yes** (Y.js when connected) |
+| Per-call peak RSS | see the peak table | 6-9 MiB per call; 64 MiB tree peak with its kernel |
+| Calls for "add two cells, run, read back" | 4 tool calls (3 batched) | 3-4 shell invocations |
+
+Two rows moved while this comparison was being written: finding failed cells and searching outputs were nb-cli-only advantages until `notebook_search` closed them. The rows stay honest about the rest: nb-cli's "no resident process" is a real advantage for a shell-only workflow, its execution ability is a real capability tpmcp refuses by design, and its conflict behavior is the one gap an orchestrator cannot live with. Our race: the agent reads a cell, the user saves over it in an editor, the agent's write lands. tpmcp refuses the write; nb-cli applies it and the user's edit is gone (nuance: the overwrite is per addressed cell, so concurrent edits to other cells survive).
+
+### What its SKILL.md teaches
+
+The skill is worth reading next to any agent-facing contract (ours included). It teaches: use `nb` for every notebook operation instead of raw JSON; inspect before editing (`nb read --no-output`); a "Safe Edit Pattern" of read, identify, apply the smallest `nb cell` command, re-read to verify placement, re-execute what changed; prefer stable cell IDs for durable edits; batch authoring in groups of 3-5 cells ("Do not add the entire notebook in one call"); output hygiene (`--no-output`, externalization, `nb output clear`); environment awareness (`--uv`/`--pixi`, `nb status --python`); and a trust boundary and secret hygiene that tpmcp's own instructions do not have ("`nb` is an external executable ... verify the command you will run"; "Do not write secret tokens into commands, prompts, logs, or examples").
+
+What holds up against measurement: the batching advice (our probe confirms 3 calls instead of 4), inspect-then-edit, and preferring stable ids (tpmcp's cell family now addresses by id and marimo name for the same reason). What is product positioning rather than teaching: "use `nb` for every .ipynb operation" is the skill's job to say. The one genuine gap is on our side: the trust-boundary and secret guidance is agent-shaped material tpmcp's instructions contract does not carry, and should.
 
 ## Projects we looked at and left out
 

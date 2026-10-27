@@ -166,6 +166,13 @@ without a `revision` they overwrite `dest` unconditionally (like `cp`) and are
 marked destructive. With one, they follow the same refusal rule as every other
 write.
 
+The shell alternative ([nb-cli](https://github.com/jupyter-ai-contrib/nb-cli))
+was measured against this contract: it applies stale writes silently (the
+user's edit is lost in every conflict race we ran). Tools that never guard
+writes cannot say this sentence. The full comparison, including the CLI's real
+advantages (no resident process, code execution), is in
+[COMPARISON.md](COMPARISON.md).
+
 Two tpmcp processes never overwrite each other: they take a cross-process
 lock, and every write re-checks the file a moment before it lands. An
 editor outside tpmcp takes no lock. A save from it that lands during the
