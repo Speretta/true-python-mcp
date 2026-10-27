@@ -1,12 +1,18 @@
-//! Content search for `notebook_read`'s `query` parameter: case-insensitive
-//! substring matching over cell sources, rendered as a match view (only the
-//! matching cells and lines) instead of full bodies.
+//! The `notebook_search` view: finding cells by content or by failure,
+//! rendered as a match view (only the matching cells with their evidence)
+//! instead of full bodies.
+//!
+//! The evidence is where the match is: `source:N` line numbers (as
+//! `cell_set_source` ranges use) or `output N` positions. A failed cell
+//! carries the identity of its stored error output (ename/evalue) plus a
+//! capped traceback — the answer to "which cells dropped and why".
 
 use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
 use crate::notebook::{AnyNotebook, Cell, Notebook};
+use crate::render::output::{error_fields, output_text};
 
 /// Maximum matching cells rendered in one response; the rest are reported
 /// as a count with a steering line (page or narrow the query).
@@ -16,64 +22,129 @@ const MATCH_CELL_CAP: usize = 100;
 /// char boundary, so multibyte lines can end slightly earlier.
 const MATCH_LINE_BYTES: usize = 120;
 
-/// One matching cell: its absolute notebook index and matching lines
-/// (1-based line numbers, as `cell_set_source` ranges use).
+/// Maximum traceback lines rendered per failed cell.
+const TRACEBACK_LINES: usize = 20;
+
+/// One evidence line: where it matched and the (trimmed, capped) text.
+pub struct Hit {
+    /// `source:12` or `output 1:7` — the location of the match.
+    pub at: String,
+    pub text: String,
+}
+
+/// One matching cell: its position, its stable reference (Jupyter id or
+/// marimo name) when it has one, the evidence lines, and for failed cells
+/// the error identity.
 pub struct CellHits {
     pub index: usize,
+    pub id: Option<String>,
     pub cell_type: String,
     /// marimo block label (`setup`, `broken`, ...) when not a plain cell.
     pub kind: Option<String>,
-    pub lines: Vec<(usize, String)>,
+    pub hits: Vec<Hit>,
+    /// `(ename, evalue, capped traceback)` for cells with error outputs.
+    pub error: Option<(String, String, Vec<String>)>,
 }
 
-/// The result of one query: the rendered page of hits plus the totals the
+/// The result of one search: the rendered page of hits plus the totals the
 /// response reports so the caller can page or narrow.
 pub struct Search {
-    pub query: String,
+    pub query: Option<String>,
+    /// What was searched: "source", "output" or "both".
+    pub scope: &'static str,
+    pub only_failed: bool,
     pub hits: Vec<CellHits>,
     /// Total matching cells in the notebook (before paging).
     pub matched_cells: usize,
-    /// Total matching lines in the notebook (before paging).
+    /// Total evidence lines in the notebook (before paging).
     pub matched_lines: usize,
     /// Matching cells left after this page (window plus cap).
     pub more: usize,
+    /// An honest note about what the search could not look at (marimo files
+    /// store no outputs, for example). Never silent about a missing half.
+    pub note: Option<String>,
 }
 
-/// Find every cell whose source contains `query` (case-insensitive).
-/// `start`/`limit` page through the MATCH LIST, not the notebook.
-pub fn search(cells: &[Cell], query: &str, start: Option<usize>, limit: Option<usize>) -> Search {
-    let needle = query.to_lowercase();
+/// The parameters of one search, resolved from the tool arguments.
+pub struct SearchSpec {
+    pub query: Option<String>,
+    pub sources: bool,
+    pub outputs: bool,
+    pub only_failed: bool,
+    pub cell_type: Option<String>,
+}
+
+/// Find every cell matching `spec`, then page through the MATCH LIST (not
+/// the notebook) with `start`/`limit`.
+pub fn search(
+    cells: &[Cell],
+    spec: &SearchSpec,
+    start: Option<usize>,
+    limit: Option<usize>,
+) -> Search {
+    let needle = spec.query.as_ref().map(|query| query.to_lowercase());
     let mut matched = Vec::new();
     let mut matched_lines = 0;
     for (index, cell) in cells.iter().enumerate() {
-        let source = cell.source_text();
-        // Lowercase the whole cell once, not once per line: the lowercased copy
-        // is used only for the `contains` test, while the rendered text is
-        // still sliced from the original `source` by index (lowercasing never
-        // changes the line split, so the two line lists stay aligned).
-        let lowercased = source.to_lowercase();
-        let lower_lines = crate::fs::logical_lines(&lowercased);
-        let lines: Vec<(usize, String)> = crate::fs::logical_lines(&source)
-            .iter()
-            .enumerate()
-            .filter(|(number, _)| lower_lines[*number].contains(&needle))
-            .map(|(number, line)| {
-                let text = line.trim();
-                (
-                    number + 1,
-                    text[..text.floor_char_boundary(MATCH_LINE_BYTES)].to_string(),
-                )
-            })
-            .collect();
-        if lines.is_empty() {
+        if let Some(wanted) = &spec.cell_type
+            && cell.cell_type != *wanted
+        {
             continue;
         }
-        matched_lines += lines.len();
+        let error = spec.only_failed.then(|| failed_cell(cell)).flatten();
+        if spec.only_failed && error.is_none() {
+            continue;
+        }
+        let mut hits = Vec::new();
+        if let Some(needle) = &needle {
+            if spec.sources {
+                let source = cell.source_text();
+                let lower = source.to_lowercase();
+                let lower_lines = crate::fs::logical_lines(&lower);
+                for (number, line) in crate::fs::logical_lines(&source).iter().enumerate() {
+                    if lower_lines[number].contains(needle) {
+                        hits.push(Hit {
+                            at: format!("source:{}", number + 1),
+                            text: cap_line(line),
+                        });
+                    }
+                }
+            }
+            if spec.outputs {
+                for (position, output) in cell.outputs().iter().enumerate() {
+                    for (number, line) in crate::fs::logical_lines(&output_text(output))
+                        .iter()
+                        .enumerate()
+                    {
+                        if line.to_lowercase().contains(needle) {
+                            hits.push(Hit {
+                                at: format!("output {position}:{}", number + 1),
+                                text: cap_line(line),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        let is_hit = if needle.is_some() {
+            !hits.is_empty()
+        } else {
+            error.is_some()
+        };
+        if !is_hit {
+            continue;
+        }
+        matched_lines += hits.len();
         matched.push(CellHits {
             index,
+            id: cell
+                .id()
+                .map(str::to_string)
+                .or_else(|| cell.marimo_name().map(str::to_string)),
             cell_type: cell.cell_type.clone(),
             kind: super::kind_label(cell).map(str::to_string),
-            lines,
+            hits,
+            error,
         });
     }
     let matched_cells = matched.len();
@@ -85,146 +156,165 @@ pub fn search(cells: &[Cell], query: &str, start: Option<usize>, limit: Option<u
     let end = end.min(start.saturating_add(MATCH_CELL_CAP));
     let more = matched_cells - end;
     Search {
-        query: query.to_string(),
+        query: spec.query.clone(),
+        scope: match (spec.sources, spec.outputs) {
+            (true, true) => "both",
+            (false, true) => "output",
+            _ => "source",
+        },
+        only_failed: spec.only_failed,
         hits: matched.into_iter().skip(start).take(end - start).collect(),
         matched_cells,
         matched_lines,
         more,
+        note: None,
     }
 }
 
-/// The match view as markdown: the standard notebook header, the query
-/// totals, then only the matching cells and their matching lines.
-pub fn query_markdown(
+/// The stored error identity of `cell`, if it failed when it ran: the first
+/// error output's ename/evalue and a capped traceback.
+fn failed_cell(cell: &Cell) -> Option<(String, String, Vec<String>)> {
+    for output in cell.outputs() {
+        if let Some((name, value)) = error_fields(output) {
+            let traceback: Vec<String> = crate::fs::logical_lines(&output_text(output))
+                .iter()
+                .skip(1) // the "ename: evalue" line the text starts with
+                .take(TRACEBACK_LINES)
+                .map(|line| line.to_string())
+                .collect();
+            return Some((name, value, traceback));
+        }
+    }
+    None
+}
+
+fn cap_line(line: &str) -> String {
+    let text = line.trim();
+    text[..text.floor_char_boundary(MATCH_LINE_BYTES)].to_string()
+}
+
+/// The search view as markdown: the notebook header, the query totals, then
+/// only the matching cells with their evidence.
+pub fn search_markdown(
     path: &str,
     revision: &str,
     notebook: &AnyNotebook,
     search: &Search,
 ) -> String {
-    let cells = notebook.cells();
     let mut out = String::new();
     let _ = write!(
         out,
         "notebook: {path}\nrevision: {revision}\ncells: {} ({}) · {}\n",
-        cells.len(),
-        super::cell_type_census(cells),
+        notebook.cells().len(),
+        super::cell_type_census(notebook.cells()),
         notebook.format_label()
     );
-    let _ = writeln!(
-        out,
-        "query: \"{}\"\nmatches: {} cell(s), {} line(s)",
-        search.query, search.matched_cells, search.matched_lines
-    );
-    if search.matched_cells == 0 {
-        out.push_str("\nno cells match the query\n");
-        return out;
+    match (&search.query, search.only_failed) {
+        (Some(query), true) => {
+            let _ = writeln!(
+                out,
+                "search: {query:?} in {} of failed cells — {} cell(s), {} line(s)",
+                search.scope, search.matched_cells, search.matched_lines
+            );
+        }
+        (Some(query), false) => {
+            let _ = writeln!(
+                out,
+                "search: {query:?} in {} — {} cell(s), {} line(s)",
+                search.scope, search.matched_cells, search.matched_lines
+            );
+        }
+        (None, _) => {
+            let _ = writeln!(
+                out,
+                "failed cells: {} (stored error outputs)",
+                search.matched_cells
+            );
+        }
+    }
+    if let Some(note) = &search.note {
+        let _ = writeln!(out, "note: {note}");
     }
     if search.hits.is_empty() {
-        out.push_str("\nthis page is empty: start/limit selected no matching cells\n");
+        // An empty PAGE is not "no matches": say which one it is.
+        if search.matched_cells == 0 {
+            out.push_str("\n(no cells match)\n");
+        } else {
+            let _ = writeln!(
+                out,
+                "\n(this page is empty: {} matching cell(s) in total; page with start/limit)",
+                search.matched_cells
+            );
+        }
+        return out;
     }
-    for hits in &search.hits {
-        let _ = write!(out, "\n### [{}] {}", hits.index, hits.cell_type);
-        if let Some(kind) = &hits.kind {
+    for hit in &search.hits {
+        out.push('\n');
+        let _ = write!(out, "### [{}] {}", hit.index, hit.cell_type);
+        if let Some(kind) = &hit.kind {
             let _ = write!(out, " ({kind})");
         }
-        let _ = writeln!(out, " · {} match(es)", hits.lines.len());
-        for (number, text) in &hits.lines {
-            let _ = writeln!(out, "{number:>4} | {text}");
+        if let Some(id) = &hit.id {
+            let _ = write!(out, " · id {id}");
         }
+        if let Some((name, value, traceback)) = &hit.error {
+            let _ = write!(out, "\nerror: {name}: {value}");
+            for line in traceback {
+                let _ = write!(out, "\n  {line}");
+            }
+        }
+        for evidence in &hit.hits {
+            let _ = write!(out, "\n{}: {}", evidence.at, evidence.text);
+        }
+        out.push('\n');
     }
     if search.more > 0 {
-        let _ = writeln!(
+        let _ = write!(
             out,
-            "\n{} more matching cell(s): page with start/limit or narrow the query",
+            "\n({} more matching cell(s); page with start/limit or narrow the query)\n",
             search.more
         );
     }
     out
 }
 
-/// The match view as JSON.
-pub fn query_json(path: &str, revision: &str, notebook: &AnyNotebook, search: &Search) -> Value {
+/// The search view as JSON.
+pub fn search_json(path: &str, revision: &str, notebook: &AnyNotebook, search: &Search) -> Value {
+    let hits: Vec<Value> = search
+        .hits
+        .iter()
+        .map(|hit| {
+            let mut value = json!({
+                "index": hit.index,
+                "cell_type": hit.cell_type,
+                "kind": hit.kind,
+                "id": hit.id,
+                "matches": hit.hits.iter()
+                    .map(|evidence| json!({"at": evidence.at, "text": evidence.text}))
+                    .collect::<Vec<_>>(),
+            });
+            if let Some((name, value_text, traceback)) = &hit.error {
+                value["error"] = json!({
+                    "ename": name,
+                    "evalue": value_text,
+                    "traceback": traceback,
+                });
+            }
+            value
+        })
+        .collect();
     json!({
         "path": path,
         "revision": revision,
         "format": notebook.format_label(),
         "cell_count": notebook.cells().len(),
         "query": search.query,
-        "matching_cells": search.matched_cells,
-        "matching_lines": search.matched_lines,
-        "more_matching_cells": search.more,
-        "cells": search
-            .hits
-            .iter()
-            .map(|hits| {
-                json!({
-                    "index": hits.index,
-                    "cell_type": hits.cell_type,
-                    "kind": hits.kind,
-                    "matches": hits
-                        .lines
-                        .iter()
-                        .map(|(line, text)| json!({"line": line, "text": text}))
-                        .collect::<Vec<_>>(),
-                })
-            })
-            .collect::<Vec<_>>(),
+        "search_scope": search.scope,
+        "only_failed": search.only_failed,
+        "matched_cells": search.matched_cells,
+        "matched_lines": search.matched_lines,
+        "more": search.more,
+        "note": search.note,
+        "hits": hits,
     })
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
-mod tests {
-    use super::*;
-    use crate::notebook::Cell;
-
-    fn cell(source: &str) -> Cell {
-        Cell::from_text("code", source)
-    }
-
-    #[test]
-    fn finds_case_insensitive_matches_with_line_numbers() {
-        let cells = [
-            cell("import os\nimport pandas as pd\n"),
-            cell("x = 1\n"),
-            cell("PANDAS = 2\nos.path\n"),
-        ];
-        let found = search(&cells, "pandas", None, None);
-        assert_eq!(found.matched_cells, 2);
-        assert_eq!(found.matched_lines, 2);
-        assert_eq!(found.hits[0].index, 0);
-        assert_eq!(
-            found.hits[0].lines,
-            vec![(2, "import pandas as pd".to_string())]
-        );
-        assert_eq!(found.hits[1].index, 2);
-        assert_eq!(found.hits[1].lines[0].0, 1);
-        assert_eq!(found.more, 0);
-    }
-
-    #[test]
-    fn pages_and_caps_the_match_list() {
-        let cells: Vec<Cell> = (0..105).map(|_| cell("needle here\n")).collect();
-        let found = search(&cells, "NEEDLE", Some(100), None);
-        assert_eq!(found.matched_cells, 105);
-        assert_eq!(found.hits.len(), 5);
-        assert_eq!(found.hits[0].index, 100);
-        assert_eq!(found.more, 0);
-
-        let capped = search(&cells, "needle", None, None);
-        assert_eq!(capped.hits.len(), MATCH_CELL_CAP);
-        assert_eq!(capped.more, 5);
-
-        let paged = search(&cells, "needle", None, Some(3));
-        assert_eq!(paged.hits.len(), 3);
-        assert_eq!(paged.more, 102);
-    }
-
-    #[test]
-    fn no_match_is_an_empty_hit_list() {
-        let cells = [cell("x = 1\n")];
-        let found = search(&cells, "missing", None, None);
-        assert_eq!(found.matched_cells, 0);
-        assert!(found.hits.is_empty());
-    }
 }

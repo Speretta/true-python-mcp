@@ -36,21 +36,21 @@ fn cell_set_metadata_over_the_wire() {
     // Full replace of the empty metadata; the JSON shape echoes it back.
     let tags = json!({"tags": ["parameters"], "jupyter": {"source_hidden": true}});
     let (err, text, sc) = server.call(
-        "cell_set_metadata",
-        json!({"path": path, "cell": 0, "metadata": tags,
+        "cell_update",
+        json!({"path": path, "cells": [0], "metadata": tags,
                "revision": revision, "format": "json"}),
     );
     assert!(!err, "{text}");
     assert_eq!(sc["ok"], true);
-    assert_eq!(sc["cell"], 0);
-    assert_eq!(sc["previous_metadata"], json!({}));
+    assert_eq!(sc["updated"][0]["index"], 0);
+    assert_eq!(sc["updated"][0]["previous_metadata"], json!({}));
     revision = sc["revision"].as_str().unwrap().to_string();
 
     // The markdown shape echoes the previous (now non-empty) metadata as a
     // JSON block, and clears it back to {} — a restore fed by the echo.
     let (err, text, _) = server.call(
-        "cell_set_metadata",
-        json!({"path": path, "cell": 0, "metadata": {}, "revision": revision}),
+        "cell_update",
+        json!({"path": path, "cells": [0], "metadata": {}, "revision": revision}),
     );
     assert!(!err, "{text}");
     assert!(text.contains("previous metadata:"), "{text}");
@@ -76,8 +76,8 @@ fn cell_set_metadata_over_the_wire() {
 
     // A stale revision is refused with the structured conflict error.
     let (err, text, sc) = server.call(
-        "cell_set_metadata",
-        json!({"path": path, "cell": 0, "metadata": tags, "revision": "0000000000000000"}),
+        "cell_update",
+        json!({"path": path, "cells": [0], "metadata": tags, "revision": "0000000000000000"}),
     );
     assert!(err, "stale revision must be rejected");
     assert!(text.contains("revision conflict"), "{text}");
@@ -86,8 +86,8 @@ fn cell_set_metadata_over_the_wire() {
 
     // An out-of-range index is a tool error, not a write.
     let (err, text, _) = server.call(
-        "cell_set_metadata",
-        json!({"path": path, "cell": 7, "metadata": {}, "revision": revision}),
+        "cell_update",
+        json!({"path": path, "cells": [7], "metadata": {}, "revision": revision}),
     );
     assert!(err && text.contains("out of bounds"), "{text}");
 
@@ -100,8 +100,8 @@ fn cell_set_metadata_over_the_wire() {
     assert!(!err, "{text}");
     let marimo_revision = revision_of(&text);
     let (err, text, _) = server.call(
-        "cell_set_metadata",
-        json!({"path": "tests/data/marimo/emoji.py", "cell": 0, "metadata": {},
+        "cell_update",
+        json!({"path": "tests/data/marimo/emoji.py", "cells": [0], "metadata": {},
                "revision": marimo_revision}),
     );
     assert!(err, "{text}");
@@ -132,13 +132,13 @@ fn cell_set_type_raw_to_code_and_back() {
     // raw -> code: the source becomes the code source, with empty
     // outputs/execution_count per nbformat.
     let (err, text, sc) = server.call(
-        "cell_set_type",
-        json!({"path": path, "cell": 0, "cell_type": "code",
+        "cell_update",
+        json!({"path": path, "cells": [0], "cell_type": "code",
                "revision": revision, "format": "json"}),
     );
     assert!(!err, "{text}");
-    assert_eq!(sc["cell"], 0);
-    assert_eq!(sc["cell_type"], "code");
+    assert_eq!(sc["updated"][0]["index"], 0);
+    assert_eq!(sc["updated"][0]["cell_type"], "code");
     let revision = sc["revision"].as_str().unwrap().to_string();
     let raw = std::fs::read_to_string(&path).unwrap();
     let parsed: Value = serde_json::from_str(&raw).unwrap();
@@ -149,8 +149,8 @@ fn cell_set_type_raw_to_code_and_back() {
 
     // code -> raw: the source stays, outputs and execution_count are removed.
     let (err, text, _) = server.call(
-        "cell_set_type",
-        json!({"path": path, "cell": 0, "cell_type": "raw", "revision": revision}),
+        "cell_update",
+        json!({"path": path, "cells": [0], "cell_type": "raw", "revision": revision}),
     );
     assert!(!err, "{text}");
     let raw = std::fs::read_to_string(&path).unwrap();
@@ -298,8 +298,8 @@ fn markdown_mutations_scaffold_mo_in_marimo() {
     assert!(!err, "{text}");
     let revision = sc["revision"].as_str().unwrap().to_string();
     let (err, text, sc) = server.call(
-        "cell_set_type",
-        json!({"path": path2, "revision": revision, "cell": 0,
+        "cell_update",
+        json!({"path": path2, "revision": revision, "cells": [0],
                "cell_type": "markdown", "format": "json"}),
     );
     assert!(!err, "{text}");
@@ -351,19 +351,195 @@ fn cell_move_errors_and_clear_outputs_shape() {
 
     // cell_clear_outputs single-cell path reports the cleared index in JSON.
     let (err, text, sc) = server.call(
-        "cell_clear_outputs",
-        json!({"path": path, "cell": 1, "revision": revision, "format": "json"}),
+        "cell_update",
+        json!({"clear_outputs": true,"path": path, "cells": [1], "revision": revision, "format": "json"}),
     );
     assert!(!err, "{text}");
-    assert_eq!(sc["cleared_cells"], json!([1]));
+    assert_eq!(sc["updated"][0]["index"], 1);
+    assert_eq!(sc["updated"][0]["outputs_cleared"], true);
     let revision = sc["revision"].as_str().unwrap().to_string();
 
     // Clearing a notebook whose cells already have no outputs is a no-op that
     // still reports every code cell's index.
     let (err, text, sc) = server.call(
-        "cell_clear_outputs",
-        json!({"path": path, "revision": revision, "format": "json"}),
+        "cell_update",
+        json!({"clear_outputs": true,"path": path, "revision": revision, "format": "json"}),
     );
     assert!(!err, "{text}");
-    assert_eq!(sc["cleared_cells"], json!([0, 1, 2]));
+    let indices: Vec<Value> = sc["updated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["index"].clone())
+        .collect();
+    assert_eq!(Value::Array(indices), json!([0, 1, 2]));
+}
+
+/// Cells are addressed by index (negative counts from the end), Jupyter id
+/// or marimo name — a stable reference survives reordering, and a file
+/// whose cells carry neither says so instead of guessing.
+#[test]
+fn cells_are_addressed_by_id_name_and_signed_index() {
+    let dir = temp_dir("cell-refs");
+    let path = dir.join("nb.ipynb");
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [
+            {"cell_type": "code", "source": "a = 1\n"},
+            {"cell_type": "code", "source": "b = 2\n"},
+            {"cell_type": "code", "source": "c = 3\n"},
+        ]}),
+    );
+    assert!(!err, "{text}");
+    let (err, text, read) = server.call("notebook_read", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    let id = read["cells"][2]["id"].as_str().unwrap().to_string();
+    let mut revision = read["revision"].as_str().unwrap().to_string();
+
+    // By id: convert the last cell to markdown.
+    let (err, text, sc) = server.call(
+        "cell_update",
+        json!({"path": path, "cells": [id], "cell_type": "markdown",
+               "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["updated"][0]["index"], 2);
+    revision = sc["revision"].as_str().unwrap().to_string();
+
+    // By negative index: -1 is the same cell, back to code.
+    let (err, text, sc) = server.call(
+        "cell_update",
+        json!({"path": path, "cells": [-1], "cell_type": "code",
+               "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["updated"][0]["index"], 2);
+    revision = sc["revision"].as_str().unwrap().to_string();
+
+    // An unknown name is an error naming what was looked for.
+    let (err, text, _) = server.call(
+        "cell_edit",
+        json!({"path": path, "cell": "nope", "old_string": "a", "new_string": "a",
+               "revision": revision}),
+    );
+    assert!(err && text.contains("no cell with id or name"), "{text}");
+
+    // marimo: named cells resolve by name, like ids.
+    let (err, text, read) = server.call(
+        "notebook_read",
+        json!({"path": "tests/data/marimo/toplevel.py", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(read["cells"][2]["name"], "addition", "{read}");
+    let revision = read["revision"].as_str().unwrap().to_string();
+    // A named, editable cell resolves by name (the read-only @app.function
+    // blocks are named too — addressing finds them; editing still refuses).
+    let (err, text, _) = server.call(
+        "cell_update",
+        json!({"path": "tests/data/marimo/toplevel.py",
+               "cells": ["cell_with_ref_and_def"],
+               "cell_type": "code", "revision": revision}),
+    );
+    assert!(!err, "{text}");
+}
+
+/// Batch insert and batch delete: one call adds several cells in order, one
+/// call removes several (all references resolve before any removal, so the
+/// caller's indexes mean the same notebook). Duplicates are refused.
+#[test]
+fn batches_insert_and_delete_several_cells_at_once() {
+    let dir = temp_dir("cell-batch");
+    let path = dir.join("nb.ipynb");
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [
+            {"cell_type": "code", "source": "keep = 1\n"},
+            {"cell_type": "code", "source": "drop_a = 1\n"},
+            {"cell_type": "code", "source": "drop_b = 2\n"},
+        ]}),
+    );
+    assert!(!err, "{text}");
+    let (err, text, read) = server.call("notebook_read", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    let mut revision = read["revision"].as_str().unwrap().to_string();
+
+    // One call: a markdown header followed by its code cell.
+    let (err, text, sc) = server.call(
+        "cell_insert",
+        json!({"path": path, "index": 0, "cells": [
+            {"cell_type": "markdown", "source": "# Section\n"},
+            {"cell_type": "code", "source": "section = True\n"},
+        ], "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(
+        Value::Array(sc["inserted"].as_array().unwrap().clone()),
+        json!([
+            {"index": 0, "cell_type": "markdown"}, {"index": 1, "cell_type": "code"}
+        ])
+    );
+    revision = sc["revision"].as_str().unwrap().to_string();
+
+    // One call: delete both drop cells together (original indexes).
+    let (err, text, sc) = server.call(
+        "cell_delete",
+        json!({"path": path, "cells": [3, 4], "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["deleted"].as_array().unwrap().len(), 2);
+    revision = sc["revision"].as_str().unwrap().to_string();
+
+    // Listing a cell twice is an error, not a double delete.
+    let (err, text, _) = server.call(
+        "cell_delete",
+        json!({"path": path, "cells": [1, 1], "revision": revision}),
+    );
+    assert!(err && text.contains("listed twice"), "{text}");
+}
+
+/// cell_update applies every requested property in one pass: type,
+/// metadata and cleared outputs together, echoing what it replaced.
+#[test]
+fn cell_update_changes_properties_in_one_call() {
+    let dir = temp_dir("cell-update");
+    let path = dir.join("nb.ipynb");
+    let mut server = Server::start(&[]);
+    let (err, text, _) = server.call(
+        "notebook_create",
+        json!({"path": path, "cells": [{"cell_type": "code", "source": "x = 1\n"}]}),
+    );
+    assert!(!err, "{text}");
+    let (err, text, read) = server.call("notebook_read", json!({"path": path, "format": "json"}));
+    assert!(!err, "{text}");
+    let mut revision = read["revision"].as_str().unwrap().to_string();
+
+    // All three properties in one call.
+    let tags = json!({"tags": ["parameters"]});
+    let (err, text, sc) = server.call(
+        "cell_update",
+        json!({"path": path, "cells": [0], "cell_type": "markdown", "metadata": tags,
+               "clear_outputs": true, "revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    let entry = &sc["updated"][0];
+    assert_eq!(entry["cell_type"], "markdown");
+    assert_eq!(entry["previous_type"], "code");
+    assert_eq!(entry["previous_metadata"], json!({}));
+    assert_eq!(entry["outputs_cleared"], true);
+    revision = sc["revision"].as_str().unwrap().to_string();
+
+    // Type and metadata changes must name their cells; only clearing
+    // outputs may target every code cell implicitly.
+    let (err, text, _) = server.call(
+        "cell_update",
+        json!({"path": path, "cell_type": "code", "revision": revision}),
+    );
+    assert!(err && text.contains("cells is required"), "{text}");
+    let (err, text, _) = server.call(
+        "cell_update",
+        json!({"path": path, "clear_outputs": true, "revision": revision}),
+    );
+    assert!(!err, "{text}");
 }

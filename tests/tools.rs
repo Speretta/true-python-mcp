@@ -18,17 +18,16 @@ fn revision_of(text: &str) -> String {
 }
 
 const DEFAULT_TOOLS: &[&str] = &[
-    "cell_clear_outputs",
     "cell_delete",
     "cell_edit",
     "cell_insert",
     "cell_move",
-    "cell_set_metadata",
     "cell_set_source",
-    "cell_set_type",
+    "cell_update",
     "notebook_check",
     "notebook_create",
     "notebook_read",
+    "notebook_search",
     "py_docs",
     "py_module_members",
     "ruff_check",
@@ -115,15 +114,18 @@ fn notebook_lifecycle() {
     );
     rev = revision_of(&text);
     let (_, text, _) = server.call(
-        "cell_set_type",
-        json!({"path": path, "cell": 1, "cell_type": "raw", "revision": rev}),
+        "cell_update",
+        json!({"path": path, "cells": [1], "cell_type": "raw", "revision": rev}),
     );
     rev = revision_of(&text);
-    let (_, text, _) = server.call("cell_clear_outputs", json!({"path": path, "revision": rev}));
+    let (_, text, _) = server.call(
+        "cell_update",
+        json!({"path": path, "clear_outputs": true, "revision": rev}),
+    );
     rev = revision_of(&text);
     let (_, text, _) = server.call(
         "cell_delete",
-        json!({"path": path, "cell": 1, "revision": rev}),
+        json!({"path": path, "cells": [1], "revision": rev}),
     );
     let _ = revision_of(&text);
 
@@ -563,27 +565,24 @@ fn read_parameters_outline_query_diagnostics() {
 
     // query: only matching cells and lines, searched case-insensitively
     let (err, text, sc) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "PANDAS", "format": "json"}),
     );
     assert!(!err, "{text}");
-    assert_eq!(sc["matching_cells"], 2);
-    assert_eq!(sc["cells"][0]["index"], 0);
-    assert_eq!(sc["cells"][0]["matches"][0]["line"], 1);
-    assert_eq!(
-        sc["cells"][1]["index"], 1,
-        "markdown cells are searched too"
-    );
-    let (err, text, _) = server.call("notebook_read", json!({"path": path, "query": "pandas"}));
+    assert_eq!(sc["matched_cells"], 2);
+    assert_eq!(sc["hits"][0]["index"], 0);
+    assert_eq!(sc["hits"][0]["matches"][0]["at"], "source:1");
+    assert_eq!(sc["hits"][1]["index"], 1, "markdown cells are searched too");
+    let (err, text, _) = server.call("notebook_search", json!({"path": path, "query": "pandas"}));
     assert!(!err, "{text}");
-    assert!(text.contains("matches: 2 cell(s), 2 line(s)"), "{text}");
-    assert!(text.contains("   1 | import pandas as pd"), "{text}");
+    assert!(text.contains("2 cell(s), 2 line(s)"), "{text}");
+    assert!(text.contains("source:1: import pandas as pd"), "{text}");
     let (err, text, _) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "zzz_missing"}),
     );
     assert!(!err && text.contains("no cells match"), "{text}");
-    let (err, text, _) = server.call("notebook_read", json!({"path": path, "query": "  "}));
+    let (err, text, _) = server.call("notebook_search", json!({"path": path, "query": "  "}));
     assert!(err && text.contains("query must not be empty"), "{text}");
 
     // diagnostics=check: structural findings ride along, no lint section
@@ -1106,7 +1105,7 @@ fn notebook_read_fallback_query_pages_lines() {
     std::fs::write(&path, body).unwrap();
 
     let (err, text, sc) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "NEEDLE 1", "limit": 2, "format": "json"}),
     );
     assert!(!err, "{text}");
@@ -1125,4 +1124,122 @@ fn notebook_read_fallback_query_pages_lines() {
     assert!(!err, "{text}");
     assert_eq!(sc["fallback"], true, "{sc}");
     assert!(sc["reason"].as_str().unwrap().len() > 10, "{sc}");
+}
+
+/// A notebook whose stored outputs include an execution error: only_failed
+/// answers "which cells dropped and why" (ename/evalue + capped traceback),
+/// search_scope=output finds matches inside stored outputs while the source
+/// scope does not see them, and marimo (which stores no outputs) says so
+/// instead of pretending nothing failed.
+#[test]
+fn notebook_search_finds_failures_and_output_matches() {
+    let dir = temp_dir("search-outputs");
+    let path = dir.join("failed.ipynb");
+    let fixture = r#"{
+ "cells": [
+  {"cell_type": "code", "execution_count": 1, "id": "err1", "metadata": {},
+   "outputs": [{"output_type": "error", "ename": "ValueError",
+                "evalue": "boom went the dynamite",
+                "traceback": ["Traceback (most recent call last):",
+                              "ValueError: boom went the dynamite"]}],
+   "source": ["fail_here()\n"]},
+  {"cell_type": "code", "execution_count": 2, "id": "out2", "metadata": {},
+   "outputs": [{"output_type": "stream", "name": "stdout",
+                "text": ["printed boom in output\n"]}],
+   "source": ["print('clean')\n"]}
+ ],
+ "metadata": {}, "nbformat": 4, "nbformat_minor": 5
+}"#;
+    std::fs::write(&path, fixture).unwrap();
+    let mut server = Server::start(&[]);
+
+    // Which cells dropped, and why.
+    let (err, text, sc) = server.call(
+        "notebook_search",
+        json!({"path": path, "only_failed": true, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["matched_cells"], 1, "{sc}");
+    assert_eq!(sc["hits"][0]["id"], "err1");
+    assert_eq!(sc["hits"][0]["error"]["ename"], "ValueError", "{sc}");
+    assert_eq!(sc["hits"][0]["error"]["evalue"], "boom went the dynamite");
+    assert!(
+        !sc["hits"][0]["error"]["traceback"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Outputs are searchable when the scope says so...
+    let (err, text, sc) = server.call(
+        "notebook_search",
+        json!({"path": path, "query": "boom", "search_scope": "output", "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["matched_cells"], 2, "the traceback and the stream: {sc}");
+    // ...and invisible to a source-scope search.
+    let (err, _, sc) = server.call(
+        "notebook_search",
+        json!({"path": path, "query": "boom", "format": "json"}),
+    );
+    assert!(!err);
+    assert_eq!(sc["matched_cells"], 0, "{sc}");
+    let (err, _, sc) = server.call(
+        "notebook_search",
+        json!({"path": path, "query": "fail_here", "format": "json"}),
+    );
+    assert!(!err);
+    assert_eq!(sc["matched_cells"], 1, "{sc}");
+
+    // marimo stores no outputs: the note says so instead of a clean lie.
+    let (err, text, sc) = server.call(
+        "notebook_search",
+        json!({"path": "tests/data/marimo/toplevel.py", "only_failed": true,
+               "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(sc["matched_cells"], 0, "{sc}");
+    let note = sc["note"].as_str().unwrap_or_default();
+    assert!(note.contains("store no outputs"), "{sc}");
+}
+
+/// notebook_read caps rendered output payloads per output in full mode;
+/// the truncation names the knob that widens it.
+#[test]
+fn notebook_read_output_limit_truncates_with_a_note() {
+    let dir = temp_dir("output-limit");
+    let path = dir.join("loud.ipynb");
+    let long = "x".repeat(500);
+    let fixture = format!(
+        r#"{{
+ "cells": [
+  {{"cell_type": "code", "execution_count": 1, "id": "loud", "metadata": {{}},
+   "outputs": [{{"output_type": "stream", "name": "stdout", "text": ["{long}\n"]}}],
+   "source": ["print('loud')\n"]}}
+ ],
+ "metadata": {{}}, "nbformat": 4, "nbformat_minor": 5
+}}"#
+    );
+    std::fs::write(&path, fixture).unwrap();
+    let mut server = Server::start(&[]);
+
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": path, "detail": "full", "with_outputs": "full", "output_limit": 64}),
+    );
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("truncated (") && text.contains("bytes total; raise output_limit"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&"x".repeat(300)),
+        "the payload must be capped: {text}"
+    );
+    let (err, text, _) = server.call(
+        "notebook_read",
+        json!({"path": path, "detail": "full", "with_outputs": "full", "output_limit": 4096}),
+    );
+    assert!(!err, "{text}");
+    assert!(!text.contains("truncated"), "{text}");
 }

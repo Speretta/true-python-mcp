@@ -16,11 +16,14 @@ use crate::notebook::Cell;
 const FULL_OUTPUT_BYTES: usize = 4000;
 
 /// Append the cell's output section to `out`, if it has one to render.
+/// `output_limit` caps each rendered payload in full mode (bytes); `None`
+/// keeps the default cap.
 pub(super) fn write_outputs(
     out: &mut String,
     cell: &Cell,
     detail: Detail,
     with_outputs: WithOutputs,
+    output_limit: Option<usize>,
 ) {
     if matches!(with_outputs, WithOutputs::None) || !cell.is_code() {
         return;
@@ -37,7 +40,11 @@ pub(super) fn write_outputs(
         WithOutputs::Full => {
             let _ = writeln!(out, "outputs({}):", outputs.len());
             for (position, output) in outputs.iter().enumerate() {
-                let _ = writeln!(out, "  [{position}] {}", render_output_full(output, detail));
+                let _ = writeln!(
+                    out,
+                    "  [{position}] {}",
+                    render_output_full(output, detail, output_limit)
+                );
             }
         }
     }
@@ -94,7 +101,7 @@ pub(super) fn export_outputs(
                     .map(String::as_str),
             );
         }
-        rendered.push_str(&render_output_full(output, Detail::Full));
+        rendered.push_str(&render_output_full(output, Detail::Full, None));
         rendered.push('\n');
     }
     if !binaries.is_empty() {
@@ -110,7 +117,7 @@ pub(super) fn export_outputs(
     out.push('\n');
 }
 
-fn render_output_full(output: &Value, detail: Detail) -> String {
+fn render_output_full(output: &Value, detail: Detail, output_limit: Option<usize>) -> String {
     let kind = output
         .get("output_type")
         .and_then(Value::as_str)
@@ -122,7 +129,10 @@ fn render_output_full(output: &Value, detail: Detail) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("stdout");
             let text = multiline_to_string(output.get("text"));
-            format!("stream({name}):\n{}", indent(&truncate(&text, detail)))
+            format!(
+                "stream({name}):\n{}",
+                indent(&truncate(&text, detail, output_limit))
+            )
         }
         "error" => {
             let ename = output.get("ename").and_then(Value::as_str).unwrap_or("");
@@ -140,7 +150,7 @@ fn render_output_full(output: &Value, detail: Detail) -> String {
                 .unwrap_or_default();
             format!(
                 "error: {ename}: {evalue}\n{}",
-                indent(&truncate(&strip_ansi(&traceback), detail))
+                indent(&truncate(&strip_ansi(&traceback), detail, output_limit))
             )
         }
         _ => {
@@ -151,7 +161,11 @@ fn render_output_full(output: &Value, detail: Detail) -> String {
                     if mime == "text/plain" {
                         parts.push(format!(
                             "{mime}:\n{}",
-                            indent(&truncate(&multiline_to_string(Some(payload)), detail))
+                            indent(&truncate(
+                                &multiline_to_string(Some(payload)),
+                                detail,
+                                output_limit
+                            ))
                         ));
                     } else {
                         parts.push(format!(
@@ -179,12 +193,13 @@ fn multiline_to_string(value: Option<&Value>) -> String {
     }
 }
 
-fn truncate(text: &str, detail: Detail) -> String {
+fn truncate(text: &str, detail: Detail, output_limit: Option<usize>) -> String {
+    let cap = output_limit.unwrap_or(FULL_OUTPUT_BYTES);
     match detail {
-        Detail::Full if text.len() <= FULL_OUTPUT_BYTES => text.to_string(),
+        Detail::Full if text.len() <= cap => text.to_string(),
         Detail::Full => format!(
-            "{}\n... truncated ({} bytes total)",
-            &text[..text.floor_char_boundary(FULL_OUTPUT_BYTES)],
+            "{}\n... truncated ({} bytes total; raise output_limit to see more)",
+            &text[..text.floor_char_boundary(cap)],
             text.len()
         ),
         // Outline never renders output payloads; group it with brief.
@@ -233,4 +248,39 @@ fn strip_ansi(text: &str) -> String {
         }
     }
     out
+}
+
+/// The identity of an error output: `(ename, evalue)`. `None` for every
+/// other output type.
+pub(super) fn error_fields(output: &Value) -> Option<(String, String)> {
+    (output.get("output_type").and_then(Value::as_str) == Some("error")).then(|| {
+        let name = output
+            .get("ename")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let value = output
+            .get("evalue")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        (name, value)
+    })
+}
+
+/// The searchable text of one output — stream text, `text/plain` payloads,
+/// or an error's name, value and traceback — so an output-scope search
+/// matches what a reader sees rather than the JSON encoding.
+pub(super) fn output_text(output: &Value) -> String {
+    match output.get("output_type").and_then(Value::as_str) {
+        Some("stream") => multiline_to_string(output.get("text")),
+        Some("error") => {
+            let (name, value) = error_fields(output).unwrap_or_default();
+            let traceback = strip_ansi(&multiline_to_string(output.get("traceback")));
+            format!("{name}: {value}\n{traceback}")
+        }
+        _ => strip_ansi(&multiline_to_string(
+            output.get("data").and_then(|data| data.get("text/plain")),
+        )),
+    }
 }

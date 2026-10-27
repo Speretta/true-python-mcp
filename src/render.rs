@@ -99,6 +99,7 @@ pub fn notebook_markdown(
     detail: Detail,
     with_outputs: WithOutputs,
     window: Window,
+    output_limit: Option<usize>,
 ) -> String {
     let cells = notebook.cells();
     let mut out = String::with_capacity(markdown_capacity(cells, window));
@@ -117,7 +118,7 @@ pub fn notebook_markdown(
         out.push('\n');
         match detail {
             Detail::Outline => write_cell_outline(&mut out, index, cell),
-            _ => write_cell_markdown(&mut out, index, cell, detail, with_outputs),
+            _ => write_cell_markdown(&mut out, index, cell, detail, with_outputs, output_limit),
         }
     }
     out
@@ -159,9 +160,10 @@ pub fn cell_markdown(
     cell: &Cell,
     detail: Detail,
     with_outputs: WithOutputs,
+    output_limit: Option<usize>,
 ) -> String {
     let mut out = String::with_capacity(source_byte_len(cell) + PER_CELL_MARKDOWN_OVERHEAD);
-    write_cell_markdown(&mut out, index, cell, detail, with_outputs);
+    write_cell_markdown(&mut out, index, cell, detail, with_outputs, output_limit);
     out
 }
 
@@ -173,6 +175,7 @@ fn write_cell_markdown(
     cell: &Cell,
     detail: Detail,
     with_outputs: WithOutputs,
+    output_limit: Option<usize>,
 ) {
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
     if let Some(kind) = kind_label(cell) {
@@ -187,9 +190,12 @@ fn write_cell_markdown(
     if let Some(id) = cell.id() {
         let _ = write!(out, " · id {id}");
     }
+    if let Some(name) = cell.marimo_name() {
+        let _ = write!(out, " · name {name}");
+    }
     out.push('\n');
     write_source_block(out, &cell.cell_type, &lines, detail);
-    write_outputs(out, cell, detail, with_outputs);
+    write_outputs(out, cell, detail, with_outputs, output_limit);
 }
 
 /// One outline row: index, type, line count, first source line (truncated to
@@ -381,6 +387,7 @@ fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {
         "index": index,
         "cell_type": cell.cell_type,
         "id": cell.id(),
+        "name": cell.marimo_name(),
         "execution_count": cell.extra.get("execution_count"),
         "line_count": line_count,
         "source": source,

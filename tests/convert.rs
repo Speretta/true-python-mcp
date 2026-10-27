@@ -663,7 +663,7 @@ fn repairing_broken_cells_keeps_the_file_intact() {
     assert!(err && text.contains("read-only"), "{text}");
     let (err, text, deleted) = server.call(
         "cell_delete",
-        json!({"path": target, "cell": broken_index, "revision": revision,
+        json!({"path": target, "cells": [broken_index], "revision": revision,
                "format": "json"}),
     );
     assert!(!err, "{text}");

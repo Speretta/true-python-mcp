@@ -1,6 +1,8 @@
 //! The `notebook_read` pipeline: the query and validation phases and the
 //! view both response formats render from.
 
+use std::path::Path;
+
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 
@@ -21,26 +23,6 @@ const MAX_FALLBACK_LINES: usize = 2000;
 pub(super) struct Validation {
     findings: Vec<Finding>,
     lint: Lint,
-}
-
-/// The query phase: `None` without a query, otherwise the paged match list.
-/// A blank query is rejected here, before any validation work runs.
-pub(super) fn search_matches(
-    args: &NotebookReadArgs,
-    notebook: &AnyNotebook,
-) -> Result<Option<render::search::Search>, Error> {
-    match &args.query {
-        Some(query) if query.trim().is_empty() => {
-            Err(Error::invalid_input("query must not be empty"))
-        }
-        Some(query) => Ok(Some(render::search::search(
-            notebook.cells(),
-            query,
-            args.start,
-            args.limit,
-        ))),
-        None => Ok(None),
-    }
 }
 
 /// The validation phase, on the same snapshot the response renders (reads
@@ -82,25 +64,21 @@ pub(super) struct ReadView<'a> {
     pub(super) detail: Detail,
     pub(super) with_outputs: WithOutputs,
     pub(super) window: Window,
-    pub(super) found: Option<&'a render::search::Search>,
+    pub(super) output_limit: Option<usize>,
     pub(super) validation: Option<&'a Validation>,
 }
 
 impl ReadView<'_> {
     pub(super) fn markdown(&self) -> String {
-        let mut out = match self.found {
-            Some(found) => {
-                render::search::query_markdown(self.path, self.revision, self.notebook, found)
-            }
-            None => render::notebook_markdown(
-                self.path,
-                self.revision,
-                self.notebook,
-                self.detail,
-                self.with_outputs,
-                self.window,
-            ),
-        };
+        let mut out = render::notebook_markdown(
+            self.path,
+            self.revision,
+            self.notebook,
+            self.detail,
+            self.with_outputs,
+            self.window,
+            self.output_limit,
+        );
         if let Some(validation) = self.validation {
             out.push_str(&render::diagnostics_markdown(
                 &validation.findings,
@@ -111,19 +89,14 @@ impl ReadView<'_> {
     }
 
     pub(super) fn json(&self) -> Value {
-        let mut value = match self.found {
-            Some(found) => {
-                render::search::query_json(self.path, self.revision, self.notebook, found)
-            }
-            None => render::notebook_json(
-                self.path,
-                self.revision,
-                self.notebook,
-                self.detail,
-                self.with_outputs,
-                self.window,
-            ),
-        };
+        let mut value = render::notebook_json(
+            self.path,
+            self.revision,
+            self.notebook,
+            self.detail,
+            self.with_outputs,
+            self.window,
+        );
         if let Some(validation) = self.validation {
             value["findings"] = json!(validation.findings);
             render::diagnostics::lint_json(&validation.lint, &mut value);
@@ -136,24 +109,29 @@ impl ReadView<'_> {
 /// to refuse them outright, which left callers without file tools unable to
 /// see a rendered `.md` export or the raw JSON of a corrupt `.ipynb`. The
 /// text comes back as numbered lines under an explicit `fallback` marker —
-/// never as cells, never with validation.
+/// never as cells, never with validation. `notebook_search` shares it with
+/// `query` set, so searching a non-notebook searches its lines.
 ///
 /// In fallback mode `start`/`limit` page through lines (there are no cells)
 /// and `query` filters them with the same case-insensitive substring
 /// semantics as the cell search; the window is capped like `py_read`'s
 /// rendering.
 pub(super) fn fallback(
-    args: &NotebookReadArgs,
+    path: &Path,
     snapshot: &fs::Snapshot,
     reason: &str,
+    query: Option<&str>,
+    start: Option<usize>,
+    limit: Option<usize>,
+    format: crate::render::Format,
 ) -> Result<CallToolResult, Error> {
-    if let Some(query) = &args.query
+    if let Some(query) = query
         && query.trim().is_empty()
     {
         return Err(Error::invalid_input("query must not be empty"));
     }
     let lines: Vec<&str> = fs::logical_lines(&snapshot.content);
-    let needle = args.query.as_ref().map(|query| query.to_lowercase());
+    let needle = query.map(|query| query.to_lowercase());
     let matched: Vec<(usize, &str)> = lines
         .iter()
         .enumerate()
@@ -163,9 +141,8 @@ pub(super) fn fallback(
         })
         .map(|(index, line)| (index + 1, *line))
         .collect();
-    let start = args.start.unwrap_or(0).min(matched.len());
-    let end = args
-        .limit
+    let start = start.unwrap_or(0).min(matched.len());
+    let end = limit
         .map_or(start + MAX_FALLBACK_LINES, |limit| start + limit)
         .min(matched.len());
     let shown = &matched[start..end];
@@ -177,14 +154,14 @@ pub(super) fn fallback(
                 (case-insensitive substring)"
         .to_string();
     Ok(respond(
-        args.format,
+        format,
         || {
             let mut out = format!(
                 "notebook read: {}\nrevision: {}\nfallback: raw text, not a notebook ({reason})\nnote: {note}\n",
-                args.path.display(),
+                path.display(),
                 snapshot.revision
             );
-            match &args.query {
+            match query {
                 Some(query) => out.push_str(&format!(
                     "lines {first}-{last} of {} matching {query:?} ({} matches)\n",
                     lines.len(),
@@ -206,13 +183,13 @@ pub(super) fn fallback(
             json!({
                 "ok": true,
                 "fallback": true,
-                "path": args.path.display().to_string(),
+                "path": path.display().to_string(),
                 "revision": snapshot.revision,
                 "reason": reason,
                 "note": note,
                 "total_lines": lines.len(),
                 "matched_lines": matched.len(),
-                "query": args.query,
+                "query": query,
                 "line_start": first,
                 "line_end": last,
                 "truncated": truncated,

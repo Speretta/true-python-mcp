@@ -91,6 +91,16 @@ impl Cell {
             .and_then(|marimo| marimo.get("kind"))
             .and_then(Value::as_str)
     }
+
+    /// The cell's name in a marimo file (`def name():`), `None` for unnamed
+    /// cells and Jupyter files. Like Jupyter's `id`, a name is a stable
+    /// reference that survives reordering.
+    pub fn marimo_name(&self) -> Option<&str> {
+        self.extra
+            .get("marimo")
+            .and_then(|marimo| marimo.get("name"))
+            .and_then(Value::as_str)
+    }
 }
 
 /// Cell source in the representation the file used. Jupyter files store

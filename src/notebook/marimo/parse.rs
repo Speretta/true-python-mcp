@@ -290,7 +290,10 @@ pub(super) fn app_cell(
             }
         };
     (
-        Cell::from_text(cell_type, &source),
+        Cell {
+            extra: marimo_extra("cell", cell_name(func)),
+            ..Cell::from_text(cell_type, &source)
+        },
         CellMeta {
             kind: Kind::AppCell,
             block: src[start..end].to_string(),
@@ -302,6 +305,14 @@ pub(super) fn app_cell(
             edited: false,
         },
     )
+}
+
+/// A cell's name for addressing: the `def` name of a named cell, `None` for
+/// marimo's unnamed placeholder (`def _():`). marimo requires named cells to
+/// be unique, so a name is a stable reference that survives reordering —
+/// exactly the role `id` plays in Jupyter 4.5 files.
+pub(super) fn cell_name(func: &StmtFunctionDef) -> Option<&str> {
+    (func.name.as_str() != "_").then(|| func.name.as_str())
 }
 
 /// Walk backwards from `line_start` over contiguous comment lines, returning
@@ -362,15 +373,15 @@ pub(super) fn setup_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -> (C
 /// `@app.function`, `@app.class_definition`, `app._unparsable_cell(...)`:
 /// shown verbatim, editing not supported (the whole block is the source).
 pub(super) fn read_only_cell(src: &str, stmt: &Stmt, start: usize, end: usize) -> (Cell, CellMeta) {
-    let kind = match stmt {
-        Stmt::FunctionDef(_) => Kind::Function,
-        Stmt::ClassDef(_) => Kind::Class,
-        _ => Kind::Unparsable,
+    let (kind, name) = match stmt {
+        Stmt::FunctionDef(func) => (Kind::Function, Some(func.name.as_str())),
+        Stmt::ClassDef(class) => (Kind::Class, Some(class.name.as_str())),
+        _ => (Kind::Unparsable, None),
     };
     let block = src[start..end].to_string();
     (
         Cell {
-            extra: marimo_extra(kind.label(), None),
+            extra: marimo_extra(kind.label(), name),
             ..Cell::from_text("code", &block)
         },
         CellMeta {

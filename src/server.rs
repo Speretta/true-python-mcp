@@ -47,11 +47,14 @@ impl ServerHandler for Tpmcp {
             .with_instructions(
                 "Python and Jupyter/marimo notebook server. Read notebooks (Jupyter .ipynb and \
                  marimo .py) with notebook_read, never as raw JSON or raw Python; it also \
-                 outlines (detail=outline), searches (query) and attaches validation and lint \
-                 findings (diagnostics). Edit with cell_edit (surgical string replacement) or \
-                 cell_set_source (whole-cell and line-range edits); cell_insert, cell_delete, \
-                 cell_move, cell_set_type, cell_clear_outputs and cell_set_metadata (Jupyter \
-                 only) restructure them. \
+                 outlines (detail=outline), searches (notebook_search) and attaches validation \
+                 and lint findings (diagnostics). Edit with cell_edit (surgical string \
+                 replacement) or cell_set_source (whole-cell and line-range edits); \
+                 cell_insert, cell_delete, cell_move and cell_update (type, metadata, \
+                 outputs) restructure them. Cells are addressed by index (negative counts \
+                 from the end), Jupyter id or marimo name; insert and delete take several \
+                 cells at once. notebook_search finds cells by content in sources or stored \
+                 outputs, and lists the cells that failed when the notebook ran. \
                  notebook_create makes new notebooks or converts existing ones (from_path); \
                  the extension picks the format (.ipynb Jupyter, .py marimo, .md export). \
                  notebook_check validates without writing: Jupyter schema and git conflict \

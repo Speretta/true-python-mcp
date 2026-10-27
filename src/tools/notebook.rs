@@ -22,7 +22,7 @@ use crate::tools::{CellType, blocking, mutation_result, read_notebook, respond};
 
 mod read;
 
-use read::{ReadView, run_validation, search_matches};
+use read::{ReadView, run_validation};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NotebookReadArgs {
@@ -37,19 +37,18 @@ pub struct NotebookReadArgs {
     /// "none", "summary" (default) or "full" output rendering.
     #[serde(default)]
     pub with_outputs: WithOutputs,
-    /// Case-insensitive substring search over cell sources. Returns only
-    /// the matching cells with their index, type and matching lines;
-    /// start/limit page through the matches.
-    #[serde(default)]
-    pub query: Option<String>,
-    /// First cell index to render (0-based, default 0); with query, the
-    /// first matching cell to render.
+    /// First cell index to render (0-based, default 0).
     #[serde(default)]
     pub start: Option<usize>,
-    /// Maximum number of cells to render (default: all); with query, the
-    /// maximum number of matching cells.
+    /// Maximum number of cells to render (default: all).
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Cap on each rendered output payload in full mode, in bytes (default
+    /// 4000; pass a large number to see more). The markdown view truncates
+    /// with a note; the JSON view returns outputs raw, so use with_outputs
+    /// there to control size. To find things in outputs, use notebook_search.
+    #[serde(default)]
+    pub output_limit: Option<usize>,
     /// Validation to attach: "none" (default), "check" (notebook_check
     /// structural findings), or "check+lint" (also ruff lint diagnostics).
     /// Findings carry 0-based cell indexes. If ruff cannot lint the file,
@@ -57,6 +56,53 @@ pub struct NotebookReadArgs {
     /// issues. Use notebook_check alone to validate without reading content.
     #[serde(default)]
     pub diagnostics: DiagnosticsLevel,
+    /// Result format, "markdown" (default) or "json".
+    #[serde(default)]
+    pub format: Format,
+}
+
+/// Where [`Tpmcp::notebook_search`] looks: cell sources, stored outputs, or
+/// both. Variants carry no doc comments on purpose: the `search_scope` param
+/// description is the schema text callers see.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchScope {
+    /// Cell sources.
+    #[default]
+    Source,
+    /// Stored outputs (Jupyter only; marimo files store none).
+    Output,
+    /// Both sources and outputs.
+    Both,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NotebookSearchArgs {
+    /// Path to the notebook file.
+    pub path: PathBuf,
+    /// Case-insensitive substring to look for. With only_failed it searches
+    /// inside the failures; alone it searches the scope; required unless
+    /// only_failed is set.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Where to look: "source" (default), "output" (stored outputs — Jupyter
+    /// only, marimo files store none) or "both".
+    #[serde(default)]
+    pub search_scope: SearchScope,
+    /// Only cells that failed when the notebook ran (stored error outputs):
+    /// the cheap answer to "which cells dropped and why", with the error
+    /// name, value and a capped traceback.
+    #[serde(default)]
+    pub only_failed: bool,
+    /// Only cells of this type.
+    #[serde(default)]
+    pub cell_type: Option<CellType>,
+    /// First matching cell to return (0-based over the match list).
+    #[serde(default)]
+    pub start: Option<usize>,
+    /// Maximum number of matching cells to return (default: all).
+    #[serde(default)]
+    pub limit: Option<usize>,
     /// Result format, "markdown" (default) or "json".
     #[serde(default)]
     pub format: Format,
@@ -83,6 +129,10 @@ pub struct NewCell {
     /// Initial cell source (may be empty).
     #[serde(default)]
     pub source: String,
+    /// Read the initial source from this file instead (the stream path for
+    /// huge payloads); mutually exclusive with source.
+    #[serde(default)]
+    pub source_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -160,11 +210,20 @@ impl Tpmcp {
             let snapshot = fs::read(&args.path)?;
             let notebook = match notebook::open(&snapshot.content) {
                 Ok(notebook) => notebook,
-                Err(reason) => return read::fallback(&args, &snapshot, &reason),
+                Err(reason) => {
+                    return read::fallback(
+                        &args.path,
+                        &snapshot,
+                        &reason,
+                        None,
+                        args.start,
+                        args.limit,
+                        args.format,
+                    );
+                }
             };
             let fs::Snapshot { content, revision } = snapshot;
             let path = args.path.display().to_string();
-            let found = search_matches(&args, &notebook)?;
             let validation = run_validation(&args, &notebook, content, &revision);
             let view = ReadView {
                 path: &path,
@@ -173,10 +232,94 @@ impl Tpmcp {
                 detail: args.detail,
                 with_outputs: args.with_outputs,
                 window: Window::resolve(notebook.cells().len(), args.start, args.limit),
-                found: found.as_ref(),
+                output_limit: args.output_limit,
                 validation: validation.as_ref(),
             };
             Ok(respond(args.format, || view.markdown(), || view.json()))
+        })
+        .await
+    }
+
+    #[tool(
+        title = "Search Notebook",
+        description = "Find cells without reading the notebook: a case-insensitive substring in \
+                       cell sources and/or stored outputs (`search_scope`), or just the cells \
+                       that failed when the notebook ran (`only_failed`) with the error name, \
+                       value and a capped traceback. Returns only the matching cells, each with \
+                       the location of its matches (`source:N`, `output N:line`) — the cheap \
+                       answer to \"where does this appear?\" and \"what dropped?\". A file that is \
+                       not a notebook (a .md export, a corrupt .ipynb) is searched as raw text \
+                       lines under an explicit fallback marker. marimo files store no outputs, \
+                       so output scope and only_failed there report that instead of pretending. \
+                       start/limit page through the matches.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn notebook_search(
+        &self,
+        Parameters(args): Parameters<NotebookSearchArgs>,
+    ) -> Result<CallToolResult, Error> {
+        blocking(move || {
+            if args.query.is_none() && !args.only_failed {
+                return Err(Error::invalid_input("provide a query and/or only_failed"));
+            }
+            if args
+                .query
+                .as_ref()
+                .is_some_and(|query| query.trim().is_empty())
+            {
+                return Err(Error::invalid_input("query must not be empty"));
+            }
+            let (sources, outputs) = match args.search_scope {
+                SearchScope::Source => (true, false),
+                SearchScope::Output => (false, true),
+                SearchScope::Both => (true, true),
+            };
+            let snapshot = fs::read(&args.path)?;
+            let notebook = match notebook::open(&snapshot.content) {
+                Ok(notebook) => notebook,
+                // A non-notebook is still searchable: its raw lines.
+                Err(reason) => {
+                    return read::fallback(
+                        &args.path,
+                        &snapshot,
+                        &reason,
+                        args.query.as_deref(),
+                        args.start,
+                        args.limit,
+                        args.format,
+                    );
+                }
+            };
+            let spec = render::search::SearchSpec {
+                query: args.query,
+                sources,
+                outputs,
+                only_failed: args.only_failed,
+                cell_type: args.cell_type.map(|kind| kind.as_str().to_string()),
+            };
+            let mut search =
+                render::search::search(notebook.cells(), &spec, args.start, args.limit);
+            // marimo stores no outputs: say so instead of reporting a clean
+            // "nothing failed" or "no output matches".
+            if (outputs || spec.only_failed) && matches!(notebook, notebook::AnyNotebook::Marimo(_))
+            {
+                search.note = Some(
+                    "marimo files store no outputs: output-scope matching and only_failed \
+                     have nothing to look at here"
+                        .to_string(),
+                );
+            }
+            let path = args.path.display().to_string();
+            Ok(respond(
+                args.format,
+                || render::search::search_markdown(&path, &snapshot.revision, &notebook, &search),
+                || render::search::search_json(&path, &snapshot.revision, &notebook, &search),
+            ))
         })
         .await
     }
@@ -270,8 +413,18 @@ impl Tpmcp {
                         args.requires_python.as_deref(),
                     );
                     for new_cell in args.cells.unwrap_or_default() {
+                        let source = if let Some(path) = new_cell.source_file {
+                            if !new_cell.source.is_empty() {
+                                return Err(Error::invalid_input(
+                                    "source and source_file are mutually exclusive",
+                                ));
+                            }
+                            fs::read(&path)?.content
+                        } else {
+                            new_cell.source
+                        };
                         let index = notebook.cells().len();
-                        notebook.insert(index, new_cell.cell_type.as_str(), &new_cell.source)?;
+                        notebook.insert(index, new_cell.cell_type.as_str(), &source)?;
                     }
                     // cell_count reports the requested cells; a scaffold cell
                     // tpmcp adds (the `mo` import marimo markdown cells need)

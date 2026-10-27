@@ -41,19 +41,19 @@ fn truncation_backs_off_to_char_boundaries() {
     assert!(expected_cjk.len() + "漢".len() > 80, "{expected_cjk}");
 
     let (err, text, found) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "t =", "format": "json"}),
     );
     assert!(!err, "{text}");
     let expected_line = &cjk_line[..cjk_line.floor_char_boundary(120)];
-    assert_eq!(found["cells"][0]["matches"][0]["text"], expected_line);
+    assert_eq!(found["hits"][0]["matches"][0]["text"], expected_line);
     assert!(expected_line.len() + "漢".len() > 120, "{expected_line}");
 
     // The markdown views of the same boundaries render (valid UTF-8 by
     // construction in Rust; this pins that no path panics or garbles).
     let (err, text, _) = server.call("notebook_read", json!({"path": path, "detail": "outline"}));
     assert!(!err && text.contains(expected_emoji), "{text}");
-    let (err, text, _) = server.call("notebook_read", json!({"path": path, "query": "s ="}));
+    let (err, text, _) = server.call("notebook_search", json!({"path": path, "query": "s ="}));
     assert!(!err, "{text}");
     let emoji_match = &emoji_line[..emoji_line.floor_char_boundary(120)];
     assert!(text.contains(emoji_match), "{text}");
@@ -78,29 +78,29 @@ fn empty_query_pages_stay_honest() {
 
     // start beyond the match list
     let (err, text, _) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "pandas", "start": 99}),
     );
     assert!(!err, "{text}");
-    assert!(text.contains("matches: 2 cell(s)"), "{text}");
+    assert!(text.contains("2 cell(s)"), "{text}");
     assert!(text.contains("this page is empty"), "{text}");
     assert!(!text.contains("no cells match"), "{text}");
 
     // limit=0: empty page, and the steering line reports the full match list
     let (err, text, _) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "pandas", "limit": 0}),
     );
     assert!(!err, "{text}");
     assert!(text.contains("this page is empty"), "{text}");
-    assert!(text.contains("2 more matching cell(s)"), "{text}");
+    assert!(text.contains("2 matching cell(s) in total"), "{text}");
 
     // a genuine no-match still says so
     let (err, text, _) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": path, "query": "zzz_missing"}),
     );
-    assert!(!err && text.contains("no cells match the query"), "{text}");
+    assert!(!err && text.contains("no cells match"), "{text}");
 
     // window bounds clamp instead of overflowing
     let (err, text, window) = server.call(
@@ -167,15 +167,15 @@ fn marimo_diagnostics_over_the_wire() {
         "the broken cell has no lintable body: {found}"
     );
 
-    // EC-8: the query view labels marimo block kinds like every other view.
+    // EC-8: the search view labels marimo block kinds like every other view.
     let (err, text, found) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": "tests/data/marimo/broken.py", "query": "def _", "format": "json"}),
     );
     assert!(!err, "{text}");
-    assert_eq!(found["cells"][0]["kind"], "broken", "{found}");
+    assert_eq!(found["hits"][0]["kind"], "broken", "{found}");
     let (err, text, _) = server.call(
-        "notebook_read",
+        "notebook_search",
         json!({"path": "tests/data/marimo/broken.py", "query": "def _"}),
     );
     assert!(!err && text.contains("(broken)"), "{text}");
@@ -230,11 +230,10 @@ fn unavailable_lint_degrades_instead_of_failing_the_read() {
     assert_eq!(found["lint"].as_array().unwrap().len(), 2, "{found}");
     assert!(found.get("lint_error").is_none(), "{found}");
 
-    // The blank-query rejection happens BEFORE any lint work.
+    // The blank-query rejection happens BEFORE any search work.
     let (err, text, _) = server.call(
-        "notebook_read",
-        json!({"path": "tests/data/lint_sample.ipynb",
-               "query": "  ", "diagnostics": "check+lint"}),
+        "notebook_search",
+        json!({"path": "tests/data/lint_sample.ipynb", "query": "  "}),
     );
     assert!(err && text.contains("query must not be empty"), "{text}");
 }

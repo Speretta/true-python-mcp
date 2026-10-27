@@ -29,7 +29,7 @@ It does two jobs:
 - Byte-exact edits: your diff shows only what you changed
 - Revision guard: stale writes are refused, not silently applied
 - ruff lint and format for any `.py`, not just notebooks
-- 16 tools, plus 6 file tools with `--file-tools` (`py_read`/`py_write`/`py_edit` for Python files, `file_copy`/`file_move`/`file_delete` for any file)
+- 15 tools, plus 6 file tools with `--file-tools` (`py_read`/`py_write`/`py_edit` for Python files, `file_copy`/`file_move`/`file_delete` for any file)
 
 ## Memory footprint
 
@@ -113,16 +113,15 @@ Every tool answers in markdown (default) or JSON (`"format": "json"`).
 
 | Tool | What it does |
 | --- | --- |
-| `notebook_read` | Shows the cells of a notebook. Can list them as an outline, search their text, and attach validation and lint findings. A file that is not a notebook (a `.md` export, a corrupt `.ipynb`) comes back as raw numbered text under a fallback marker instead of an error. |
+| `notebook_read` | Shows the cells of a notebook: as an outline, with line numbers, or with outputs; validation and lint findings can ride along. A file that is not a notebook (a `.md` export, a corrupt `.ipynb`) comes back as raw numbered text under a fallback marker instead of an error. |
+| `notebook_search` | Finds cells without reading the notebook: a text in cell sources and/or stored outputs, or just the cells that failed when the notebook ran, with the error and a capped traceback. |
 | `notebook_create` | Creates a new notebook (`.ipynb` or marimo `.py`), or converts an existing one (`from_path`; `.md` exports to markdown). |
 | `cell_edit` | Replaces a piece of text inside one cell. |
 | `cell_set_source` | Replaces a whole cell, or a line range in it. |
 | `cell_insert` | Adds a new cell. |
 | `cell_delete` | Deletes a cell. |
 | `cell_move` | Moves a cell to another position. |
-| `cell_set_type` | Switches a cell between code and markdown. |
-| `cell_set_metadata` | Replaces one Jupyter cell's metadata (papermill tags, slideshow settings); the previous value comes back in the answer. |
-| `cell_clear_outputs` | Empties the outputs of Jupyter cells. |
+| `cell_update` | Changes cell properties in one call: type (code/markdown/raw), metadata (Jupyter only; the previous value comes back in the answer), and/or cleared outputs. |
 | `notebook_check` | Finds problems without changing anything: a broken notebook structure, merge conflict marks, or marimo graph errors (two cells defining the same name, a cycle). |
 | `ruff_check` | Finds problems in any `.py`, `.pyi`, or `.ipynb` file (uses the nearest project ruff/pyproject config, falling back to the global user config). With `fix: true` it repairs the safe ones. |
 | `ruff_format` | Formats any `.py` or `.ipynb` file. With `check: true` it only shows what would change. |
