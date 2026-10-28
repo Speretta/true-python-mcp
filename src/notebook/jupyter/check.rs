@@ -14,19 +14,6 @@ use serde_json::Value;
 use super::JupyterNotebook;
 use crate::notebook::{Cell, Finding, Severity};
 
-fn finding(severity: Severity, cell: Option<usize>, code: &str, message: String) -> Finding {
-    Finding {
-        severity,
-        cell,
-        code: code.to_string(),
-        message,
-    }
-}
-
-fn error(cell: Option<usize>, code: &str, message: String) -> Finding {
-    finding(Severity::Error, cell, code, message)
-}
-
 /// `source`-like fields: a string or an array of strings.
 fn is_multiline_string(value: &Value) -> bool {
     match value {
@@ -130,12 +117,12 @@ pub(super) fn check(notebook: &JupyterNotebook) -> Vec<Finding> {
 
     match notebook.extra.get("metadata") {
         Some(Value::Object(_)) => {}
-        Some(_) => findings.push(error(
+        Some(_) => findings.push(Finding::error(
             None,
             "notebook-metadata",
             "top-level \"metadata\" must be an object".to_string(),
         )),
-        None => findings.push(error(
+        None => findings.push(Finding::error(
             None,
             "notebook-metadata",
             "missing top-level \"metadata\" object".to_string(),
@@ -146,7 +133,7 @@ pub(super) fn check(notebook: &JupyterNotebook) -> Vec<Finding> {
     const TOP_LEVEL_FIELDS: &[&str] = &["metadata", "nbformat", "nbformat_minor"];
     for key in notebook.extra.keys() {
         if !TOP_LEVEL_FIELDS.contains(&key.as_str()) {
-            findings.push(error(
+            findings.push(Finding::error(
                 None,
                 "unexpected-field",
                 format!("unexpected top-level field \"{key}\" (nbformat allows only cells, metadata, nbformat, nbformat_minor)"),
@@ -162,7 +149,7 @@ pub(super) fn check(notebook: &JupyterNotebook) -> Vec<Finding> {
         check_cell_id(cell, index, requires_id, &mut seen_ids, &mut findings);
         check_cell_outputs(cell, index, &mut findings);
         if let Some(markers) = conflict_markers(&cell.source.text()) {
-            findings.push(finding(
+            findings.push(Finding::new(
                 Severity::Warning,
                 Some(index),
                 "conflict-marker",
@@ -180,7 +167,7 @@ fn check_cell_fields(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
     let at = Some(index);
 
     if !matches!(cell.cell_type.as_str(), "code" | "markdown" | "raw") {
-        findings.push(error(
+        findings.push(Finding::error(
             at,
             "cell-type",
             format!(
@@ -206,7 +193,7 @@ fn check_cell_fields(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
     };
     for key in cell.extra.keys() {
         if !allowed.contains(&key.as_str()) {
-            findings.push(error(
+            findings.push(Finding::error(
                 at,
                 "unexpected-field",
                 format!(
@@ -220,7 +207,7 @@ fn check_cell_fields(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
     if let Some(attachments) = cell.extra.get("attachments")
         && !attachments.is_object()
     {
-        findings.push(error(
+        findings.push(Finding::error(
             at,
             "attachments",
             format!("cell {index}: \"attachments\" must be an object"),
@@ -229,12 +216,12 @@ fn check_cell_fields(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
 
     match cell.extra.get("metadata") {
         Some(Value::Object(_)) => {}
-        Some(_) => findings.push(error(
+        Some(_) => findings.push(Finding::error(
             at,
             "cell-metadata",
             format!("cell {index}: \"metadata\" must be an object"),
         )),
-        None => findings.push(error(
+        None => findings.push(Finding::error(
             at,
             "cell-metadata",
             format!("cell {index}: missing \"metadata\" object"),
@@ -256,7 +243,7 @@ fn check_cell_id(
     match cell.extra.get("id") {
         Some(Value::String(id)) => {
             if let Some(first) = seen_ids.get(id) {
-                findings.push(error(
+                findings.push(Finding::error(
                     at,
                     "duplicate-cell-id",
                     format!("cell {index}: id \"{id}\" is already used by cell {first}"),
@@ -265,12 +252,12 @@ fn check_cell_id(
                 seen_ids.insert(id.clone(), index);
             }
         }
-        Some(_) => findings.push(error(
+        Some(_) => findings.push(Finding::error(
             at,
             "cell-id",
             format!("cell {index}: \"id\" must be a string"),
         )),
-        None if requires_id => findings.push(error(
+        None if requires_id => findings.push(Finding::error(
             at,
             "cell-id",
             format!("cell {index}: missing \"id\" (required since nbformat 4.5)"),
@@ -289,13 +276,13 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
             Some(Value::Array(outputs)) => {
                 for (position, output) in outputs.iter().enumerate() {
                     if !output.is_object() {
-                        findings.push(error(
+                        findings.push(Finding::error(
                             at,
                             "outputs",
                             format!("cell {index}: outputs[{position}] must be an object"),
                         ));
                     } else if let Some(problem) = check_output(output) {
-                        findings.push(error(
+                        findings.push(Finding::error(
                             at,
                             "outputs",
                             format!("cell {index}: outputs[{position}]: {problem}"),
@@ -303,12 +290,12 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
                     }
                 }
             }
-            Some(_) => findings.push(error(
+            Some(_) => findings.push(Finding::error(
                 at,
                 "outputs",
                 format!("cell {index}: \"outputs\" must be an array"),
             )),
-            None => findings.push(error(
+            None => findings.push(Finding::error(
                 at,
                 "outputs",
                 format!("cell {index}: code cell is missing \"outputs\""),
@@ -325,12 +312,12 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
         // (the documented boundary, tests/data/exotic_numbers.ipynb).
         match cell.extra.get("execution_count") {
             Some(value) if is_execution_count(value) => {}
-            Some(_) => findings.push(error(
+            Some(_) => findings.push(Finding::error(
                 at,
                 "execution-count",
                 format!("cell {index}: \"execution_count\" must be an integer or null"),
             )),
-            None => findings.push(error(
+            None => findings.push(Finding::error(
                 at,
                 "execution-count",
                 format!("cell {index}: code cell is missing \"execution_count\""),
@@ -339,7 +326,7 @@ fn check_cell_outputs(cell: &Cell, index: usize, findings: &mut Vec<Finding>) {
     } else {
         for key in ["outputs", "execution_count"] {
             if cell.extra.contains_key(key) {
-                findings.push(error(
+                findings.push(Finding::error(
                     at,
                     "non-code-fields",
                     format!(

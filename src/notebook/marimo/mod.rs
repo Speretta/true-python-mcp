@@ -21,7 +21,7 @@ mod summary;
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use super::{Cell, Finding, Notebook, check_index};
+use super::{Cell, Finding, Notebook, check_index, check_insert_index, check_move_index};
 use crate::error::Error;
 pub use create::MARIMO_VERSION;
 use create::{new_app_cell, strip_hide_code, to_markdown_header};
@@ -409,12 +409,7 @@ impl Notebook for MarimoNotebook {
                 "marimo notebooks do not support {cell_type} cells"
             )));
         }
-        if index > self.cells.len() {
-            return Err(Error::invalid_input(format!(
-                "insert index {index} out of bounds: notebook has {} cells",
-                self.cells.len()
-            )));
-        }
+        check_insert_index(self.cells.len(), index)?;
         let (cell, meta) = if cell_type == "markdown" {
             self.new_markdown_cell(source)
         } else {
@@ -434,13 +429,10 @@ impl Notebook for MarimoNotebook {
         if from == to {
             return Ok(());
         }
+        // Checked before the removal so a refused move leaves the notebook
+        // untouched; the shared check reports the pre-move cell count.
+        check_move_index(self.cells.len(), to)?;
         let (cell, meta) = self.remove_cell(from);
-        if to > self.cells.len() {
-            return Err(Error::invalid_input(format!(
-                "destination index {to} out of bounds: notebook has {} cells",
-                self.cells.len()
-            )));
-        }
         self.insert_cell(to, cell, meta);
         Ok(())
     }

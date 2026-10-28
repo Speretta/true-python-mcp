@@ -20,7 +20,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
-use super::{Cell, Finding, Notebook, SourceText, check_index};
+use super::{
+    Cell, Finding, Notebook, SourceText, check_index, check_insert_index, check_move_index,
+};
 use crate::error::Error;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -143,12 +145,7 @@ impl Notebook for JupyterNotebook {
     }
 
     fn insert(&mut self, index: usize, cell_type: &str, source: &str) -> Result<(), Error> {
-        if index > self.cells.len() {
-            return Err(Error::invalid_input(format!(
-                "insert index {index} out of bounds: notebook has {} cells",
-                self.cells.len()
-            )));
-        }
+        check_insert_index(self.cells.len(), index)?;
         let with_id = self.nbformat_minor() >= 5;
         self.cells
             .insert(index, Self::new_cell(cell_type, source, with_id));
@@ -162,12 +159,7 @@ impl Notebook for JupyterNotebook {
 
     fn move_cell(&mut self, from: usize, to: usize) -> Result<(), Error> {
         check_index(self.cells.len(), from)?;
-        if to >= self.cells.len() {
-            return Err(Error::invalid_input(format!(
-                "destination index {to} out of bounds: notebook has {} cells",
-                self.cells.len()
-            )));
-        }
+        check_move_index(self.cells.len(), to)?;
         let cell = self.cells.remove(from);
         self.cells.insert(to, cell);
         Ok(())

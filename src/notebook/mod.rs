@@ -193,6 +193,31 @@ pub struct Finding {
     pub message: String,
 }
 
+impl Finding {
+    /// One validation finding: `code` is the stable machine-readable
+    /// identifier, `message` the human/LLM-readable description, and `cell`
+    /// the 0-based cell index for cell-scoped findings. Shared by the
+    /// format checkers so a finding is spelled one way everywhere.
+    pub(crate) fn new(
+        severity: Severity,
+        cell: Option<usize>,
+        code: &str,
+        message: String,
+    ) -> Self {
+        Self {
+            severity,
+            cell,
+            code: code.to_string(),
+            message,
+        }
+    }
+
+    /// A finding that blocks correct execution/loading of the notebook.
+    pub(crate) fn error(cell: Option<usize>, code: &str, message: String) -> Self {
+        Self::new(Severity::Error, cell, code, message)
+    }
+}
+
 /// A parsed notebook document. All mutations go through these operations so
 /// each format keeps its byte-exactness guarantees; mutation failures are
 /// [`Error::InvalidInput`] carrying the user-facing message.
@@ -327,6 +352,30 @@ pub fn check_index(len: usize, index: usize) -> Result<(), Error> {
     if index >= len {
         return Err(Error::invalid_input(format!(
             "cell index {index} out of bounds: notebook has {len} cells (0-based)"
+        )));
+    }
+    Ok(())
+}
+
+/// Bounds check shared by [`Notebook::insert`] in every format: `index` may
+/// name the one-past-the-end slot an append uses. One wording for one
+/// situation (house rule 7).
+pub(crate) fn check_insert_index(len: usize, index: usize) -> Result<(), Error> {
+    if index > len {
+        return Err(Error::invalid_input(format!(
+            "insert index {index} out of bounds: notebook has {len} cells"
+        )));
+    }
+    Ok(())
+}
+
+/// Bounds check shared by [`Notebook::move_cell`] in every format: `to` is
+/// interpreted after the removal, so its valid range is `0..len` of the
+/// pre-move notebook, which the message reports.
+pub(crate) fn check_move_index(len: usize, to: usize) -> Result<(), Error> {
+    if to >= len {
+        return Err(Error::invalid_input(format!(
+            "destination index {to} out of bounds: notebook has {len} cells"
         )));
     }
     Ok(())

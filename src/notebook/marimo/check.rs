@@ -157,14 +157,13 @@ fn missing_mo_findings(notebook: &MarimoNotebook) -> Vec<Finding> {
         return Vec::new();
     }
     let cell = notebook.cells.iter().position(|cell| cell.is_markdown());
-    vec![Finding {
-        severity: Severity::Error,
+    vec![Finding::error(
         cell,
-        code: "missing-mo".to_string(),
-        message: "markdown cells reference `mo` but no cell defines it \
-                  (missing `import marimo as mo`)"
+        "missing-mo",
+        "markdown cells reference `mo` but no cell defines it \
+         (missing `import marimo as mo`)"
             .to_string(),
-    }]
+    )]
 }
 
 /// The reactive graph: analyzed cells, name indexes, and dependency edges,
@@ -214,15 +213,14 @@ impl Graph {
         for (index, meta) in notebook.metas.iter().enumerate() {
             match meta.kind {
                 Kind::Broken => {
-                    self.syntax_findings.push(Finding {
-                        severity: Severity::Error,
-                        cell: Some(index),
-                        code: "syntax-error".to_string(),
-                        message: format!(
+                    self.syntax_findings.push(Finding::error(
+                        Some(index),
+                        "syntax-error",
+                        format!(
                             "cell {index} contains a Python syntax error; marimo cannot run this \
                              notebook until it is repaired"
                         ),
-                    });
+                    ));
                     continue;
                 }
                 // The runtime registers unparsable cells without compiling them.
@@ -245,12 +243,11 @@ impl Graph {
                 }
             } else {
                 let Some(info) = infos[index].take() else {
-                    self.syntax_findings.push(Finding {
-                        severity: Severity::Error,
-                        cell: Some(index),
-                        code: "syntax-error".to_string(),
-                        message: format!("cell {index} does not parse as Python"),
-                    });
+                    self.syntax_findings.push(Finding::error(
+                        Some(index),
+                        "syntax-error",
+                        format!("cell {index} does not parse as Python"),
+                    ));
                     continue;
                 };
                 info
@@ -310,15 +307,14 @@ impl Graph {
         let mut findings = Vec::new();
         for (name, cells) in &self.definers {
             if cells.len() > 1 {
-                findings.push(Finding {
-                    severity: Severity::Error,
-                    cell: Some(cells[0]),
-                    code: "multiple-definitions".to_string(),
-                    message: format!(
+                findings.push(Finding::error(
+                    Some(cells[0]),
+                    "multiple-definitions",
+                    format!(
                         "`{name}` is defined by multiple cells ({}); marimo only keeps one",
                         cells_list(cells)
                     ),
-                });
+                ));
             }
         }
         findings
@@ -352,15 +348,14 @@ impl Graph {
             } else {
                 format!(" via {}", vars.into_iter().collect::<Vec<_>>().join(", "))
             };
-            findings.push(Finding {
-                severity: Severity::Error,
-                cell: Some(component[0]),
-                code: "cycle".to_string(),
-                message: format!(
+            findings.push(Finding::error(
+                Some(component[0]),
+                "cycle",
+                format!(
                     "cells [{}] form a dependency cycle{via}",
                     cells_list(&component)
                 ),
-            });
+            ));
         }
         findings
     }
@@ -385,17 +380,16 @@ impl Graph {
                     .filter(|name| self.nodes[&setup].info.refs.contains(*name))
                     .map(String::as_str)
                     .collect();
-                findings.push(Finding {
-                    severity: Severity::Error,
-                    cell: Some(setup),
-                    code: "setup-root".to_string(),
-                    message: format!(
+                findings.push(Finding::error(
+                    Some(setup),
+                    "setup-root",
+                    format!(
                         "the setup cell must not depend on other cells, but it uses {} \
                          defined by cells [{}]",
                         names.into_iter().collect::<Vec<_>>().join(", "),
                         cells_list(&ancestors.into_iter().collect::<Vec<_>>())
                     ),
-                });
+                ));
             }
         }
         findings
@@ -424,18 +418,18 @@ impl Graph {
                 .map(String::as_str)
                 .eq(expected_return.iter().copied())
             {
-                findings.push(Finding {
-                    severity: Severity::Info,
-                    cell: Some(*index),
-                    code: "stale-return".to_string(),
-                    message: format!(
+                findings.push(Finding::new(
+                    Severity::Info,
+                    Some(*index),
+                    "stale-return",
+                    format!(
                         "{} returns [{}] but marimo would regenerate [{}]; the return is refreshed \
                          on marimo's next save",
                         node.label,
                         stored_return.join(", "),
                         expected_return.join(", ")
                     ),
-                });
+                ));
             }
             // Stale signature: marimo writes parameters for exactly the refs
             // that are not allowed (own defs, setup defs, toplevel names,
@@ -466,18 +460,18 @@ impl Graph {
                         assumed_builtins.join(", ")
                     )
                 };
-                findings.push(Finding {
-                    severity: Severity::Info,
-                    cell: Some(*index),
-                    code: "stale-signature".to_string(),
-                    message: format!(
+                findings.push(Finding::new(
+                    Severity::Info,
+                    Some(*index),
+                    "stale-signature",
+                    format!(
                         "{} takes ({}) but marimo would regenerate ({}); the signature is refreshed \
                          on marimo's next save{builtin_note}",
                         node.label,
                         stored_params.join(", "),
                         expected_params.join(", ")
                     ),
-                });
+                ));
             }
         }
         findings
