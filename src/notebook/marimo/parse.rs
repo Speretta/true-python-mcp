@@ -101,6 +101,7 @@ pub(super) struct Builder {
     version: Option<String>,
     seen_import: bool,
     seen_app: bool,
+    recovery_view: bool,
 }
 
 impl Builder {
@@ -152,6 +153,12 @@ impl Builder {
     }
 
     /// Shared finalization: validate the marimo markers and assemble.
+    /// Record that these cells come from the line-based recovery scanner,
+    /// not the whole-file parse (see [`MarimoNotebook::is_recovery_view`]).
+    pub(super) fn mark_recovery(&mut self) {
+        self.recovery_view = true;
+    }
+
     pub(super) fn finish(self) -> Result<MarimoNotebook, String> {
         if !self.seen_import || !self.seen_app {
             return Err(
@@ -164,6 +171,7 @@ impl Builder {
             metas: self.metas,
             segments: self.segments,
             version: self.version,
+            recovery_view: self.recovery_view,
         })
     }
 }

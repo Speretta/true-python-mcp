@@ -47,6 +47,7 @@ impl MarimoNotebook {
                 Segment::Lit("if __name__ == \"__main__\":\n    app.run()\n".to_string()),
             ],
             version: Some(MARIMO_VERSION.to_string()),
+            recovery_view: false,
         }
     }
 

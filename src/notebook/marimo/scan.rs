@@ -35,6 +35,7 @@ enum Region {
 
 pub(super) fn scan(src: &str) -> Result<MarimoNotebook, String> {
     let mut builder = Builder::default();
+    builder.mark_recovery();
 
     for (start, end, region) in split_regions(src) {
         let text = &src[start..end];

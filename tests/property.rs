@@ -343,7 +343,12 @@ proptest! {
 
     /// Property 3: an edit either is refused with the bytes untouched, or
     /// yields a file that parses again with every unedited cell's source
-    /// preserved.
+    /// preserved. When the input needed the recovery scanner (a
+    /// tokenizer-level syntax error), a regenerated block can make the file
+    /// tokenize again and re-segment the view, exactly like marimo's own
+    /// `scanner.py` (line-based fallback on tokenizer failure, tokenized
+    /// boundaries otherwise); such a view flip is only required to be
+    /// byte-stable, while a structured-view input must keep its cells.
     #[test]
     fn marimo_edits_never_corrupt_untouched_cells(
         (text, index, body) in (arb_marimo_text(), any::<usize>(), arb_text(60))
@@ -351,6 +356,7 @@ proptest! {
         let Ok(AnyNotebook::Marimo(mut notebook)) = open(&text) else {
             return Ok(());
         };
+        let recovery_view = notebook.is_recovery_view();
         let count = notebook.cells().len();
         if count == 0 {
             return Ok(());
@@ -375,11 +381,18 @@ proptest! {
             );
             return Ok(());
         };
-        prop_assert_eq!(
-            reopened.cells().len(),
-            count,
-            "cell count must survive an edit"
-        );
+        if reopened.cells().len() != count {
+            prop_assert!(
+                recovery_view,
+                "cell count must survive an edit of a structured-view input"
+            );
+            prop_assert_eq!(
+                &reopened.serialize(),
+                &serialized,
+                "a recovery-view re-segmentation must still be byte-stable"
+            );
+            return Ok(());
+        }
         let after: Vec<String> = reopened
             .cells()
             .iter()

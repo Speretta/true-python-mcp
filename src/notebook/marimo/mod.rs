@@ -31,6 +31,10 @@ pub struct MarimoNotebook {
     metas: Vec<CellMeta>,
     segments: Vec<Segment>,
     version: Option<String>,
+    /// Whether the parse fell back to the line-based recovery scanner (the
+    /// file has a tokenizer-level syntax error). See
+    /// [`Self::is_recovery_view`].
+    recovery_view: bool,
 }
 
 enum Segment {
@@ -110,6 +114,18 @@ fn statementless(body: &str) -> bool {
 impl MarimoNotebook {
     pub(crate) fn parse(src: &str) -> Result<Self, String> {
         parse::parse(src)
+    }
+
+    /// Whether this notebook's cell view comes from the line-based recovery
+    /// scanner instead of the whole-file parse. A recovery view exists only
+    /// for files with a tokenizer-level syntax error (an unterminated string
+    /// say), where cell boundaries are the line-based guess; once a later
+    /// save makes the file tokenize again the view becomes the structured
+    /// one and can legitimately change, exactly like marimo's own
+    /// `scanner.py` (tokenized boundaries when tokenization succeeds,
+    /// line-based fallback when it fails).
+    pub fn is_recovery_view(&self) -> bool {
+        self.recovery_view
     }
 
     /// Segment positions of each cell marker, in order (index i ↔ cells[i]).
