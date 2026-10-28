@@ -22,6 +22,8 @@ mod summary;
 
 use std::borrow::Cow;
 
+use serde_json::{Map, Value};
+
 use super::{Cell, Finding, Notebook, check_index, check_insert_index, check_move_index};
 use crate::error::Error;
 pub use create::MARIMO_VERSION;
@@ -284,6 +286,30 @@ impl MarimoNotebook {
             .any(|(cell, _)| {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
+    }
+
+    /// Jupyter-only by contract: marimo cell configuration lives in code
+    /// (the `@app.cell` decorator arguments), so a metadata object is
+    /// refused with an explanation rather than stored.
+    pub fn set_metadata(
+        &mut self,
+        _index: usize,
+        _metadata: Map<String, Value>,
+    ) -> Result<Value, Error> {
+        Err(Error::invalid_input(
+            "marimo cell configuration lives in code (the @app.cell decorator arguments), \
+             not in a metadata object; cell_set_metadata supports Jupyter notebooks only",
+        ))
+    }
+
+    /// marimo stores no outputs: the note a search with an output scope
+    /// reports instead of a clean "nothing failed" or "no output matches".
+    pub fn outputs_absent_note(&self) -> Option<String> {
+        Some(
+            "marimo files store no outputs: output-scope matching and only_failed \
+             have nothing to look at here"
+                .to_string(),
+        )
     }
 }
 

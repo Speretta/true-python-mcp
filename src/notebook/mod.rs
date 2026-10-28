@@ -307,7 +307,9 @@ impl AnyNotebook {
     /// with an explanation. Deliberately an inherent method on the enum,
     /// not a [`Notebook`] trait method: a trait method would force every
     /// format to carry an impl that can only refuse, and a trait default
-    /// would silently swallow the Jupyter case at the dispatch site.
+    /// would silently swallow the Jupyter case at the dispatch site. Each
+    /// arm delegates to its format module, so the refusal wording is the
+    /// format's own.
     pub fn set_metadata(
         &mut self,
         index: usize,
@@ -315,10 +317,16 @@ impl AnyNotebook {
     ) -> Result<Value, Error> {
         match self {
             Self::Jupyter(notebook) => notebook.set_metadata(index, metadata),
-            Self::Marimo(_) => Err(Error::invalid_input(
-                "marimo cell configuration lives in code (the @app.cell decorator arguments), \
-                 not in a metadata object; cell_set_metadata supports Jupyter notebooks only",
-            )),
+            Self::Marimo(notebook) => notebook.set_metadata(index, metadata),
+        }
+    }
+
+    /// The note a search with an output scope carries when the format
+    /// stores no outputs at all; `None` for formats with outputs.
+    pub fn outputs_absent_note(&self) -> Option<String> {
+        match self {
+            Self::Jupyter(_) => None,
+            Self::Marimo(notebook) => notebook.outputs_absent_note(),
         }
     }
 

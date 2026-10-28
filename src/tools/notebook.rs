@@ -154,15 +154,12 @@ impl Tpmcp {
             };
             let mut search =
                 render::search::search(notebook.cells(), &spec, args.start, args.limit);
-            // marimo stores no outputs: say so instead of reporting a clean
-            // "nothing failed" or "no output matches".
-            if (outputs || spec.only_failed) && matches!(notebook, notebook::AnyNotebook::Marimo(_))
+            // A format that stores no outputs says so instead of reporting
+            // a clean "nothing failed" or "no output matches".
+            if (outputs || spec.only_failed)
+                && let Some(note) = notebook.outputs_absent_note()
             {
-                search.note = Some(
-                    "marimo files store no outputs: output-scope matching and only_failed \
-                     have nothing to look at here"
-                        .to_string(),
-                );
+                search.note = Some(note);
             }
             let path = args.path.display().to_string();
             Ok(respond(
