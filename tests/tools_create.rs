@@ -297,3 +297,79 @@ print("ok")
     let report = run_python(&python, CHECK, &[target.to_str().unwrap()]);
     assert!(report.contains("ok"), "{report}");
 }
+
+/// `source_revision` turns a conversion into a move: the target is written
+/// and verified, then the source is deleted. A stale revision refuses the
+/// whole create before anything is written — neither file changes.
+#[test]
+fn from_path_with_source_revision_is_a_move() {
+    let dir = temp_dir("convert-move");
+    let mut server = Server::start(&[]);
+    let source = dir.join("src.ipynb");
+    std::fs::copy("tests/data/nbformat_empty.ipynb", &source).unwrap();
+    let (err, text, read) = server.call("notebook_read", json!({"path": source, "format": "json"}));
+    assert!(!err, "{text}");
+    let revision = read["revision"].as_str().unwrap().to_string();
+
+    // A stale source revision refuses the create: no target, source intact.
+    let stale = dir.join("stale.md");
+    let (err, _, refused) = server.call(
+        "notebook_create",
+        json!({"path": stale, "from_path": source, "source_revision": "0000000000000000", "format": "json"}),
+    );
+    assert!(err, "a stale source revision must refuse: {refused}");
+    assert!(!stale.exists(), "a refused move must not write the target");
+    assert!(source.exists(), "a refused move must keep the source");
+
+    // The clean move: target written, source gone, the answer says so.
+    let target = dir.join("out.md");
+    let (err, text, created) = server.call(
+        "notebook_create",
+        json!({"path": target, "from_path": source, "source_revision": revision, "format": "json"}),
+    );
+    assert!(!err, "{text}");
+    assert_eq!(created["source_removed"], true, "{created}");
+    assert!(target.exists(), "the target stands");
+    assert!(!source.exists(), "the move removes the source");
+
+    // source_revision without from_path is a caller error.
+    let (err, _, _) = server.call(
+        "notebook_create",
+        json!({"path": dir.join("x.ipynb"), "cells": [], "source_revision": revision}),
+    );
+    assert!(err, "source_revision requires from_path");
+}
+
+/// A move whose removal fails keeps the target and says so, never failing
+/// into silence about the leftover. Pinned on POSIX by making the source's
+/// directory read-only (a read-only directory forbids unlink, not read).
+#[cfg(unix)]
+#[test]
+fn a_move_that_cannot_remove_the_source_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("convert-move-note");
+    let mut server = Server::start(&[]);
+    let locked = dir.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    let source = locked.join("src.ipynb");
+    std::fs::copy("tests/data/nbformat_empty.ipynb", &source).unwrap();
+    let (err, text, read) = server.call("notebook_read", json!({"path": source, "format": "json"}));
+    assert!(!err, "{text}");
+    let revision = read["revision"].as_str().unwrap().to_string();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let target = dir.join("out.md");
+    let (err, text, created) = server.call(
+        "notebook_create",
+        json!({"path": target, "from_path": source, "source_revision": revision, "format": "json"}),
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(!err, "the created target is not an error: {text}");
+    assert!(target.exists(), "the target stands");
+    assert!(source.exists(), "the source could not be removed");
+    assert_eq!(created["source_removed"], false, "{created}");
+    let note = created["note"].as_str().unwrap_or_default();
+    assert!(note.contains("could not be removed"), "{created}");
+}

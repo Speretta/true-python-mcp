@@ -7,6 +7,8 @@ pub mod server;
 
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 /// Pull the revision out of a markdown tool response.
 pub fn revision_of(text: &str) -> String {
     for line in text.lines() {
@@ -181,4 +183,105 @@ pub fn scaffold_venv_pkg(root: &Path, name: &str, pkg: &str, body: &str) -> Path
 /// shape `tests/ty.rs` relies on.
 pub fn scaffold_venv(root: &Path, name: &str, pkg: &str) -> PathBuf {
     scaffold_venv_pkg(root, name, pkg, "SOME_CONSTANT = 1\n")
+}
+
+/// Ground truth: real marimo loads the converted file (what `marimo edit`
+/// does on open) and compiles every cell it could parse. Unparsable regions
+/// are expected for sources with Jupyter magics — the loader degrades them,
+/// exactly like our own reader. A nonzero `failed` count means marimo could
+/// parse a cell but not compile it: a broken artifact.
+pub const CONVERT_CHECK: &str = r#"
+import sys
+from marimo._ast.parse import parse_notebook
+from marimo._ast.compiler import compile_cell
+path = sys.argv[1]
+nb = parse_notebook(open(path).read(), path)
+compiled = failed = unparsable = 0
+for i, cell in enumerate(nb.cells):
+    if type(cell).__name__ == "UnparsableCell":
+        unparsable += 1
+        continue
+    try:
+        compile_cell(cell.code, str(i))
+        compiled += 1
+    except Exception as error:
+        failed += 1
+        print(f"cell {i}: {type(error).__name__}: {error}", file=sys.stderr)
+print(f"cells:{len(nb.cells)} compiled:{compiled} failed:{failed} unparsable:{unparsable}")
+"#;
+
+/// A clean Jupyter notebook with a markdown cell and no external
+/// dependencies, so the converted marimo file can be EXECUTED.
+pub const CLEAN_WITH_MARKDOWN: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "c1", "metadata": {}, "outputs": [],
+   "source": ["import math\n", "value = math.pi\n"]},
+  {"cell_type": "markdown", "id": "c2", "metadata": {}, "source": ["# Title\n", "\n", "math is fun\n"]},
+  {"cell_type": "code", "execution_count": null, "id": "c3", "metadata": {}, "outputs": [],
+   "source": ["print(value)\n"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}"##;
+
+pub fn warnings_of(structured: &Value) -> Vec<String> {
+    structured["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|warning| warning.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Diagnostic view helpers for the ty suites: pull the stable fields out of
+/// `tpmcp::ruff::Diagnostic` and parse the real ty CLI's concise output.
+pub fn code(d: &tpmcp::ruff::Diagnostic) -> &str {
+    d.code.as_deref().unwrap_or("")
+}
+
+pub fn row_col(d: &tpmcp::ruff::Diagnostic) -> (usize, usize) {
+    let loc = d.location.as_ref().expect("location present");
+    (loc.row, loc.column)
+}
+
+pub fn codes(diagnostics: &[tpmcp::ruff::Diagnostic]) -> Vec<String> {
+    diagnostics.iter().map(|d| code(d).to_string()).collect()
+}
+
+/// Extract `[code]` from each `…: error[code] …` line of ty's `concise` output.
+/// The `Found N diagnostics` trailer and `All checks passed!` banner carry no
+/// brackets and are ignored.
+pub fn concise_codes(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let start = line.find('[')?;
+            let end = line.find(']')?;
+            (end > start).then(|| line[start + 1..end].to_string())
+        })
+        .collect()
+}
+
+/// `(severity, code)` pairs of our diagnostics — what the rule-config parity
+/// test compares: ty carries the severity in the message prefix.
+pub fn entries(diagnostics: &[tpmcp::ruff::Diagnostic]) -> Vec<(String, String)> {
+    diagnostics
+        .iter()
+        .map(|d| (d.severity.clone(), code(d).to_string()))
+        .collect()
+}
+
+/// `(severity, code)` pairs of ty's `concise` output, whose lines read
+/// `path:line:col: error[code]: message`.
+pub fn concise_entries(stdout: &str) -> Vec<(String, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let start = line.find('[')?;
+            let end = line.find(']')?;
+            let severity = line[..start].rsplit([' ', ':']).next()?;
+            (end > start).then(|| (severity.to_string(), line[start + 1..end].to_string()))
+        })
+        .collect()
 }
