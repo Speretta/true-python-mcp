@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 use super::{Detail, WithOutputs};
-use crate::notebook::Cell;
+use crate::notebook::{Cell, MimePart, OutputView};
 
 /// Maximum bytes shown per output payload in full mode; truncation backs off
 /// to a char boundary.
@@ -62,16 +62,11 @@ pub(super) fn summarize(outputs: &[Value]) -> String {
 /// One-line summary of an output: `stream(stderr)`,
 /// `execute_result[text/plain,image/png]`, `error`.
 fn output_summary(output: &Value) -> String {
-    let kind = output
-        .get("output_type")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    match output.get("data") {
-        Some(Value::Object(data)) => {
-            let mimes: Vec<&str> = data.keys().map(String::as_str).collect();
-            format!("{kind}[{}]", mimes.join(","))
-        }
-        _ => match output.get("name").and_then(Value::as_str) {
+    let view = OutputView::new(output);
+    let kind = view.kind();
+    match view.data_mimes() {
+        Some(mimes) => format!("{kind}[{}]", mimes.join(",")),
+        None => match view.name() {
             Some(name) => format!("{kind}({name})"),
             None => kind.to_string(),
         },
@@ -94,13 +89,11 @@ pub(super) fn export_outputs(
     let mut binaries = Vec::new();
     let mut rendered = String::new();
     for output in outputs {
-        if let Some(data) = output.get("data").and_then(Value::as_object) {
-            binaries.extend(
-                data.keys()
-                    .filter(|mime| *mime != "text/plain")
-                    .map(String::as_str),
-            );
-        }
+        let view = OutputView::new(output);
+        binaries.extend(view.mime_parts().into_iter().filter_map(|part| match part {
+            MimePart::Binary { mime, .. } => Some(mime),
+            MimePart::Plain(_) => None,
+        }));
         rendered.push_str(&render_output_full(output, Detail::Full, None));
         rendered.push('\n');
     }
@@ -118,78 +111,38 @@ pub(super) fn export_outputs(
 }
 
 fn render_output_full(output: &Value, detail: Detail, output_limit: Option<usize>) -> String {
-    let kind = output
-        .get("output_type")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
+    let view = OutputView::new(output);
+    let kind = view.kind();
     match kind {
-        "stream" => {
-            let name = output
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("stdout");
-            let text = multiline_to_string(output.get("text"));
-            format!(
-                "stream({name}):\n{}",
-                indent(&truncate(&text, detail, output_limit))
-            )
-        }
+        "stream" => format!(
+            "stream({}):\n{}",
+            view.stream_name(),
+            indent(&truncate(&view.text(), detail, output_limit))
+        ),
         "error" => {
-            let ename = output.get("ename").and_then(Value::as_str).unwrap_or("");
-            let evalue = output.get("evalue").and_then(Value::as_str).unwrap_or("");
-            let traceback = output
-                .get("traceback")
-                .and_then(Value::as_array)
-                .map(|lines| {
-                    lines
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default();
+            let (ename, evalue) = view.error_identity().unwrap_or_default();
             format!(
                 "error: {ename}: {evalue}\n{}",
-                indent(&truncate(&strip_ansi(&traceback), detail, output_limit))
+                indent(&truncate(&view.traceback_display(), detail, output_limit))
             )
         }
         _ => {
             // execute_result / display_data: prefer text/plain, describe binaries.
-            let mut parts = Vec::new();
-            if let Some(Value::Object(data)) = output.get("data") {
-                for (mime, payload) in data {
-                    if mime == "text/plain" {
-                        parts.push(format!(
-                            "{mime}:\n{}",
-                            indent(&truncate(
-                                &multiline_to_string(Some(payload)),
-                                detail,
-                                output_limit
-                            ))
-                        ));
-                    } else {
-                        parts.push(format!(
-                            "{mime}: <{} bytes>",
-                            payload.as_str().map(str::len).unwrap_or(0)
-                        ));
+            let parts: Vec<String> = view
+                .mime_parts()
+                .into_iter()
+                .map(|part| match part {
+                    MimePart::Plain(text) => {
+                        format!(
+                            "text/plain:\n{}",
+                            indent(&truncate(&text, detail, output_limit))
+                        )
                     }
-                }
-            }
+                    MimePart::Binary { mime, bytes } => format!("{mime}: <{bytes} bytes>"),
+                })
+                .collect();
             format!("{kind} {}\n", parts.join(" | "))
         }
-    }
-}
-
-/// `"text"` may be a JSON string or an array of lines; normalize to one string.
-fn multiline_to_string(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(lines)) => lines
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .concat(),
-        _ => String::new(),
     }
 }
 
@@ -228,59 +181,4 @@ fn indent(text: &str) -> String {
         out.push_str(line);
     }
     out
-}
-
-/// Remove ANSI escape sequences from tracebacks so they don't burn tokens.
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character == '\u{1b}' {
-            // CSI: ESC [ ... final byte in @..~
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                while let Some(next) = chars.next()
-                    && !('@'..='~').contains(&next)
-                {}
-            }
-        } else {
-            out.push(character);
-        }
-    }
-    out
-}
-
-/// The identity of an error output: `(ename, evalue)`. `None` for every
-/// other output type.
-pub(super) fn error_fields(output: &Value) -> Option<(String, String)> {
-    (output.get("output_type").and_then(Value::as_str) == Some("error")).then(|| {
-        let name = output
-            .get("ename")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let value = output
-            .get("evalue")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        (name, value)
-    })
-}
-
-/// The searchable text of one output — stream text, `text/plain` payloads,
-/// or an error's name, value and traceback — so an output-scope search
-/// matches what a reader sees rather than the JSON encoding.
-pub(super) fn output_text(output: &Value) -> String {
-    match output.get("output_type").and_then(Value::as_str) {
-        Some("stream") => multiline_to_string(output.get("text")),
-        Some("error") => {
-            let (name, value) = error_fields(output).unwrap_or_default();
-            let traceback = strip_ansi(&multiline_to_string(output.get("traceback")));
-            format!("{name}: {value}\n{traceback}")
-        }
-        _ => strip_ansi(&multiline_to_string(
-            output.get("data").and_then(|data| data.get("text/plain")),
-        )),
-    }
 }

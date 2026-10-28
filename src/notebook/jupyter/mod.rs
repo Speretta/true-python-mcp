@@ -12,7 +12,10 @@
 //! nbformat does on every save.
 
 mod check;
+mod outputs;
 mod serialize;
+
+pub(crate) use outputs::{MimePart, OutputView};
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};

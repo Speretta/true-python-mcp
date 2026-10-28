@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
+use crate::notebook::OutputView;
 use crate::notebook::{AnyNotebook, Cell, Notebook};
-use crate::render::output::{error_fields, output_text};
 
 /// Maximum matching cells rendered in one response; the rest are reported
 /// as a count with a steering line (page or narrow the query).
@@ -112,10 +112,8 @@ pub fn search(
             }
             if spec.outputs {
                 for (position, output) in cell.outputs().iter().enumerate() {
-                    for (number, line) in crate::fs::logical_lines(&output_text(output))
-                        .iter()
-                        .enumerate()
-                    {
+                    let text = OutputView::new(output).search_text();
+                    for (number, line) in crate::fs::logical_lines(&text).iter().enumerate() {
                         if line.to_lowercase().contains(needle) {
                             hits.push(Hit {
                                 at: format!("output {position}:{}", number + 1),
@@ -175,8 +173,9 @@ pub fn search(
 /// error output's ename/evalue and a capped traceback.
 fn failed_cell(cell: &Cell) -> Option<(String, String, Vec<String>)> {
     for output in cell.outputs() {
-        if let Some((name, value)) = error_fields(output) {
-            let traceback: Vec<String> = crate::fs::logical_lines(&output_text(output))
+        let view = OutputView::new(output);
+        if let Some((name, value)) = view.error_identity() {
+            let traceback: Vec<String> = crate::fs::logical_lines(&view.search_text())
                 .iter()
                 .skip(1) // the "ename: evalue" line the text starts with
                 .take(TRACEBACK_LINES)

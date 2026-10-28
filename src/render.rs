@@ -388,7 +388,7 @@ fn cell_json(index: usize, cell: &Cell, with_outputs: WithOutputs) -> Value {
         "cell_type": cell.cell_type,
         "id": cell.id(),
         "name": cell.marimo_name(),
-        "execution_count": cell.extra.get("execution_count"),
+        "execution_count": cell.raw_execution_count(),
         "line_count": line_count,
         "source": source,
     });

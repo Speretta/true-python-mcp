@@ -14,6 +14,7 @@ mod marimo;
 
 pub use any::AnyNotebook;
 pub use jupyter::JupyterNotebook;
+pub(crate) use jupyter::{MimePart, OutputView};
 pub use marimo::parse::is_marimo;
 pub use marimo::{MARIMO_VERSION, MarimoNotebook};
 
@@ -73,6 +74,12 @@ impl Cell {
     /// Jupyter execution count; `None` when absent or null (never run).
     pub fn execution_count(&self) -> Option<u64> {
         self.extra.get("execution_count").and_then(Value::as_u64)
+    }
+
+    /// Jupyter's `execution_count` field verbatim (`null` until the cell
+    /// has run), for the JSON view that echoes it untyped.
+    pub fn raw_execution_count(&self) -> Option<&Value> {
+        self.extra.get("execution_count")
     }
 
     /// Jupyter cell outputs; empty for non-code cells and for marimo.
