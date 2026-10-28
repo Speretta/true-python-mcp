@@ -4,19 +4,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test assertion idiom
 mod common;
 
-use common::{server::Server, temp_dir};
+use common::{revision_of, server::Server, temp_dir};
 use serde_json::{Value, json};
 use tpmcp::notebook::JupyterNotebook;
-
-/// Pull the revision out of a markdown tool response.
-fn revision_of(text: &str) -> String {
-    for line in text.lines() {
-        if let Some(revision) = line.strip_prefix("revision: ") {
-            return revision.trim().to_string();
-        }
-    }
-    panic!("no revision in output:\n{text}");
-}
 
 /// cell_set_metadata over the wire: full replace with the previous object
 /// echoed back (markdown and JSON shapes), revision chaining and conflict

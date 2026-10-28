@@ -7,6 +7,16 @@ pub mod server;
 
 use std::path::{Path, PathBuf};
 
+/// Pull the revision out of a markdown tool response.
+pub fn revision_of(text: &str) -> String {
+    for line in text.lines() {
+        if let Some(rev) = line.strip_prefix("revision: ") {
+            return rev.trim().to_string();
+        }
+    }
+    panic!("no revision in output:\n{text}");
+}
+
 /// Unique temp dir for one test tag: pid + a hash of the tag, cleared and
 /// recreated on every call.
 pub fn temp_dir(tag: &str) -> PathBuf {
