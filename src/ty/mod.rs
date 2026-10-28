@@ -11,6 +11,7 @@ mod check;
 mod db;
 pub(crate) mod rules;
 mod settings;
+mod stdlib;
 pub(crate) mod worker;
 
 use std::path::Path;
