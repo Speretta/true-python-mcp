@@ -9,6 +9,7 @@
 //! so an edited cell never carries a stale return or signature.
 
 mod check;
+mod convert;
 mod create;
 mod cycles;
 mod indent;

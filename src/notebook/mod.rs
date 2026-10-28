@@ -9,10 +9,12 @@
 //! compiler then reports everywhere).
 
 mod any;
+mod convert;
 mod jupyter;
 mod marimo;
 
 pub use any::AnyNotebook;
+pub use convert::Converted;
 pub use jupyter::JupyterNotebook;
 pub(crate) use jupyter::{CellMap, MimePart, OutputView};
 pub use marimo::parse::is_marimo;

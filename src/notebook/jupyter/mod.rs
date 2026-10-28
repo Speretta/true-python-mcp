@@ -12,6 +12,7 @@
 //! nbformat does on every save.
 
 mod check;
+mod convert;
 mod engine;
 mod outputs;
 mod serialize;
