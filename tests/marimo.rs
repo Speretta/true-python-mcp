@@ -111,8 +111,8 @@ fn editing_one_cell_preserves_the_others() {
     // Untouched cells stay byte-identical.
     assert!(serialized.contains("import numpy as np"));
     assert!(serialized.contains("y = x + 1"));
-    // The trailing return of the edited cell is preserved (marimo regenerates
-    // it on next save, so a stale return is fine).
+    // The trailing return of the edited cell comes back in marimo's
+    // canonical shape (the edit refreshes it, as marimo's save would).
     assert!(serialized.contains("return (x,)"));
     // Still a valid marimo file.
     assert!(open(&serialized).is_ok());
@@ -132,7 +132,6 @@ fn canonicalize_excludes_toplevel_names_from_signatures() {
     );
     let mut notebook = open(src).unwrap();
     notebook.set_source(1, "y = helper()").unwrap();
-    notebook.canonicalize_after_edit(1, Some("y = 1"));
     let serialized = notebook.serialize();
     assert!(serialized.contains("y = helper()"), "{serialized}");
     assert!(
@@ -154,15 +153,11 @@ fn cross_cell_ripple_updates_the_defining_cells_return() {
     let mut notebook = tpmcp::notebook::create(Format::Marimo);
     notebook.insert(0, "code", "print(z)\n").unwrap();
     notebook.insert(1, "code", "z = 42\n").unwrap();
-    let _ = notebook.ensure_mo_definition();
-    notebook.canonicalize_after_edit(0, None);
     // Cell 0 references `z`, so the cell that defines it returns it.
     assert!(notebook.serialize().contains("return (z,)"));
 
     // Editing cell 0 to stop referencing `z` empties cell 1's return.
-    let before = notebook.cells()[0].source_text().into_owned();
     notebook.set_source(0, "print('hi')\n").unwrap();
-    notebook.canonicalize_after_edit(0, Some(&before));
     let serialized = notebook.serialize();
     assert!(
         !serialized.contains("return (z,)"),

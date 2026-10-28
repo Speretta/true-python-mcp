@@ -74,6 +74,17 @@ impl MarimoNotebook {
         )
     }
 
+    /// The after-mutation fixups: when the mutation at `index` introduced a
+    /// markdown cell, make sure the file defines `mo`, the same scaffold
+    /// marimo's own converter adds, and disclose the scaffold cell in the
+    /// result. A no-op otherwise.
+    pub(crate) fn finalize_mutation(&mut self, index: usize) -> Result<Vec<String>, Error> {
+        if !self.cells[index].is_markdown() {
+            return Ok(Vec::new());
+        }
+        Ok(self.ensure_mo_definition()?.into_iter().collect())
+    }
+
     /// Inject the `import marimo as mo` cell that marimo's own converter adds:
     /// markdown cells call `mo.md(...)`, and a file where no cell binds `mo`
     /// fails with a NameError in the marimo runtime even though it parses and

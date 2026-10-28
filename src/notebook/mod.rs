@@ -330,28 +330,17 @@ impl AnyNotebook {
         }
     }
 
-    /// After a mutation that introduced a markdown cell into a marimo
-    /// notebook, make sure the file defines `mo`, the same scaffold
-    /// marimo's own converter adds. Returns the scaffold warning when an
-    /// import cell was inserted, `Ok(None)` when nothing was needed.
-    /// Jupyter notebooks never need the scaffold.
-    pub fn ensure_mo_definition(&mut self) -> Result<Option<String>, Error> {
+    /// The after-mutation hook: run the format's fixups for the mutation
+    /// that touched the cell at `index` and return their disclosures.
+    /// marimo makes sure the file defines `mo` when the mutation introduced
+    /// a markdown cell (the same scaffold marimo's own converter adds) and
+    /// reports the scaffold cell it inserted; Jupyter has no fixups.
+    /// Deliberately an inherent method on the enum for the same reasons as
+    /// [`Self::set_metadata`].
+    pub fn finalize_mutation(&mut self, index: usize) -> Result<Vec<String>, Error> {
         match self {
-            Self::Jupyter(_) => Ok(None),
-            Self::Marimo(notebook) => notebook.ensure_mo_definition(),
-        }
-    }
-
-    /// After a marimo app-cell body edit, refresh the edited cells' `return`
-    /// and signature to what marimo's serializer would write, so the file
-    /// never carries a stale-return/stale-signature finding. `before` is the
-    /// edited cell's source before the edit (`None` for an insert); the
-    /// recompute is skipped when the edit left the cell's defs/refs unchanged.
-    /// A no-op for Jupyter notebooks.
-    pub fn canonicalize_after_edit(&mut self, index: usize, before: Option<&str>) {
-        match self {
-            Self::Jupyter(_) => {}
-            Self::Marimo(notebook) => notebook.canonicalize_after_edit(index, before),
+            Self::Jupyter(_) => Ok(Vec::new()),
+            Self::Marimo(notebook) => notebook.finalize_mutation(index),
         }
     }
 }

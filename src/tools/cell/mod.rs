@@ -66,9 +66,7 @@ impl Tpmcp {
                     // Render the diff before the mutation: `source` borrows
                     // the notebook, and the write needs it mutably.
                     let diff = render::unified_diff(&source, &updated);
-                    let before = source.into_owned();
                     notebook.set_source(index, &updated)?;
-                    notebook.canonicalize_after_edit(index, Some(&before));
                     Ok((index, diff))
                 })?;
             Ok(mutation_result(
@@ -116,7 +114,6 @@ impl Tpmcp {
             let ((index, cell_type, source), new_revision) =
                 with_notebook(&args.path, &args.revision, |notebook| {
                     let index = resolve_index(notebook.cells(), &args.cell)?;
-                    let before = notebook.cells()[index].source_text().into_owned();
                     let updated = match (args.start_line, args.end_line) {
                         // incoming is owned and no later step needs it here:
                         // move it into the whole-cell replacement.
@@ -140,7 +137,6 @@ impl Tpmcp {
                         }
                     };
                     notebook.set_source(index, &updated)?;
-                    notebook.canonicalize_after_edit(index, Some(&before));
                     let cell_type = notebook.cells()[index].cell_type.clone();
                     Ok((index, cell_type, updated))
                 })?;
@@ -244,10 +240,10 @@ impl Tpmcp {
                     let mut warning = None;
                     for (cell_type, source) in &batch {
                         notebook.insert(index, cell_type, source)?;
-                        if cell_type == "markdown" {
-                            warning = notebook.ensure_mo_definition()?;
+                        let notices = notebook.finalize_mutation(index)?;
+                        if !notices.is_empty() {
+                            warning = Some(notices.join("\n\n"));
                         }
-                        notebook.canonicalize_after_edit(index, None);
                         inserted.push(json!({"index": index, "cell_type": cell_type}));
                         index += 1;
                     }
@@ -457,8 +453,9 @@ impl Tpmcp {
                         if let Some(new_type) = &new_type {
                             let previous = notebook.cells()[index].cell_type.clone();
                             notebook.set_type(index, new_type)?;
-                            if new_type == "markdown" {
-                                warning = notebook.ensure_mo_definition()?;
+                            let notices = notebook.finalize_mutation(index)?;
+                            if !notices.is_empty() {
+                                warning = Some(notices.join("\n\n"));
                             }
                             entry["cell_type"] = json!(new_type);
                             entry["previous_type"] = json!(previous);

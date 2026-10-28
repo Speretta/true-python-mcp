@@ -342,13 +342,13 @@ impl Notebook for MarimoNotebook {
                 },
             ));
         }
+        let before = self.cells[index].source_text().into_owned();
         if self.metas[index].md.is_none() {
             // Python bodies remember which lines lacked the fixed indent; the
             // memory must follow the edit. Markdown sources are re-wrapped
             // wholesale and need none.
-            let old_source = self.cells[index].source_text();
             let memory = indent::remap_indent_memory(
-                &old_source,
+                &before,
                 self.metas[index].indent_memory.as_deref(),
                 text,
             );
@@ -356,6 +356,10 @@ impl Notebook for MarimoNotebook {
         }
         self.cells[index].set_source_text(text);
         self.metas[index].edited = true;
+        // The edit refreshes the return and signature the way marimo's
+        // serializer would write them (see `create::canonicalize_after_edit`),
+        // so the file never carries a stale-return or stale-signature finding.
+        self.canonicalize_after_edit(index, Some(&before));
         Ok(())
     }
 
@@ -372,6 +376,9 @@ impl Notebook for MarimoNotebook {
             new_app_cell(source)
         };
         self.insert_cell(index, cell, meta);
+        // A fresh cell carries marimo's canonical return and signature (see
+        // `create::canonicalize_after_edit`), like every built notebook.
+        self.canonicalize_after_edit(index, None);
         Ok(())
     }
 
