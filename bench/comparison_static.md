@@ -1,6 +1,6 @@
 # How tpmcp compares to other Python notebook, analysis, and execution MCP servers
 
-This document compares tpmcp with seven Python MCP servers. It covers the five categories that touch Python code and notebooks:
+This document compares tpmcp with seven Python MCP servers and one notebook CLI. It covers the five categories that touch Python code and notebooks:
 
 - **File-based notebook editing**: [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp).
 - **Live Jupyter pairing**: [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) and [block/mcp-jupyter](https://github.com/block/mcp-jupyter).
@@ -8,7 +8,7 @@ This document compares tpmcp with seven Python MCP servers. It covers the five c
 - **Code analysis**: [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer).
 - **Code execution**: [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python), which is retired and archived upstream but measured and labeled as such, and [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter).
 
-For the docs capability (`py_docs`/`py_module_members`) it also surveys [context7](https://context7.com), a hosted documentation-retrieval service. context7 is a different category: remote doc-snippet search, not a notebook server.
+For the docs capability (`py_docs`/`py_module_members`) it also surveys [context7](https://context7.com), a hosted documentation-retrieval service. context7 is a different category: remote doc-snippet search, not a notebook server. It also measures the shell alternative, [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) (one `nb` binary, no MCP server), because an agent with a shell reaches for it instead of us.
 
 We measured what no vendor publishes: memory use, process count, time to ready, disk footprint, and what happens when the file changes while the AI works. Everything ran on the same machine, with the same notebook and the same operations. We checked every project's README, docs site, and issue tracker and found no published memory or startup numbers for any of these stacks (searched 2026-10-15), so we measure them ourselves and show the full method.
 
@@ -17,14 +17,15 @@ The rules this document holds itself to: every version is pinned with `==`; ever
 ## The short version
 
 - The field splits into five categories: file-based notebook editors, live-Jupyter pairing servers, an editor-embedded server, code analyzers, and code executors. Each answers a different need; the headline table below labels every stack with its category, and steps a category cannot serve are marked skipped with reasons, never faked.
-- tpmcp is one static binary with no runtime to install. The other seven are Python stacks; datalayer and block also need a running JupyterLab server with a kernel next to the MCP process, and mcp-run-python also runs Deno hosting a Pyodide sandbox.
+- tpmcp is one static binary with no runtime to install. The seven MCP servers are Python stacks; datalayer and block also need a running JupyterLab server with a kernel next to the MCP process, and mcp-run-python also runs Deno hosting a Pyodide sandbox.
 - Conflict test: the file is rewritten on disk between the AI's read and its write. tpmcp refuses the stale edit with a revision conflict. block/mcp-jupyter also refuses it, with a change-detection guard its README does not advertise; credit where it is due.
-- cursor-notebook-mcp applies the stale edit over the external change: in our runs it was the only stack that lost the external edit. datalayer returns success while the file on disk keeps the external edit; its in-memory model and the disk silently diverge, a distinct failure mode.
+- cursor-notebook-mcp applies the stale edit over the external change: among the MCP servers it was the only one that lost the external edit. datalayer returns success while the file on disk keeps the external edit; its in-memory model and the disk silently diverge, a distinct failure mode.
 - tpmcp edits are byte-exact. Change one line and the git diff shows one line; outputs, execution counts, and metadata stay untouched.
 - ruff is compiled into the tpmcp binary and lints any Python file by path. mcp-server-analyzer offers ruff too, as a pip-bundled subprocess that takes code strings and never touches your files. That architecture contrast is why this benchmark includes it. None of the other stacks bundles a file linter (marimo's editor bundles Ruff internally, but that is an editor feature, not an MCP tool for your files).
 - tpmcp also resolves Python symbols and module members locally: `py_docs` (`json.dumps` → signature, parameters, docstring) and `py_module_members` (`json` → the module surface), with the compiled-in ty and no interpreter. context7 does something different and complementary: a hosted `resolve-library-id` + `query-docs` that return doc snippets by query over the network. We measure tpmcp's lookups cold vs warm and label context7's as remote.
 - tpmcp handles Jupyter `.ipynb` and marimo `.py` offline, as plain files. marimo's own MCP server is experimental, HTTP-only, and read-only: it cannot edit notebooks over MCP at all.
 - tpmcp never runs code, by design: no kernel, no background process, nothing to fight your editor. datalayer and block drive live Jupyter kernels; mcp-run-python executes inside Pyodide (WASM) in Deno; yzfly's interpreter runs submitted code as a host subprocess with no sandbox.
+- nb-cli (`nb` in a shell) is a single static binary too, the non-MCP alternative: no resident process and real code execution, but no conflict guard, no marimo support, and no lint or docs tools (see [The command-line category: nb-cli](#the-command-line-category-nb-cli)).
 - Three projects (cursor-notebook-mcp, block/mcp-jupyter, mcp-python-interpreter) needed manual dependency pins before they would even start with today's resolver, and the official mcp-server-analyzer image errors on every analysis tool until it gets a writable workdir. Every such finding is dated, quoted, and reproducible via `bench/`; see [Startup findings](#startup-findings-all-disclosed-all-reproducible).
 
 ## Measured results
@@ -54,7 +55,7 @@ This section describes exactly what the harness in [bench/](bench) does. Nothing
 
 A sixth category (**remote documentation retrieval**) is surveyed separately for the docs capability: [context7](https://context7.com) is a hosted MCP server that returns doc snippets for a library by query, not a notebook server, so it is compared only on the docs lookups (see [Feature comparison](#feature-comparison) and the docs comparison table in the Context7 block under Measured results).
 
-A seventh is not an MCP server at all and is measured anyway: **command-line tooling**. [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) (jupyter-ai-contrib, Rust, BSD-3) edits and executes notebooks through one `nb` binary invoked from a shell, which is how an agent with a shell tool works anyway. It is measured as a stack because it competes for the same job, and compared on the same operation profile, both conflict races, and per-call peak memory (a CLI has no resident process, so the idle columns say exactly that). See [The CLI alternative: nb-cli](#the-cli-alternative-nb-cli).
+A seventh is not an MCP server at all and is measured anyway: **command-line tooling**. [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) (jupyter-ai-contrib, Rust, BSD-3) edits and executes notebooks through one `nb` binary invoked from a shell. It is measured on the same operation profile and both conflict races, plus per-call peak memory (a CLI has no resident process, so the idle columns say exactly that). See [The command-line category: nb-cli](#the-command-line-category-nb-cli).
 
 ### One minimal Docker image per stack
 
@@ -64,6 +65,7 @@ A seventh is not an MCP server at all and is measured anyway: **command-line too
 - **analyzer**: not built by us. The official published image `ghcr.io/anselmoo/mcp-server-analyzer:latest` (`python:3.13-slim` base, non-root user) is pulled, retagged `bench-analyzer:pin`, and the pulled digest (`image_id` in `meta.json`) is the real pin, because the upstream tag floats.
 - **runpython** ([bench/runpython/Dockerfile](bench/runpython/Dockerfile)): `python:3.13-slim-bookworm` plus `mcp-run-python==0.0.22`; Deno is installed at build time (upstream pins no version, so the installed one is recorded in the image at `/deno-version.txt`), and the build pre-warms the Deno/Pyodide cache so measured runs never pay first-start download costs.
 - **yzfly** ([bench/yzfly/Dockerfile](bench/yzfly/Dockerfile)): `python:3.12-slim` plus `mcp-python-interpreter==1.2.3` and the manual `mcp==1.30.0` pin it needs to start (see Startup findings).
+- **nb-cli** ([bench/nbcli/Dockerfile](bench/nbcli/Dockerfile)): `python:3.12-slim` plus the project's own published static release binary, pinned by version and sha256 against the release's SHA256SUMS, and `ipykernel` (the kernel `nb execute` spawns). The bench starts `sh` in it instead of the image's `nb` entrypoint; there is no server process.
 - Entrypoints follow each project's own README: datalayer and block start `jupyter lab`, poll its `/api/status` endpoint until it answers, then `exec` the MCP server on stdio. marimo runs `marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0`. cursor runs `cursor-notebook-mcp --allow-root /work`. yzfly runs `mcp-python-interpreter --dir /work` (its jail flag). runpython runs `mcp-run-python stdio`. tpmcp's entrypoint is the binary itself. The analyzer image's own entrypoint is the server; the harness adds `-w /tmp -e RUFF_CACHE_DIR=/tmp/ruff-cache` to the `docker run` (see Startup findings).
 
 ### Identical fixture per format
@@ -75,7 +77,7 @@ A seventh is not an MCP server at all and is measured anyway: **command-line too
 
 ### The fixed operation profile
 
-The driver ([bench/driver.py](bench/driver.py)) is a minimal headless MCP client: plain JSON-RPC (protocol version 2024-11-05) over stdio, or streamable HTTP for marimo. No browser, no IDE, nothing else in the tree. It performs the `initialize` + `tools/list` handshake, then runs the same semantic profile on every stack, in this order: **read → check → edit cell 4 → insert a new cell at index 5 → execute that cell → delete the spare cell at index 20 → re-read → lint → analyze → docs (`py_docs` cold, `py_docs` warm, `py_module_members`)**, then the two conflict scenarios below. The inserted cell is a self-contained bubble sort: a well-known algorithm with a fixed source, byte-identical for every stack, needing no prior notebook state.
+The driver ([bench/driver.py](bench/driver.py)) is a minimal headless MCP client: plain JSON-RPC (protocol version 2024-11-05) over stdio, or streamable HTTP for marimo. For nb-cli it speaks shell instead: one persistent `sh` inside the container runs one `nb` command per operation. No browser, no IDE, nothing else in the tree. It performs the `initialize` + `tools/list` handshake, then runs the same semantic profile on every stack, in this order: **read → check → edit cell 4 → insert a new cell at index 5 → execute that cell → delete the spare cell at index 20 → re-read → lint → analyze → docs (`py_docs` cold, `py_docs` warm, `py_module_members`)**, then the two conflict scenarios below. The inserted cell is a self-contained bubble sort: a well-known algorithm with a fixed source, byte-identical for every stack, needing no prior notebook state.
 
 How each category serves these semantics (the mapping is disclosed, not hidden):
 
@@ -95,6 +97,7 @@ Per-stack profiles in the driver:
 - **marimo**: `get_active_notebooks`, then `get_lightweight_cell_map`. Headless sessions belong to connected editor clients, so `get_active_notebooks` reports zero notebooks and the session-scoped tools cannot run. We measure the stack exactly as it runs headless and mark those steps skipped rather than faking a session.
 - **analyzer**: `ruff-check` and `analyze-code` only. It is not a notebook server.
 - **runpython** and **yzfly**: `run_python_code` only, execution-only profiles.
+- **nb-cli**: `nb read`, `nb cell update`, `nb cell add`, `nb cell delete`, `nb execute`, one `nb` command each through the shell adapter above; check and lint are honest skips (nb-cli has neither).
 
 Tool schemas differ per project and per version, so each step carries argument variants: the driver tries them in order and records **every request and every response verbatim** in `ops.json`, including failed variants and every skipped step with its reason. The ops dumps quoted in this document come from those files.
 
@@ -116,7 +119,7 @@ What the pilot runs showed (the render-generated table under Measured results ca
   Error executing tool modify_notebook_cells: Notebook has changed since you last saw it (66c66dad856263896ca803ea52a6e5e3e6d948421741cd6493636bdf52c8cdbc --> 8858c30661f9cc05574bef6616290b1213dc9ae783fa1bf81ea12139ad9499e1). Use your view_source tool to update your knowledge of the notebook contents. If you are trying to edit/delete a specific cell, you can likely start by viewing just that cell rather than the whole notebook.
   ```
 
-- **cursor-notebook-mcp** applied the stale edit **over** the external change; the file afterwards held `greeting = "hello bench (stale)"` and the external edit was gone. The tool answered `Successfully edited cell 4 in /work/bench.ipynb`. It was the only stack that lost data in our runs.
+- **cursor-notebook-mcp** applied the stale edit **over** the external change; the file afterwards held `greeting = "hello bench (stale)"` and the external edit was gone. The tool answered `Successfully edited cell 4 in /work/bench.ipynb`. It was the only MCP server that lost data in our runs.
 - **datalayer** returned **success** while the file on disk kept `greeting = "hello bench (external edit)"`. The success message was `Cell 4 edited successfully!` plus a diff showing `-greeting = "hello bench (edited)"` / `+greeting = "hello bench (stale)"`. The server applied the edit to its own RTC/in-memory model. So the AI's belief and the disk diverge: silent divergence instead of data loss.
 
   The divergence runs both ways. At the start of the 10 s scenario, after the harness had restored the file on disk, datalayer's read still returned its model's value `greeting = "hello bench (stale)"`.
@@ -180,7 +183,7 @@ The injected section of this document is built only from these files. If a numbe
 
 ### Pinned versions
 
-Resolved from PyPI on 2026-10-15; no `@latest` anywhere, except the analyzer image, whose pin is its recorded digest:
+Resolved from PyPI on 2026-10-15; no `@latest` anywhere, except the analyzer image, whose pin is its recorded digest, and nb-cli, pinned by version and sha256 from its GitHub release:
 
 - shared JupyterLab base: `python:3.12-slim`, `jupyterlab==4.6.4`, `jupyter-collaboration==5.0.4`, `ipykernel==7.4.0`
 - datalayer: `jupyter-mcp-server==2.2.4`, `jupyter-mcp-tools==0.1.8`
@@ -190,12 +193,13 @@ Resolved from PyPI on 2026-10-15; no `@latest` anywhere, except the analyzer ima
 - analyzer: the official image `ghcr.io/anselmoo/mcp-server-analyzer:latest`. The tag floats, so the pulled digest recorded in `meta.json` is the pin (0.4.1 is the current release on [PyPI](https://pypi.org/project/mcp-server-analyzer/json) as of 2026-10-15)
 - runpython: `mcp-run-python==0.0.22` (final release, 2025-12-11); Deno installed at build time, version recorded in the image at `/deno-version.txt`
 - yzfly: `mcp-python-interpreter==1.2.3`, plus the manual `mcp==1.30.0` pin it needs to start (see Startup findings)
+- nb-cli: `nb` release binary v0.0.10 (2026-07-31), pinned by version and sha256 in [bench/nbcli/Dockerfile](bench/nbcli/Dockerfile); `ipykernel==7.4.0` for `nb execute`
 - tpmcp: the static musl binary from the release assets (or built in CI from the tagged source)
 
 ### Fairness disclosures
 
 - **Loopback binding.** The datalayer and block READMEs start JupyterLab with `--ip 0.0.0.0`. We bind to `127.0.0.1` inside the container for safety. This is the only deviation from their documented launch, and it cannot affect memory. marimo needs `--host 0.0.0.0` *inside* the container for the Docker port mapping to reach it; the host side of that mapping is bound to `127.0.0.1`, so it stays loopback-only.
-- **Same machine, same run.** All eight stacks are measured on one machine within a single benchmark run; `meta.json` records the Docker version, host kernel, host load, and UTC timestamp per run, and the environment block under the table comes from those files.
+- **Same machine, same run.** All nine stacks are measured on one machine within a single benchmark run; `meta.json` records the Docker version, host kernel, host load, and UTC timestamp per run, and the environment block under the table comes from those files.
 - **Warm caches.** Every wheel is installed at image build time; nothing is downloaded or resolved during a measured run. Two disclosed exceptions, both visible in the captured server stderr: runpython's Deno dependency-install step re-runs at every container start (from the build-time cache), and analyzer's FastMCP queries pypi.org for a version check at startup.
 - **Fresh kernels, no user imports.** The fixture imports only `json` and `math`; the inserted cell is a dependency-free bubble sort. An idle-kernel number that included pandas would measure the user's data stack, not the server.
 - **Each format gets its own fixture.** datalayer, block, and cursor receive `bench.ipynb`; marimo receives `bench.py` in its native format. marimo's read-only MCP surface means its profile cannot include an edit: we benchmark the read path and say so instead of silently routing writes through marimo-pair (which is not an MCP server). analyzer receives the marimo fixture's source as a code string, the same content tpmcp lints by path; runpython and yzfly receive the same bubble-sort source as a snippet.
@@ -219,7 +223,7 @@ The table collects the structural facts: category, who maintains each project, u
 
 Prerequisites and process shapes are from the projects' READMEs and docs as quoted in the paragraphs below, and from the process lists our runs captured. Adoption figures are GitHub stars and PyPI downloads as of 2026-10-15 (re-checked 2026-10-16 for the three new stacks, where noted).
 
-**tpmcp** exposes 13 notebook tools (plus 3 plain-Python file tools with `--file-tools`) answering in markdown or JSON. Every read returns a revision code; every write must send it back, and a stale write is refused with the new revision. Edits return the diff of what changed, and ruff lint/format is compiled in. The full `cell_edit` response from our run1 audit (musl release build, 2026-10-15):
+**tpmcp** exposes 15 tools (plus 6 file tools with `--file-tools`) answering in markdown or JSON. Every read returns a revision code; every write must send it back, and a stale write is refused with the new revision. Edits return the diff of what changed, and ruff lint/format is compiled in. The full `cell_edit` response from our run1 audit (musl release build, 2026-10-15):
 
 ````text
 edited cell 4
@@ -337,7 +341,7 @@ The snippet prints nothing, and the response carries no return-value section in 
 
 ## Startup findings (all disclosed, all reproducible)
 
-Bringing the seven comparison stacks up inside pinned Docker images surfaced warts in five of them; marimo 0.25.1 installed and started exactly as its docs describe. We report the findings factually, with dates and quotes; they are maintenance signals of unpinned dependency ranges and unpublished runtime assumptions, not verdicts on the projects. Everything below is reproducible by building (or pulling) the images in `bench/`.
+Bringing the seven MCP comparison stacks up inside pinned Docker images surfaced warts in five of them; marimo 0.25.1 installed and started exactly as its docs describe. We report the findings factually, with dates and quotes; they are maintenance signals of unpinned dependency ranges and unpublished runtime assumptions, not verdicts on the projects. Everything below is reproducible by building (or pulling) the images in `bench/`.
 
 **cursor-notebook-mcp 0.3.1 does not start as published on PyPI.** Its sdist imports `pydantic-settings` at startup without declaring it, and dies with `"Error importing package components"`. On top of that, its `fastmcp<2.11` pin breaks on current pydantic with `"cannot specify both default and default_factory"`. Two manual pins were needed before the server would start: `pydantic==2.11.10` and `pydantic-settings==2.16.0` (both quoted from [bench/cursor/Dockerfile](bench/cursor/Dockerfile), resolved 2026-10-15). Also: PyPI says 0.3.1, its README says 0.3.2.
 
@@ -386,36 +390,34 @@ Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (th
 | [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | never writes files: nothing to guard | never | yes: ruff/ty/vulture bundled as pip deps; Biome tools need external Node.js 22+ | no | no: no notebook awareness | no | no: takes code strings, not files | no: never touches user files | stdio | MIT | 2026-08-30 (checked 2026-10-16) |
 | [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | n/a: execution-only, writes no files | yes: Pyodide (CPython→WASM) inside Deno | no | no | no | no | no | no | stdio (streamable-HTTP modes exist) | MIT | archived: final release 0.0.22, 2025-12-11 |
 | [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | none advertised: file tools exist, no notebook awareness | yes: host subprocess in the selected environment, no sandbox | no | no | no (generic `read_file`/`write_file`, no notebook structure) | no | runs `.py` files; reads/writes them as generic files | generic file writes only | stdio | **NOASSERTION** (GitHub license field) | 2026-07-02 (checked 2026-10-16) |
-| [nb-cli (jupyter-ai-contrib)](https://github.com/jupyter-ai-contrib/nb-cli) | notebook CLI (no resident process) | none: the stale write was applied over the external edit in every run (6/6, both conflict variants, observed by us) | yes: local kernels over ZeroMQ, plus server and kernel-gateway execution | no | no | yes: edits `.ipynb` on disk | no | no | yes: direct file operations, works with no server | shell: one `nb` invocation per operation | BSD-3-Clause | active: crate 0.0.10, 2026-07-31 |
+| [nb-cli (jupyter-ai-contrib)](https://github.com/jupyter-ai-contrib/nb-cli) | notebook CLI (no resident process) | none: the stale write applied over the external edit in every race (observed) | yes: local kernels over ZeroMQ, plus server and kernel-gateway execution | no | no | yes: edits `.ipynb` on disk | no | no | yes: direct file operations, works with no server | shell: one `nb` invocation per operation | BSD-3-Clause | active: crate 0.0.10, 2026-07-31 |
 | [context7](https://context7.com) | remote docs retrieval (HTTP) | n/a: read-only doc search | no | no | yes: `resolve-library-id` + `query-docs`, doc-snippet search over its cloud index, cross-language; NOT local symbol resolution | no | no | no | no: remote API; an API key is recommended for higher rate limits (checked 2026-10-26) | streamable HTTP (`https://mcp.context7.com/mcp`; stdio via npx `@upstash/context7-mcp`) | MIT | active: 63,439★, pushed 2026-10-21 |
 
-## The CLI alternative: nb-cli
+## The command-line category: nb-cli
 
-[nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) is the Jupyter ecosystem's own answer to "agents work with notebooks as artifacts": one Rust binary (`nb`) invoked from a shell, no MCP server and no resident process. Its [skills/notebook-cli](https://github.com/jupyter-ai-contrib/nb-cli) SKILL.md teaches agents to prefer `nb` over built-in file tools. It is measured here as a stack, on the same operation profile and both conflict races, because an agent with a shell reaches for it instead of us.
+[nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) is the Jupyter ecosystem's own answer to agents working with notebooks as artifacts. Its [skill](https://github.com/jupyter-ai-contrib/nb-cli/tree/main/skills/notebook-cli) prefers `nb` over raw notebook JSON; what the skill teaches and what measurement confirms is reviewed below.
 
-The measured contrast (3 runs, normal mode; the races and the counts are ours):
+The measured contrast (the races and the counts are ours). The last row ties: batching the cell inserts lowers the call count on either side, and the per-step counts sit in the `workflow` entry of every run's `ops.json`:
 
 | | tpmcp (MCP) | nb-cli (shell) |
 |---|:---:|:---:|
-| Resident process between calls | 1 (1.5 MiB idle) | **none** |
-| Stale write refused (conflict race) | **yes** | no: applied over the external edit, 6/6 |
+| Resident process between calls | 1 (see the headline table) | **none** |
+| Stale write refused (conflict race) | **yes** | no (see the conflict table); the overwrite is per addressed cell, so concurrent edits to other cells survive |
 | Executes code | no (by design) | **yes** (kernel, server or gateway) |
 | marimo `.py` | **yes** | no |
 | Lint, format, type check, symbol docs | **yes** (ruff + ty in the binary) | no |
 | Cell references that survive reordering | **yes** (id, name, index) | yes (id, index) |
-| Failed cells lookup / output search | **yes** (`notebook_search`) | yes (`nb search --with-errors`, `--scope output`) |
+| Failed cells lookup / output search | **yes** (`notebook_search`) | **yes** (`nb search --with-errors`, `--scope output`) |
 | Batch cell operations | **yes** | **yes** |
 | Live collaboration in JupyterLab | no | **yes** (Y.js when connected) |
-| Per-call peak RSS | see the peak table | 6-9 MiB per call; 64 MiB tree peak with its kernel |
-| Calls for "add two cells, run, read back" | 4 tool calls (3 batched) | 3-4 shell invocations |
+| Per-call peak RSS | see the headline table | see the peak table |
+| Calls for "add two cells, run, read back" | on par (execute is a recorded skip: tpmcp never executes code) | on par (one `nb` command per step) |
 
-Two rows moved while this comparison was being written: finding failed cells and searching outputs were nb-cli-only advantages until `notebook_search` closed them. The rows stay honest about the rest: nb-cli's "no resident process" is a real advantage for a shell-only workflow, its execution ability is a real capability tpmcp refuses by design, and its conflict behavior is the one gap an orchestrator cannot live with. Our race: the agent reads a cell, the user saves over it in an editor, the agent's write lands. tpmcp refuses the write; nb-cli applies it and the user's edit is gone (nuance: the overwrite is per addressed cell, so concurrent edits to other cells survive).
+Two rows moved while this comparison was being written: finding failed cells and searching outputs were nb-cli-only advantages until `notebook_search` closed them. The rows stay honest about the rest: its shell-only design and its execution ability are real advantages, and its conflict behavior is the one gap that blocks unattended use.
 
-### What its SKILL.md teaches
+### Its skill, against measurement
 
-The skill is worth reading next to any agent-facing contract (ours included). It teaches: use `nb` for every notebook operation instead of raw JSON; inspect before editing (`nb read --no-output`); a "Safe Edit Pattern" of read, identify, apply the smallest `nb cell` command, re-read to verify placement, re-execute what changed; prefer stable cell IDs for durable edits; batch authoring in groups of 3-5 cells ("Do not add the entire notebook in one call"); output hygiene (`--no-output`, externalization, `nb output clear`); environment awareness (`--uv`/`--pixi`, `nb status --python`); and a trust boundary and secret hygiene that tpmcp's own instructions do not have ("`nb` is an external executable ... verify the command you will run"; "Do not write secret tokens into commands, prompts, logs, or examples").
-
-What holds up against measurement: the batching advice (our probe confirms 3 calls instead of 4), inspect-then-edit, and preferring stable ids (tpmcp's cell family now addresses by id and marimo name for the same reason). What is product positioning rather than teaching: "use `nb` for every .ipynb operation" is the skill's job to say. The one genuine gap is on our side: the trust-boundary and secret guidance is agent-shaped material tpmcp's instructions contract does not carry, and should.
+The skill ([skills/notebook-cli](https://github.com/jupyter-ai-contrib/nb-cli/tree/main/skills/notebook-cli), checked 2026-10-28) teaches inspect-then-edit, a "Safe Edit Pattern" of minimal edits re-verified by re-reading, stable cell IDs, batched authoring in groups of 3-5 cells ("Do not add the entire notebook in one call"), and output hygiene. What measurement confirms: the batching advice (the workflow probe), inspect-then-edit, and stable ids (tpmcp's cell family addresses by id and marimo name for the same reason). What is product positioning: "Use `nb` for every `.ipynb` operation". The one genuine gap is on our side: its trust-boundary and secret guidance ("`nb` is an external executable ... verify the command you will run"; "Do not write secret tokens into commands, prompts, logs, or examples") is agent-shaped material tpmcp's instructions contract does not carry, and should.
 
 ## Projects we looked at and left out
 
@@ -472,7 +474,7 @@ bash bench/measure.sh --fast      # smoke run: short quiesce windows, not publis
 bash bench/measure.sh --runs 3    # full run: normal-mode windows, 3 repetitions, medians
 ```
 
-Useful flags: `--stack tpmcp` measures a single stack (repeatable), and `--no-build` reuses the images from a previous run instead of rebuilding them. Without `--stack`, all eight stacks run in the same order, back to back.
+Useful flags: `--stack tpmcp` measures a single stack (repeatable), and `--no-build` reuses the images from a previous run instead of rebuilding them. Without `--stack`, all nine stacks run in the same order, back to back.
 
 The remote context7 measurement is optional and is skipped automatically when the secret is absent: set `CONTEXT7_TCP_MCP_BENCH_KEY` (a context7 API key) in the environment and `measure.sh` will additionally call `resolve-library-id` + `query-docs` over `https://mcp.context7.com/mcp` and write the latencies to `bench/results/context7/`. In CI that key comes from the `CONTEXT7_TCP_MCP_BENCH_KEY` repository secret (see [.github/workflows/bench.yml](.github/workflows/bench.yml)). The key is never hardcoded or committed.
 
