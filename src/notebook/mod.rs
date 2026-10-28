@@ -14,7 +14,7 @@ mod marimo;
 
 pub use any::AnyNotebook;
 pub use jupyter::JupyterNotebook;
-pub(crate) use jupyter::{MimePart, OutputView};
+pub(crate) use jupyter::{CellMap, MimePart, OutputView};
 pub use marimo::parse::is_marimo;
 pub use marimo::{MARIMO_VERSION, MarimoNotebook};
 
@@ -352,6 +352,36 @@ pub fn format_from_extension(path: &std::path::Path) -> Option<Format> {
         Some("ipynb") => Some(Format::Jupyter),
         Some("py") => Some(Format::Marimo),
         _ => None,
+    }
+}
+
+/// The engine view of a notebook file: one Python source for whole-file
+/// passes (type checkers, linters) plus the cell map that makes engine
+/// positions cell-relative. A format whose file is already plain Python
+/// (marimo, a plain file) is served verbatim with no map, so its
+/// diagnostics stay whole-file.
+pub struct EngineSource {
+    pub source: String,
+    /// Positions map back to cells; `None` when the file is plain Python.
+    pub cell_map: Option<CellMap>,
+}
+
+/// Build the [`EngineSource`] of `content`, the file at `path` already
+/// read by the caller. Engines stay glue: the format modules decide how a
+/// notebook becomes one Python source (see `jupyter::engine`).
+pub fn engine_view(path: &std::path::Path, content: &str) -> Result<EngineSource, String> {
+    match format_from_extension(path) {
+        Some(Format::Jupyter) => {
+            let (source, cell_map) = jupyter::concatenated_source(content)?;
+            Ok(EngineSource {
+                source,
+                cell_map: Some(cell_map),
+            })
+        }
+        _ => Ok(EngineSource {
+            source: content.to_string(),
+            cell_map: None,
+        }),
     }
 }
 

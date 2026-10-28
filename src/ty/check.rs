@@ -3,12 +3,12 @@ use std::path::Path;
 use ruff_db::diagnostic::{Diagnostic as TyDiagnostic, Severity, UnifiedFile};
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::source::{SourceText, source_text};
-use ruff_notebook::{Notebook, NotebookIndex};
-use ruff_source_file::{LineColumn, LineIndex, OneIndexed};
+use ruff_source_file::LineIndex;
 use ty_python_semantic::Db as SemanticDb;
 
 use crate::error::Error;
 use crate::fs;
+use crate::notebook::CellMap;
 use crate::ruff::{Diagnostic, LineCol};
 
 use super::cache::{CacheKey, with_db};
@@ -58,23 +58,21 @@ pub(super) fn check_snapshot_inner(
     )
 }
 
-/// Type-checks a `.ipynb` notebook from the caller's snapshot: parse it into
-/// ruff's `Notebook` (concatenated cell source + offset index), serve that
-/// source to ty as one virtual `.py` file, then map every concatenated-source
-/// position back to a `cell` index and a cell-relative row. No temp file, no
-/// write into the caller's tree, no second read.
+/// Type-checks a notebook from the caller's snapshot: the format's engine
+/// view (concatenated code-cell source plus cell map), served to ty as one
+/// virtual `.py` file, then every concatenated-source position is mapped
+/// back to a `cell` index and a cell-relative row. No temp file, no write
+/// into the caller's tree, no second read.
 fn check_notebook(
     path: &Path,
     snapshot: &fs::Snapshot,
     python: Option<&Path>,
 ) -> Result<Vec<Diagnostic>, Error> {
-    let notebook = Notebook::from_source_code(&snapshot.content)
-        .map_err(|error| Error::parse(path, format!("{error}")))?;
-    let source = notebook.source_code().to_string();
-    if source.len() > MAX_SOURCE_SIZE {
-        return Err(oversized(path, source.len()));
+    let engine = crate::notebook::engine_view(path, &snapshot.content)
+        .map_err(|message| Error::parse(path, message))?;
+    if engine.source.len() > MAX_SOURCE_SIZE {
+        return Err(oversized(path, engine.source.len()));
     }
-    let index = notebook.index().clone();
 
     let src_root = path.parent().unwrap_or_else(|| Path::new("."));
     let src_root_sys = to_system_path(src_root).ok_or_else(|| {
@@ -83,14 +81,17 @@ fn check_notebook(
 
     with_db(
         CacheKey::for_file(path, python),
-        source.len(),
+        engine.source.len(),
         || TyDb::new(src_root_sys.as_path(), python),
         |db| {
-            let file = db.serve_virtual(NOTEBOOK_VIRTUAL_PATH, &source);
+            let file = db.serve_virtual(NOTEBOOK_VIRTUAL_PATH, &engine.source);
             check_file(db, file).map(|diagnostics| {
                 diagnostics
                     .into_iter()
-                    .map(|diagnostic| map_to_cell(diagnostic, &index))
+                    .map(|diagnostic| match &engine.cell_map {
+                        Some(cell_map) => map_to_cell(diagnostic, cell_map),
+                        None => diagnostic,
+                    })
                     .collect()
             })
         },
@@ -129,28 +130,17 @@ fn oversized(path: &Path, size: usize) -> Error {
 /// Rewrites a diagnostic's concatenated-source positions to the notebook cell:
 /// sets the 0-based `cell` index and makes `location`/`end_location`
 /// cell-relative.
-fn map_to_cell(mut diagnostic: Diagnostic, index: &NotebookIndex) -> Diagnostic {
+fn map_to_cell(mut diagnostic: Diagnostic, cell_map: &CellMap) -> Diagnostic {
     if let Some(location) = diagnostic.location {
-        diagnostic.cell = index
-            .cell(OneIndexed::new(location.row).unwrap_or(OneIndexed::MIN))
-            .map(|cell| cell.get() - 1);
-        diagnostic.location = Some(translate_line_column(index, location));
+        diagnostic.cell = cell_map.cell_at(location.row);
+        let (row, column) = cell_map.translate(location.row, location.column);
+        diagnostic.location = Some(LineCol { row, column });
     }
     if let Some(end_location) = diagnostic.end_location {
-        diagnostic.end_location = Some(translate_line_column(index, end_location));
+        let (row, column) = cell_map.translate(end_location.row, end_location.column);
+        diagnostic.end_location = Some(LineCol { row, column });
     }
     diagnostic
-}
-
-fn translate_line_column(index: &NotebookIndex, location: LineCol) -> LineCol {
-    let translated = index.translate_line_column(&LineColumn {
-        line: OneIndexed::new(location.row).unwrap_or(OneIndexed::MIN),
-        column: OneIndexed::new(location.column).unwrap_or(OneIndexed::MIN),
-    });
-    LineCol {
-        row: translated.line.get(),
-        column: translated.column.get(),
-    }
 }
 
 /// Type-checks one interned file against an already-built database and returns

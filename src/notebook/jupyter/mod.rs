@@ -12,9 +12,11 @@
 //! nbformat does on every save.
 
 mod check;
+mod engine;
 mod outputs;
 mod serialize;
 
+pub(crate) use engine::{CellMap, concatenated_source};
 pub(crate) use outputs::{MimePart, OutputView};
 
 use std::collections::BTreeMap;
