@@ -12,6 +12,7 @@ mod check;
 mod create;
 mod cycles;
 mod indent;
+pub(super) mod lint;
 pub(super) mod markdown;
 pub(super) mod parse;
 mod scan;
@@ -19,12 +20,12 @@ pub(super) mod scope;
 mod summary;
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 
 use super::{Cell, Finding, Notebook, check_index, check_insert_index, check_move_index};
 use crate::error::Error;
 pub use create::MARIMO_VERSION;
 use create::{new_app_cell, strip_hide_code, to_markdown_header};
+pub(crate) use lint::{LintPolicy, Verdict};
 
 pub struct MarimoNotebook {
     cells: Vec<Cell>,
@@ -282,78 +283,6 @@ impl MarimoNotebook {
             .any(|(cell, _)| {
                 scope::analyze(&cell.source.text()).is_some_and(|info| info.defs.contains(name))
             })
-    }
-
-    /// Each lintable cell's `(0-based marimo index, Python body)` for ruff.
-    ///
-    /// Parsing already strips the fixed indent and the trailing `return`, so a
-    /// code app cell or a setup cell is just its dedented body; a markdown
-    /// cell contributes its `mo.md(...)` wrapper call (the only Python it
-    /// compiles to); a function/class block is linted verbatim (decorator and
-    /// signature are real Python, not scaffolding); broken/unparsable cells
-    /// have no valid body and are skipped. Indices stay 1:1 with the cell
-    /// tools so the caller can pair a skipped index with a placeholder.
-    pub(crate) fn lint_cells(&self) -> Vec<(usize, String)> {
-        let mut lintable = Vec::new();
-        for (index, (cell, meta)) in self.cells.iter().zip(&self.metas).enumerate() {
-            let body = match meta.kind {
-                Kind::Broken | Kind::Unparsable => continue,
-                Kind::AppCell => match &meta.md {
-                    Some(md) => markdown::wrap_call(&cell.source.text(), "", &md.tag),
-                    None => cell.source.text().into_owned(),
-                },
-                Kind::Setup => cell.source.text().into_owned(),
-                Kind::Function | Kind::Class => meta.block.clone(),
-            };
-            lintable.push((index, body));
-        }
-        lintable
-    }
-
-    /// The top-level names every analyzable cell defines (setup defs included).
-    /// Together with [`Self::runtime_builtin`], a name the marimo runtime binds
-    /// is not "undefined" just because the concatenated cell bodies do not
-    /// bind it — the graph half of the ruff F821 filter's provided set.
-    pub(crate) fn cell_definitions(&self) -> HashSet<String> {
-        let mut names = HashSet::new();
-        for (cell, meta) in self.cells.iter().zip(&self.metas) {
-            if meta.md.is_some() {
-                // A markdown cell's source is text, not Python.
-                continue;
-            }
-            if let Some(info) = scope::analyze(&cell.source.text()) {
-                names.extend(info.defs);
-            }
-        }
-        names
-    }
-
-    /// Whether the marimo runtime provides `name` as a builtin, the runtime
-    /// half of the ruff F821 filter's provided set (checked per name so the
-    /// builtin list is never materialized per call).
-    pub(crate) fn runtime_builtin(name: &str) -> bool {
-        check::is_marimo_builtin(name)
-    }
-
-    /// Whether the file header binds `name` outside any cell: `import marimo`
-    /// and `app = marimo.App(...)` — both required for the file to count as
-    /// marimo at all — plus `__generated_with`. The header half of the ruff
-    /// F821 filter's provided set: a cell body touching `app` (a
-    /// `@app.function` block's decorator, say) references a real binding.
-    pub(crate) fn header_binds(name: &str) -> bool {
-        matches!(name, "marimo" | "app" | "__generated_with")
-    }
-
-    /// The cell holding marimo's scaffold import (exactly [`create::MO_IMPORT`],
-    /// the shape [`Self::ensure_mo_definition`] injects): an unused `marimo`
-    /// import in *that* cell is scaffolding, not the user's. The first such
-    /// cell — where the auto-fix would place it. `None` when no cell carries
-    /// the shape; a user cell repeating the exact scaffold line in a notebook
-    /// with no scaffold is indistinguishable and counted as scaffolding.
-    pub(crate) fn scaffold_import_cell(&self) -> Option<usize> {
-        self.cells.iter().zip(&self.metas).position(|(cell, meta)| {
-            meta.md.is_none() && cell.source.text().trim() == create::MO_IMPORT
-        })
     }
 }
 
