@@ -178,7 +178,7 @@ fn write_cell_markdown(
     output_limit: Option<usize>,
 ) {
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
-    if let Some(kind) = kind_label(cell) {
+    if let Some(kind) = cell.block_label() {
         let _ = write!(out, " ({kind})");
     }
     if let Some(count) = cell.execution_count() {
@@ -205,7 +205,7 @@ fn write_cell_outline(out: &mut String, index: usize, cell: &Cell) {
     let line_count = logical_line_count(&source);
     let first = outline_first_line(&source);
     let _ = write!(out, "### [{index}] {}", cell.cell_type);
-    if let Some(kind) = kind_label(cell) {
+    if let Some(kind) = cell.block_label() {
         let _ = write!(out, " ({kind})");
     }
     let _ = writeln!(out, " · {line_count} lines · {first}");
@@ -222,12 +222,6 @@ fn outline_first_line(source: &str) -> &str {
         .map(|line| line.trim())
         .unwrap_or("");
     &first[..first.floor_char_boundary(OUTLINE_FIRST_LINE_BYTES)]
-}
-
-/// The marimo block label shown next to the cell type when the cell is not a
-/// plain app cell (`setup`, `function`, `class`, `unparsable`, `broken`).
-fn kind_label(cell: &Cell) -> Option<&str> {
-    cell.marimo_kind().filter(|kind| *kind != "cell")
 }
 
 /// Append the fenced source block of a cell; full detail numbers each line
@@ -316,7 +310,7 @@ fn outline_cell_json(index: usize, cell: &Cell) -> Value {
     json!({
         "index": index,
         "cell_type": cell.cell_type,
-        "kind": kind_label(cell),
+        "kind": cell.block_label(),
         "line_count": logical_line_count(&source),
         "first_line": outline_first_line(&source),
     })

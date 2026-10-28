@@ -111,6 +111,19 @@ impl Cell {
             .and_then(|marimo| marimo.get("name"))
             .and_then(Value::as_str)
     }
+
+    /// The cell's stable reference: the Jupyter id when present, else the
+    /// marimo cell name. Like either alone, it survives reordering.
+    pub fn stable_ref(&self) -> Option<&str> {
+        self.id().or_else(|| self.marimo_name())
+    }
+
+    /// The block label shown next to the cell type when the cell is not the
+    /// plain kind of its format (`None` for Jupyter cells and for a plain
+    /// marimo app cell).
+    pub fn block_label(&self) -> Option<&str> {
+        self.marimo_kind().filter(|kind| *kind != "cell")
+    }
 }
 
 /// Cell source in the representation the file used. Jupyter files store

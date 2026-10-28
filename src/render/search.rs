@@ -135,12 +135,9 @@ pub fn search(
         matched_lines += hits.len();
         matched.push(CellHits {
             index,
-            id: cell
-                .id()
-                .map(str::to_string)
-                .or_else(|| cell.marimo_name().map(str::to_string)),
+            id: cell.stable_ref().map(str::to_string),
             cell_type: cell.cell_type.clone(),
-            kind: super::kind_label(cell).map(str::to_string),
+            kind: cell.block_label().map(str::to_string),
             hits,
             error,
         });
