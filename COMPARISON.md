@@ -1,6 +1,6 @@
 # How tpmcp compares to other Python notebook, analysis, and execution MCP servers
 
-This document compares tpmcp with seven Python MCP servers. It covers the five categories that touch Python code and notebooks:
+This document compares tpmcp with seven Python MCP servers and one notebook CLI. It covers the five categories that touch Python code and notebooks:
 
 - **File-based notebook editing**: [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp).
 - **Live Jupyter pairing**: [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) and [block/mcp-jupyter](https://github.com/block/mcp-jupyter).
@@ -8,7 +8,7 @@ This document compares tpmcp with seven Python MCP servers. It covers the five c
 - **Code analysis**: [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer).
 - **Code execution**: [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python), which is retired and archived upstream but measured and labeled as such, and [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter).
 
-For the docs capability (`py_docs`/`py_module_members`) it also surveys [context7](https://context7.com), a hosted documentation-retrieval service. context7 is a different category: remote doc-snippet search, not a notebook server.
+For the docs capability (`py_docs`/`py_module_members`) it also surveys [context7](https://context7.com), a hosted documentation-retrieval service. context7 is a different category: remote doc-snippet search, not a notebook server. It also measures the shell alternative, [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) (one `nb` binary, no MCP server), because an agent with a shell reaches for it instead of us.
 
 We measured what no vendor publishes: memory use, process count, time to ready, disk footprint, and what happens when the file changes while the AI works. Everything ran on the same machine, with the same notebook and the same operations. We checked every project's README, docs site, and issue tracker and found no published memory or startup numbers for any of these stacks (searched 2026-10-15), so we measure them ourselves and show the full method.
 
@@ -17,14 +17,15 @@ The rules this document holds itself to: every version is pinned with `==`; ever
 ## The short version
 
 - The field splits into five categories: file-based notebook editors, live-Jupyter pairing servers, an editor-embedded server, code analyzers, and code executors. Each answers a different need; the headline table below labels every stack with its category, and steps a category cannot serve are marked skipped with reasons, never faked.
-- tpmcp is one static binary with no runtime to install. The other seven are Python stacks; datalayer and block also need a running JupyterLab server with a kernel next to the MCP process, and mcp-run-python also runs Deno hosting a Pyodide sandbox.
+- tpmcp is one static binary with no runtime to install. The seven MCP servers are Python stacks; datalayer and block also need a running JupyterLab server with a kernel next to the MCP process, and mcp-run-python also runs Deno hosting a Pyodide sandbox.
 - Conflict test: the file is rewritten on disk between the AI's read and its write. tpmcp refuses the stale edit with a revision conflict. block/mcp-jupyter also refuses it, with a change-detection guard its README does not advertise; credit where it is due.
-- cursor-notebook-mcp applies the stale edit over the external change: in our runs it was the only stack that lost the external edit. datalayer returns success while the file on disk keeps the external edit; its in-memory model and the disk silently diverge, a distinct failure mode.
+- cursor-notebook-mcp applies the stale edit over the external change: among the MCP servers it was the only one that lost the external edit. datalayer returns success while the file on disk keeps the external edit; its in-memory model and the disk silently diverge, a distinct failure mode.
 - tpmcp edits are byte-exact. Change one line and the git diff shows one line; outputs, execution counts, and metadata stay untouched.
 - ruff is compiled into the tpmcp binary and lints any Python file by path. mcp-server-analyzer offers ruff too, as a pip-bundled subprocess that takes code strings and never touches your files. That architecture contrast is why this benchmark includes it. None of the other stacks bundles a file linter (marimo's editor bundles Ruff internally, but that is an editor feature, not an MCP tool for your files).
 - tpmcp also resolves Python symbols and module members locally: `py_docs` (`json.dumps` → signature, parameters, docstring) and `py_module_members` (`json` → the module surface), with the compiled-in ty and no interpreter. context7 does something different and complementary: a hosted `resolve-library-id` + `query-docs` that return doc snippets by query over the network. We measure tpmcp's lookups cold vs warm and label context7's as remote.
 - tpmcp handles Jupyter `.ipynb` and marimo `.py` offline, as plain files. marimo's own MCP server is experimental, HTTP-only, and read-only: it cannot edit notebooks over MCP at all.
 - tpmcp never runs code, by design: no kernel, no background process, nothing to fight your editor. datalayer and block drive live Jupyter kernels; mcp-run-python executes inside Pyodide (WASM) in Deno; yzfly's interpreter runs submitted code as a host subprocess with no sandbox.
+- nb-cli (`nb` in a shell) is a single static binary too, the non-MCP alternative: no resident process and real code execution, but no conflict guard, no marimo support, and no lint or docs tools (see [The command-line category: nb-cli](#the-command-line-category-nb-cli)).
 - Three projects (cursor-notebook-mcp, block/mcp-jupyter, mcp-python-interpreter) needed manual dependency pins before they would even start with today's resolver, and the official mcp-server-analyzer image errors on every analysis tool until it gets a writable workdir. Every such finding is dated, quoted, and reproducible via `bench/`; see [Startup findings](#startup-findings-all-disclosed-all-reproducible).
 
 ## Measured results
@@ -38,20 +39,23 @@ The fixed operation profile runs, in order: read, check, edit cell 4, insert an 
 
 All values are medians, taken across the samples inside each window and across runs. The process lists and raw operation results under the table are part of the audit. They show exactly which processes were counted and what every tool call returned.
 
-**Environment.** 24 measured runs, mode: normal; docker 28.0.4; kernel Linux 6.17.0-1022-azure; measured 2026-10-26. Every stack ran on the same machine, one at a time; host load average (1 min) during the runs: 0.00-0.07.
+**Environment.** 27 measured runs, mode: normal; docker 29.4.2; kernel Linux 7.0.0-1017-azure; measured 2026-10-30. Every stack ran on the same machine, one at a time; host load average (1 min) during the runs: 0.04-0.44.
 
-| Server | Category | Idle RAM (cgroup) | After the full profile (cgroup) | After + docs (cgroup) | Idle RAM (RSS sum) | Processes idle/after | Ready in | Image size | Runs |
-|---|---|---|---|---|---|---|---|---|---|
-| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | notebook editor (files) | 1.5 MiB | 2.2 MiB | 12.8 MiB | 6.6 MiB | 1/1 | 0.1 s | 38 MB | 3 |
-| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | live Jupyter pairing | 270.1 MiB | 333.1 MiB | 335.9 MiB | 340.2 MiB | 3/4 | 5.6 s | 549 MB | 3 |
-| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | live Jupyter pairing | 139.5 MiB | 197.3 MiB | 197.0 MiB | 176.3 MiB | 2/3 | 3.5 s | 492 MB | 3 |
-| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | notebook editor (files) | 62.0 MiB | 73.0 MiB | 72.7 MiB | 82.2 MiB | 1/1 | 0.8 s | 239 MB | 3 |
-| [marimo built-in MCP](https://github.com/marimo-team/marimo) | editor-embedded (read-only MCP) | 90.2 MiB | 90.5 MiB | 90.2 MiB | 117.0 MiB | 2/2 | 2.2 s | 379 MB | 3 |
-| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | 70.8 MiB | 71.1 MiB | 71.4 MiB | 81.2 MiB | 1/1 | 2.6 s | 246 MB | 3 |
-| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | 79.3 MiB | 235.9 MiB | 235.5 MiB | 122.9 MiB | 2/2 | 3.6 s | 295 MB | 3 |
-| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | 45.0 MiB | 45.3 MiB | 45.3 MiB | 59.5 MiB | 1/1 | 0.6 s | 206 MB | 3 |
+| Server | Category | Idle RAM (cgroup) | After the full profile (cgroup) | After + docs (cgroup) | Idle RAM (RSS sum) | Processes idle/after | Ready in | Image size | Per-call peak RSS (nb / with kernel) | Runs |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | notebook editor (files) | 1.6 MiB | 2.4 MiB | 13.1 MiB | 6.6 MiB | 1/1 | 0.1 s | 16 MB | — | 3 |
+| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | live Jupyter pairing | 268.7 MiB | 330.5 MiB | 330.5 MiB | 339.2 MiB | 3/4 | 3.9 s | 183 MB | — | 3 |
+| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | live Jupyter pairing | 139.7 MiB | 194.2 MiB | 194.2 MiB | 176.3 MiB | 2/3 | 3.1 s | 166 MB | — | 3 |
+| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | notebook editor (files) | 62.0 MiB | 72.9 MiB | 72.9 MiB | 82.3 MiB | 1/1 | 0.6 s | 80 MB | — | 3 |
+| [jupyter-ai-contrib/nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) | notebook CLI (no resident process) | 0.4 MiB (no resident process) | 1.8 MiB (no resident process) | 1.8 MiB (no resident process) | 1.5 MiB (no resident process) | 1/1 | 0.1 s (first spawn; no handshake) | 78 MB | 6.5 / 6.5 MiB | 3 |
+| [marimo built-in MCP](https://github.com/marimo-team/marimo) | editor-embedded (read-only MCP) | 89.4 MiB | 89.9 MiB | 89.6 MiB | 116.5 MiB | 2/2 | 2.2 s | 130 MB | — | 3 |
+| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | 70.8 MiB | 70.5 MiB | 71.0 MiB | 81.6 MiB | 1/1 | 1.8 s | 90 MB | — | 3 |
+| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | 76.1 MiB | 214.3 MiB | 214.1 MiB | 121.0 MiB | 2/2 | 2.9 s | 111 MB | — | 3 |
+| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | 44.5 MiB | 44.8 MiB | 44.8 MiB | 59.7 MiB | 1/1 | 0.5 s | 71 MB | — | 3 |
 
-Idle = after the MCP handshake and tools/list, then a quiesce window. After = after the full operation profile (read, check, edit, insert an algorithm cell, execute where supported, delete, re-read, lint, and both conflict scenarios where applicable), then a quiesce window. The two After columns split it at the docs lookups: `py_docs` (cold, then warm) and `py_module_members`. Only tpmcp has them; every other stack records them as explicit skips and its two columns land together. Cgroup memory is the headline metric: it counts every process in the container exactly once and excludes file-cache pages. The RSS sum double-counts pages shared between processes (for example libpython between a Jupyter server and its kernels), so treat it as the conservative upper view. Ready = container start plus handshake up to the answered tools/list. All values are medians across the runs in the last column.
+Idle = after the MCP handshake and tools/list, then a quiesce window. After = after the full operation profile (read, check, edit, insert an algorithm cell, execute where supported, delete, re-read, lint, and both conflict scenarios where applicable), then a quiesce window. The two After columns split it at the docs lookups: `py_docs` (cold, then warm) and `py_module_members`. Only tpmcp has them; every other stack records them as explicit skips and its two columns land together. Cgroup memory is the headline metric: it counts every process in the container exactly once and excludes file-cache pages. The RSS sum is what `ps` would add up: it counts shared pages (libpython between a Jupyter server and its kernels) once per process and includes file-backed pages the cgroup leaves out, so it reads higher than the cost. Ready = container start plus handshake up to the answered tools/list. All values are medians across the runs in the Runs column.
+
+The CLI row's memory values are labeled *no resident process* on purpose: `nb` is one shell command per operation, so idle and after-profile hold nothing but the container's bare shell - the ~0 MiB row is not a memory win. Its real per-call cost is the peak-RSS column and the per-call table below; its Ready figure is the first `nb` spawn (there is no handshake).
 
 ### What the memory is made of
 
@@ -59,48 +63,50 @@ Per-process RSS from the median run of each stack (the same data as the audit li
 
 | Server | Component | Idle RSS | After profile RSS |
 |---|---|---|---|
-| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | tpmcp static binary | 6.7 MiB | 37.5 MiB |
-| | **cgroup total (headline)** | **1.5 MiB** | **12.8 MiB** |
-| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | jupyter-mcp-server (Python) | 135.5 MiB | 149.3 MiB |
-|  | JupyterLab server (Python) | 149.1 MiB | 165.5 MiB |
-|  | ipykernel (Python) | 55.6 MiB | 110.0 MiB |
-| | **cgroup total (headline)** | **270.1 MiB** | **335.9 MiB** |
-| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter | 85.7 MiB | 86.2 MiB |
-|  | JupyterLab server (Python) | 90.6 MiB | 105.0 MiB |
-|  | ipykernel (Python) | — | 56.1 MiB |
-| | **cgroup total (headline)** | **139.5 MiB** | **197.0 MiB** |
-| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | cursor-notebook-mcp (Python) | 82.3 MiB | 93.0 MiB |
-| | **cgroup total (headline)** | **62.0 MiB** | **72.7 MiB** |
-| [marimo built-in MCP](https://github.com/marimo-team/marimo) | marimo server (Python) | 104.3 MiB | 104.5 MiB |
-|  | /usr/local/bin/python3.12 -c from multiprocessing.resource_t | 12.4 MiB | 12.4 MiB |
-| | **cgroup total (headline)** | **90.2 MiB** | **90.2 MiB** |
-| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | mcp-server-analyzer (Python) | 81.0 MiB | 81.2 MiB |
-| | **cgroup total (headline)** | **70.8 MiB** | **71.4 MiB** |
-| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | mcp-run-python launcher (Python) | 63.7 MiB | 63.7 MiB |
-|  | Deno + Pyodide (WASM sandbox) | 59.3 MiB | 202.3 MiB |
-| | **cgroup total (headline)** | **79.3 MiB** | **235.5 MiB** |
-| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | mcp-python-interpreter (Python) | 59.5 MiB | 59.5 MiB |
-| | **cgroup total (headline)** | **45.0 MiB** | **45.3 MiB** |
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | tpmcp static binary | 6.6 MiB | 37.0 MiB |
+| | **cgroup total (headline)** | **1.6 MiB** | **13.1 MiB** |
+| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | jupyter-mcp-server (Python) | 135.0 MiB | 147.4 MiB |
+|  | JupyterLab server (Python) | 148.2 MiB | 163.6 MiB |
+|  | ipykernel (Python) | 56.0 MiB | 108.8 MiB |
+| | **cgroup total (headline)** | **268.7 MiB** | **330.5 MiB** |
+| [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter | 85.9 MiB | 86.3 MiB |
+|  | JupyterLab server (Python) | 90.3 MiB | 104.6 MiB |
+|  | ipykernel (Python) | — | 56.2 MiB |
+| | **cgroup total (headline)** | **139.7 MiB** | **194.2 MiB** |
+| [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | cursor-notebook-mcp (Python) | 82.3 MiB | 93.1 MiB |
+| | **cgroup total (headline)** | **62.0 MiB** | **72.9 MiB** |
+| [jupyter-ai-contrib/nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) | container shell (no resident notebook process) | 1.6 MiB | 1.6 MiB |
+| | **cgroup total (headline)** | **0.4 MiB** | **1.8 MiB** |
+| [marimo built-in MCP](https://github.com/marimo-team/marimo) | marimo server (Python) | 104.0 MiB | 104.3 MiB |
+|  | /usr/local/bin/python3.12 -c from multiprocessing.resource_t | 12.5 MiB | 12.5 MiB |
+| | **cgroup total (headline)** | **89.4 MiB** | **89.6 MiB** |
+| [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | mcp-server-analyzer (Python) | 81.6 MiB | 81.6 MiB |
+| | **cgroup total (headline)** | **70.8 MiB** | **71.0 MiB** |
+| [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | mcp-run-python launcher (Python) | 63.3 MiB | 63.3 MiB |
+|  | Deno + Pyodide (WASM sandbox) | 57.5 MiB | 208.9 MiB |
+| | **cgroup total (headline)** | **76.1 MiB** | **214.1 MiB** |
+| [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | mcp-python-interpreter (Python) | 59.4 MiB | 59.6 MiB |
+| | **cgroup total (headline)** | **44.5 MiB** | **44.8 MiB** |
 
 ### Operation latency (median per call)
 
-| Operation | tpmcp (this project) | datalayer/jupyter-mcp-server | block/mcp-jupyter | jbeno/cursor-notebook-mcp | marimo built-in MCP | Anselmoo/mcp-server-analyzer | pydantic/mcp-run-python (retired upstream) | yzfly/mcp-python-interpreter |
-|---|---|---|---|---|---|---|---|---|
-| **ready** (start → tools/list) | 113 ms | 5.6 s | 3.5 s | 817 ms | 2.2 s | 2.6 s | 3.6 s | 609 ms |
-| **read** | 1 ms | 10 ms | 1.5 s | 39 ms | 3 ms | — | — | — |
-| **check** | 1 ms | — | — | 4 ms | — | — | — | — |
-| **edit** | 1 ms | 13 ms | 3.0 s | 5 ms | — | — | — | — |
-| **insert** | 1 ms | 38 ms | 3.0 s | 6 ms | — | — | — | — |
-| **execute** | — | 1.0 s | 3.1 s | — | — | — | 2.0 s | 4 ms |
-| **delete** | 1 ms | 16 ms | 3.0 s | 5 ms | — | — | — | — |
-| **reread** | 0 ms | 9 ms | 1.5 s | 4 ms | — | — | — | — |
-| **lint** | 4 ms | — | — | — | — | 18 ms | — | — |
-| **analyze** | — | — | — | — | — | 216 ms | — | — |
-| **docs-cold** | 32 ms | — | — | — | — | — | — | — |
-| **docs-warm** | 1 ms | — | — | — | — | — | — | — |
-| **docs-members** | 7 ms | — | — | — | — | — | — | — |
-| **conflict-0s** | 502 ms | 523 ms | 3.5 s | 510 ms | — | — | — | — |
-| **conflict-10s** | 10.5 s | 10.5 s | 13.5 s | 10.5 s | — | — | — | — |
+| Operation | tpmcp (this project) | datalayer/jupyter-mcp-server | block/mcp-jupyter | jbeno/cursor-notebook-mcp | jupyter-ai-contrib/nb-cli | marimo built-in MCP | Anselmoo/mcp-server-analyzer | pydantic/mcp-run-python (retired upstream) | yzfly/mcp-python-interpreter |
+|---|---|---|---|---|---|---|---|---|---|
+| **ready** (start → tools/list) | 100 ms | 3.9 s | 3.1 s | 624 ms | 106 ms | 2.2 s | 1.8 s | 2.9 s | 457 ms |
+| **read** | 1 ms | 8 ms | 1.5 s | 28 ms | 2 ms | 3 ms | — | — | — |
+| **check** | 0 ms | — | — | 3 ms | — | — | — | — | — |
+| **edit** | 2 ms | 10 ms | 3.0 s | 4 ms | 3 ms | — | — | — | — |
+| **insert** | 1 ms | 29 ms | 3.0 s | 4 ms | 2 ms | — | — | — | — |
+| **execute** | — | 1.0 s | 3.1 s | — | 541 ms | — | — | 1.5 s | 3 ms |
+| **delete** | 1 ms | 10 ms | 3.0 s | 4 ms | 3 ms | — | — | — | — |
+| **reread** | 0 ms | 6 ms | 1.5 s | 3 ms | 2 ms | — | — | — | — |
+| **lint** | 3 ms | — | — | — | — | — | 14 ms | — | — |
+| **analyze** | — | — | — | — | — | — | 163 ms | — | — |
+| **docs-cold** | 25 ms | — | — | — | — | — | — | — | — |
+| **docs-warm** | 1 ms | — | — | — | — | — | — | — | — |
+| **docs-members** | 5 ms | — | — | — | — | — | — | — | — |
+| **conflict-0s** | 501 ms | 518 ms | 3.5 s | 507 ms | 505 ms | — | — | — | — |
+| **conflict-10s** | 10.5 s | 10.5 s | 13.5 s | 10.5 s | 10.5 s | — | — | — | — |
 
 “—” = the stack has no such tool or it cannot run headless (the reason is recorded per run in the audit); “n/a” = the operation was not attempted. execute means “run the bubble-sort cell” for notebook stacks and “run the same source as a snippet” for execution-only servers. lint means ruff on the same marimo-format fixture: by file path for tpmcp, as a code string for mcp-server-analyzer (its only input shape). docs-cold is the FIRST `py_docs` call in a fresh server process (empty discovery and docstring caches); docs-warm is the identical repeat call (caches populated); docs-members is `py_module_members`, a distinct tool that shares the already-warm discovery cache but enumerates the module itself.
 
@@ -110,23 +116,54 @@ Context7 is a **remote** MCP server ([context7.com](https://context7.com), strea
 
 | Tool (REMOTE, network round-trip) | Median | First call |
 |---|---|---|
-| `resolve-library-id` (libraryName `Python`, query `json.dumps`) | 1.6 s | 1.6 s |
+| `resolve-library-id` (libraryName `Python`, query `json.dumps`) | 1.4 s | 1.3 s |
 | `query-docs` (query `json.dumps`) | 1.2 s | 1.2 s |
 
-Measured 2026-10-26 (normal mode), median of 3 run(s) x the per-call samples. The median covers repeat calls on an established session; "first call" is the first call in the session, so it can include the server-side cold path and connection reuse. Every call is a network round-trip.
+Measured 2026-10-30 (normal mode), median of 3 run(s) x the per-call samples. The median covers repeat calls on an established session; "first call" is the first call in the session, so it can include the server-side cold path and connection reuse. Every call is a network round-trip.
 
 #### Docs lookups: local resolution vs remote doc search vs reading the source
 
-| Approach | You ask it for | You get back | Where the answer comes from | Latency (median per call) | Network / API key | When it wins |
-|---|---|---|---|---|---|---|
-| tpmcp `py_docs` (LOCAL) | a dotted symbol (`json.dumps`) | kind, rendered signature, structured parameters, return type, docstring, and the resolution path hop by hop (unique, overloaded, or ambiguous) | the environment named by `python`, or the auto-discovered one: typeshed stubs or installed source, in-process via the compiled-in ty | 32 ms cold, 1 ms warm | none: no interpreter, no key, no network | you need the exact API of the code you actually have installed: mid-edit, offline, in CI, or for a pinned old version |
-| tpmcp `py_module_members` (LOCAL) | a module name (`json`) | the module surface: every member's kind, one-line signature, one-line docstring; ordered public, dunder, underscore, then alphabetical; capped with a `truncated` flag on huge packages | the same local environment; shares the warm discovery cache with `py_docs` | 7 ms | none | "what does this module expose?" in one call, instead of reading the file |
-| context7 `resolve-library-id` (REMOTE) | a library name and the question (libraryName `Python`, query `json.dumps`) | a Context7 library ID plus ranked candidates | Context7's cloud docs index (community-contributed) | 1.6 s median / 1.6 s first call | yes: one HTTP round-trip per call; `Authorization: Bearer <key>`, which upstream recommends for higher rate limits | the library is not installed locally, or you do not know its exact name |
-| context7 `query-docs` (REMOTE) | the library ID and the question (query `json.dumps`; optional `language`) | ranked doc **snippets** with code examples from the library's web documentation | the same cloud index; its own README disclaims accuracy and completeness | 1.2 s median / 1.2 s first call | same as above | usage examples, setup and config guides, cross-language docs, or docs for a version newer than the one installed |
-| Reading the installed source yourself (NOT A TOOL: the agent's own file read) | file paths under site-packages | the exact source bytes; the agent extracts whatever it needs | the installed files themselves | not measured (no driver step exists; see Methodology) | none | tpmcp's static resolver cannot see the symbol (runtime-defined names, lazy submodule loaders such as `andes.rl`), or you need implementation internals rather than the API surface |
+| | tpmcp docs | context7 | read the source |
+|---|:---:|:---:|:---:|
+| Exact signature (installed code) | ✅ | ❌ | ✅ |
+| Docstring, params, return | ✅ | ❌ | ✅ |
+| Whole module surface (1 call) | ✅ | ❌ | ❌ |
+| Docs for a library you don't have | ❌ | ✅ | ❌ |
+| Web usage/setup examples | ❌ | ✅ | ❌ |
+| Runtime-defined names (`andes.rl`) | ❌ | ❌ | ✅ |
+| Offline | ✅ | ❌ | ✅ |
+| **Latency (median)** | **25 ms / 5 ms** | **1.2 s / 1.4 s** | — |
 
-Same question on both sides: symbol `json.dumps`, module `json`, query `json.dumps`. LOCAL rows run in-process against the environment named by `python` (auto-discovered when omitted); REMOTE rows go to the endpoint above. The tpmcp latency cells are the medians rendered from the docs ops in the latency table above (`docs-cold`, `docs-warm`, `docs-members`); the context7 cells come from `bench/results/context7/runN/context7.json`. A cell reading "not measured" has no data behind it, in this batch or at all. Limits on the local rows: resolution is static, so the first segment must be importable and every later segment must have a definition ty can see. Names created at runtime (module `__getattr__`, lazy submodule loaders such as `andes.rl`) return a `did not resolve` error naming the failing segment, and `py_module_members` lists such members as `other` with a note instead of hiding them.
+Same question on both sides: `json.dumps`, module `json`. The latency row reads `py_docs` cold / `py_module_members` for tpmcp and `query-docs` / `resolve-library-id` for context7; `—` = not measured. context7 returns doc **snippets** from a community web index, not signatures; tpmcp resolves statically against your installed code, so runtime-defined names (`andes.rl`-style lazy loaders) come back as an honest `did not resolve` naming the failing segment, and only reading the source sees them.
 
+
+### Per-call peak RSS: the CLI's real memory cost
+
+A CLI has no resident process, so the Idle/After columns above hold no notebook process at all. What each call actually costs is the peak RSS of the `nb` process while it runs (its VmHWM, read from /proc/pid/status during the call); *with kernel* is the peak summed RSS of the call's whole process tree, which is where the kernel `nb execute` spawns shows up. Medians of the per-run peaks; calls per op counts shell invocations (1 per operation unless the variant retries).
+
+| Operation | nb binary peak | with kernel | calls per op |
+|---|---|---|---|
+| **read** (jupyter-ai-contrib/nb-cli) | 5.2 MiB | 5.2 MiB | 1 |
+| **edit** (jupyter-ai-contrib/nb-cli) | 6.5 MiB | 6.5 MiB | 1 |
+| **insert** (jupyter-ai-contrib/nb-cli) | 6.3 MiB | 6.3 MiB | 1 |
+| **execute** (jupyter-ai-contrib/nb-cli) | 8.8 MiB | 65.1 MiB | 1 |
+| **delete** (jupyter-ai-contrib/nb-cli) | 6.6 MiB | 6.6 MiB | 1 |
+| **reread** (jupyter-ai-contrib/nb-cli) | 6.0 MiB | 6.0 MiB | 1 |
+| **conflict-0s** (jupyter-ai-contrib/nb-cli) | 6.7 MiB | 6.7 MiB | 2 |
+| **conflict-10s** (jupyter-ai-contrib/nb-cli) | 6.5 MiB | 6.5 MiB | 2 |
+
+### The workflow probe: one task, in calls
+
+Scenario: add two cells + execute the second cell + read the notebook back. The driver runs it end to end and records what each step cost, an MCP tool call or one shell invocation, so this is what the task costs an agent rather than what a single operation costs. Values are medians across the runs; the steps come from the variant that ran.
+
+| Stack | Variant | Calls | Wall | Steps (calls) |
+|---|---|---|---|---|
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | tpmcp MCP tool calls, one insert per cell | 4 | 3 ms | read (get revision) (1), add cell 1 (1), add cell 2 (1), execute (0), read back (1) |
+| [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | tpmcp MCP tool calls, both cells in one batched insert | 3 | 2 ms | read (get revision) (1), add 2 cells (batch) (1), execute (0), read back (1) |
+| [jupyter-ai-contrib/nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) | nb-cli, one command per cell | 4 | 547 ms | add cell 1 (1), add cell 2 (1), execute (1), read back (1) |
+| [jupyter-ai-contrib/nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) | nb-cli, both cells batched in one command | 3 | 541 ms | add 2 cells (batch) (1), execute (1), read back (1) |
+
+Stacks with no probe record (the probe covers the notebook stacks that add a cell and read it back; a batch can also predate it): datalayer/jupyter-mcp-server, block/mcp-jupyter, jbeno/cursor-notebook-mcp, marimo built-in MCP, Anselmoo/mcp-server-analyzer, pydantic/mcp-run-python (retired upstream), yzfly/mcp-python-interpreter. *not measured*.
 
 ### The file changes while the AI works
 
@@ -135,9 +172,10 @@ Scenario: the AI reads cell 4, the file is then changed on disk behind its back 
 | Server | External change after 0 s | External change after 10 s | External edit survived? |
 |---|---|---|---|
 | [tpmcp (this project)](https://github.com/Speretta/true-python-mcp) | refused (revision guard) | refused (revision guard) | yes |
-| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | applied; external edit survived | applied; external edit survived / edit errored: Error executing tool edit_cell_source: old_string not found in cell source | yes |
+| [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server) | applied; external edit survived | edit errored: Error executing tool edit_cell_source: old_string not found in cell source | yes |
 | [block/mcp-jupyter](https://github.com/block/mcp-jupyter) | refused (change detection) | refused (change detection) | yes |
 | [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp) | applied over the external edit (external LOST) | applied over the external edit (external LOST) | NO - lost |
+| [jupyter-ai-contrib/nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) | applied over the external edit (external LOST) | applied over the external edit (external LOST) | NO - lost |
 | [marimo built-in MCP](https://github.com/marimo-team/marimo) | skipped: read-only MCP surface | skipped | — |
 | [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | skipped: writes no files (code-string analysis only) | skipped | — |
 | [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python) | skipped: execution-only server, writes no files | skipped | — |
@@ -145,123 +183,136 @@ Scenario: the AI reads cell 4, the file is then changed on disk behind its back 
 
 **Operation outcomes per stack** (from the run status files):
 
-- [tpmcp (this project)](https://github.com/Speretta/true-python-mcp): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [block/mcp-jupyter](https://github.com/block/mcp-jupyter): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [marimo built-in MCP](https://github.com/marimo-team/marimo): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
-- [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter): cgroup_median_bytes, rss_sum_median_bytes, proc_count, threads_total
+- [tpmcp (this project)](https://github.com/Speretta/true-python-mcp): read: ok, check: ok, edit: ok, insert: ok, execute: skipped, delete: ok, reread: ok, lint: ok, analyze: skipped, conflict-0s: ok, conflict-10s: ok, docs-cold: ok, docs-warm: ok, docs-members: ok
+- [datalayer/jupyter-mcp-server](https://github.com/datalayer/jupyter-mcp-server): use_notebook: ok, read: ok, check: skipped, edit: ok, insert: ok, execute: ok, delete: ok, reread: ok, lint: skipped, analyze: skipped, conflict-0s: ok, conflict-10s: ok, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [block/mcp-jupyter](https://github.com/block/mcp-jupyter): setup: ok, read: ok, check: skipped, edit: ok, insert: ok, execute: ok, delete: ok, reread: ok, lint: skipped, analyze: skipped, conflict-0s: ok, conflict-10s: ok, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [jbeno/cursor-notebook-mcp](https://github.com/jbeno/cursor-notebook-mcp): read: ok, check: ok, edit: ok, insert: ok, execute: skipped, delete: ok, reread: ok, lint: skipped, analyze: skipped, conflict-0s: ok, conflict-10s: ok, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [jupyter-ai-contrib/nb-cli](https://github.com/jupyter-ai-contrib/nb-cli): read: ok, check: skipped, edit: ok, insert: ok, execute: ok, delete: ok, reread: ok, lint: skipped, analyze: skipped, conflict-0s: ok, conflict-10s: ok, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [marimo built-in MCP](https://github.com/marimo-team/marimo): read: ok, cellmap: skipped, check: skipped, edit: skipped, insert: skipped, execute: skipped, delete: skipped, reread: skipped, lint: skipped, analyze: skipped, conflict-0s: skipped, conflict-10s: skipped, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer): read: skipped, check: skipped, edit: skipped, insert: skipped, execute: skipped, delete: skipped, reread: skipped, lint: ok, analyze: ok, conflict-0s: skipped, conflict-10s: skipped, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [pydantic/mcp-run-python (retired upstream)](https://github.com/pydantic/mcp-run-python): read: skipped, check: skipped, edit: skipped, insert: skipped, execute: ok, delete: skipped, reread: skipped, lint: skipped, analyze: skipped, conflict-0s: skipped, conflict-10s: skipped, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
+- [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter): read: skipped, check: skipped, edit: skipped, insert: skipped, execute: ok, delete: skipped, reread: skipped, lint: skipped, analyze: skipped, conflict-0s: skipped, conflict-10s: skipped, docs-cold: skipped, docs-warm: skipped, docs-members: skipped
 
 **Process audit.** What was actually running in each container, captured from the host during the median run (idle window, then after the profile):
 
 ````text
 # tpmcp (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-7329 7303 6820 2 /tpmcp
+7312 7286 6808 2 /tpmcp
 ````
 
 ````text
 # tpmcp (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-7329 7303 38380 3 /tpmcp
+7312 7286 37848 3 /tpmcp
 ````
 
 ````text
-# datalayer (idle) - run 2
+# datalayer (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-9000 8975 138780 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
-9027 9000 152656 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
-9038 9027 56888 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-13815ca4-1c99-4f69-a24b-18b6c81245c0.json
+9462 9437 138240 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
+9490 9462 151784 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+9499 9490 57308 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-88a73169-19cf-4f0b-8ae7-5b3e1d1fd51e.json
 ````
 
 ````text
-# datalayer (after profile) - run 2
+# datalayer (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-9000 8975 152860 8 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
-9027 9000 169424 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
-9146 9027 55192 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-d3a29819-2aff-4cb1-aac3-93c49048d42d.json
-9038 9027 57400 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-13815ca4-1c99-4f69-a24b-18b6c81245c0.json
+9462 9437 150912 8 /usr/local/bin/python3.12 /usr/local/bin/jupyter-mcp-server
+9490 9462 167500 5 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token MY_TOKEN --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+9614 9490 54072 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-e60766fb-a944-4a9e-a172-2c6e7c8a5078.json
+9499 9490 57308 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /root/.local/share/jupyter/runtime/kernel-88a73169-19cf-4f0b-8ae7-5b3e1d1fd51e.json
 ````
 
 ````text
-# block (idle) - run 2
+# block (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-10664 10639 87776 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
-10691 10664 92724 1 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+11258 11234 88008 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
+11288 11258 92488 1 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
 ````
 
 ````text
-# block (after profile) - run 2
+# block (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-10664 10639 88296 5 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
-10691 10664 107520 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
-10787 10691 57412 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /work/.local/share/jupyter/runtime/kernel-a4aa3b8f-396d-430a-b770-bc4caf510a3a.json
+11258 11234 88396 5 /usr/local/bin/python3.12 /usr/local/bin/mcp-jupyter
+11288 11258 107152 3 /usr/local/bin/python3.12 /usr/local/bin/jupyter-lab --port 8888 --IdentityProvider.token BLOCK --ip 127.0.0.1 --no-browser --allow-root --ServerApp.root_dir=/work
+11390 11288 57592 13 /usr/local/bin/python3.12 -m ipykernel_launcher -f /work/.local/share/jupyter/runtime/kernel-0cd8eb00-02c3-490a-8464-20a7e91b0052.json
 ````
 
 ````text
 # cursor (idle) - run 2
 PID PPID RSS_KB THREADS CMD
-12444 12420 84308 3 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
+12610 12586 84232 3 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
 ````
 
 ````text
 # cursor (after profile) - run 2
 PID PPID RSS_KB THREADS CMD
-12444 12420 95248 4 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
+12610 12586 95304 4 /usr/local/bin/python3.12 /usr/local/bin/cursor-notebook-mcp --allow-root /work
 ````
 
 ````text
-# marimo (idle) - run 1
+# nbcli (idle) - run 2
 PID PPID RSS_KB THREADS CMD
-13525 13500 106844 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
-13576 13525 12704 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
+14701 14674 1664 1 sh
 ````
 
 ````text
-# marimo (after profile) - run 1
+# nbcli (after profile) - run 2
 PID PPID RSS_KB THREADS CMD
-13525 13500 106972 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
-13576 13525 12704 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
+14701 14674 1664 1 sh
 ````
 
 ````text
-# analyzer (idle) - run 1
+# marimo (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-14978 14954 82972 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
+16897 16873 106516 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
+16945 16897 12776 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
 ````
 
 ````text
-# analyzer (after profile) - run 1
+# marimo (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-14978 14954 83100 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
+16897 16873 106788 1 /usr/local/bin/python3.12 /usr/local/bin/marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0
+16945 16897 12776 1 /usr/local/bin/python3.12 -c from multiprocessing.resource_tracker import main;main(6)
 ````
 
 ````text
-# runpython (idle) - run 1
+# analyzer (idle) - run 2
 PID PPID RSS_KB THREADS CMD
-17535 17510 65196 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
-17600 17535 60704 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
+18057 18032 83592 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
 ````
 
 ````text
-# runpython (after profile) - run 1
+# analyzer (after profile) - run 2
 PID PPID RSS_KB THREADS CMD
-17535 17510 65196 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
-17600 17535 207168 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
+18057 18032 83592 3 /app/.venv/bin/python3 /app/.venv/bin/mcp-server-analyzer
 ````
 
 ````text
-# yzfly (idle) - run 2
+# runpython (idle) - run 3
 PID PPID RSS_KB THREADS CMD
-19583 19558 60904 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
+21057 21032 64868 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
+21124 21057 58872 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
 ````
 
 ````text
-# yzfly (after profile) - run 2
+# runpython (after profile) - run 3
 PID PPID RSS_KB THREADS CMD
-19583 19558 60904 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
+21057 21032 64868 1 /usr/local/bin/python3.13 /usr/local/bin/mcp-run-python stdio
+21124 21057 213864 7 deno run --allow-net --allow-read=./node_modules --node-modules-dir=auto src/main.ts stdio --return-mode=xml --deps=
+````
+
+````text
+# yzfly (idle) - run 3
+PID PPID RSS_KB THREADS CMD
+22588 22563 60856 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
+````
+
+````text
+# yzfly (after profile) - run 3
+PID PPID RSS_KB THREADS CMD
+22588 22563 60984 3 /usr/local/bin/python3.12 /usr/local/bin/mcp-python-interpreter --dir /work
 ````
 
 
@@ -279,6 +330,8 @@ This section describes exactly what the harness in [bench/](bench) does. Nothing
 
 A sixth category (**remote documentation retrieval**) is surveyed separately for the docs capability: [context7](https://context7.com) is a hosted MCP server that returns doc snippets for a library by query, not a notebook server, so it is compared only on the docs lookups (see [Feature comparison](#feature-comparison) and the docs comparison table in the Context7 block under Measured results).
 
+A seventh is not an MCP server at all and is measured anyway: **command-line tooling**. [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) (jupyter-ai-contrib, Rust, BSD-3) edits and executes notebooks through one `nb` binary invoked from a shell. It is measured on the same operation profile and both conflict races, plus per-call peak memory (a CLI has no resident process, so the idle columns say exactly that). See [The command-line category: nb-cli](#the-command-line-category-nb-cli).
+
 ### One minimal Docker image per stack
 
 - **tpmcp** ([bench/tpmcp/Dockerfile](bench/tpmcp/Dockerfile)): `FROM scratch` plus the static musl binary, the same artifact published as a release asset and built in CI. No OS, no runtime. The image is the binary.
@@ -287,6 +340,7 @@ A sixth category (**remote documentation retrieval**) is surveyed separately for
 - **analyzer**: not built by us. The official published image `ghcr.io/anselmoo/mcp-server-analyzer:latest` (`python:3.13-slim` base, non-root user) is pulled, retagged `bench-analyzer:pin`, and the pulled digest (`image_id` in `meta.json`) is the real pin, because the upstream tag floats.
 - **runpython** ([bench/runpython/Dockerfile](bench/runpython/Dockerfile)): `python:3.13-slim-bookworm` plus `mcp-run-python==0.0.22`; Deno is installed at build time (upstream pins no version, so the installed one is recorded in the image at `/deno-version.txt`), and the build pre-warms the Deno/Pyodide cache so measured runs never pay first-start download costs.
 - **yzfly** ([bench/yzfly/Dockerfile](bench/yzfly/Dockerfile)): `python:3.12-slim` plus `mcp-python-interpreter==1.2.3` and the manual `mcp==1.30.0` pin it needs to start (see Startup findings).
+- **nb-cli** ([bench/nbcli/Dockerfile](bench/nbcli/Dockerfile)): `python:3.12-slim` plus the project's own published static release binary, pinned by version and sha256 against the release's SHA256SUMS, and `ipykernel` (the kernel `nb execute` spawns). The bench starts `sh` in it instead of the image's `nb` entrypoint; there is no server process.
 - Entrypoints follow each project's own README: datalayer and block start `jupyter lab`, poll its `/api/status` endpoint until it answers, then `exec` the MCP server on stdio. marimo runs `marimo edit /work/bench.py --mcp --no-token --headless --port 2718 --host 0.0.0.0`. cursor runs `cursor-notebook-mcp --allow-root /work`. yzfly runs `mcp-python-interpreter --dir /work` (its jail flag). runpython runs `mcp-run-python stdio`. tpmcp's entrypoint is the binary itself. The analyzer image's own entrypoint is the server; the harness adds `-w /tmp -e RUFF_CACHE_DIR=/tmp/ruff-cache` to the `docker run` (see Startup findings).
 
 ### Identical fixture per format
@@ -298,7 +352,7 @@ A sixth category (**remote documentation retrieval**) is surveyed separately for
 
 ### The fixed operation profile
 
-The driver ([bench/driver.py](bench/driver.py)) is a minimal headless MCP client: plain JSON-RPC (protocol version 2024-11-05) over stdio, or streamable HTTP for marimo. No browser, no IDE, nothing else in the tree. It performs the `initialize` + `tools/list` handshake, then runs the same semantic profile on every stack, in this order: **read → check → edit cell 4 → insert a new cell at index 5 → execute that cell → delete the spare cell at index 20 → re-read → lint → analyze → docs (`py_docs` cold, `py_docs` warm, `py_module_members`)**, then the two conflict scenarios below. The inserted cell is a self-contained bubble sort: a well-known algorithm with a fixed source, byte-identical for every stack, needing no prior notebook state.
+The driver ([bench/driver.py](bench/driver.py)) is a minimal headless MCP client: plain JSON-RPC (protocol version 2024-11-05) over stdio, or streamable HTTP for marimo. For nb-cli it speaks shell instead: one persistent `sh` inside the container runs one `nb` command per operation. No browser, no IDE, nothing else in the tree. It performs the `initialize` + `tools/list` handshake, then runs the same semantic profile on every stack, in this order: **read → check → edit cell 4 → insert a new cell at index 5 → execute that cell → delete the spare cell at index 20 → re-read → lint → analyze → docs (`py_docs` cold, `py_docs` warm, `py_module_members`)**, then the two conflict scenarios below. The inserted cell is a self-contained bubble sort: a well-known algorithm with a fixed source, byte-identical for every stack, needing no prior notebook state.
 
 How each category serves these semantics (the mapping is disclosed, not hidden):
 
@@ -318,6 +372,7 @@ Per-stack profiles in the driver:
 - **marimo**: `get_active_notebooks`, then `get_lightweight_cell_map`. Headless sessions belong to connected editor clients, so `get_active_notebooks` reports zero notebooks and the session-scoped tools cannot run. We measure the stack exactly as it runs headless and mark those steps skipped rather than faking a session.
 - **analyzer**: `ruff-check` and `analyze-code` only. It is not a notebook server.
 - **runpython** and **yzfly**: `run_python_code` only, execution-only profiles.
+- **nb-cli**: `nb read`, `nb cell update`, `nb cell add`, `nb cell delete`, `nb execute`, one `nb` command each through the shell adapter above; check and lint are honest skips (nb-cli has neither).
 
 Tool schemas differ per project and per version, so each step carries argument variants: the driver tries them in order and records **every request and every response verbatim** in `ops.json`, including failed variants and every skipped step with its reason. The ops dumps quoted in this document come from those files.
 
@@ -339,7 +394,7 @@ What the pilot runs showed (the render-generated table under Measured results ca
   Error executing tool modify_notebook_cells: Notebook has changed since you last saw it (66c66dad856263896ca803ea52a6e5e3e6d948421741cd6493636bdf52c8cdbc --> 8858c30661f9cc05574bef6616290b1213dc9ae783fa1bf81ea12139ad9499e1). Use your view_source tool to update your knowledge of the notebook contents. If you are trying to edit/delete a specific cell, you can likely start by viewing just that cell rather than the whole notebook.
   ```
 
-- **cursor-notebook-mcp** applied the stale edit **over** the external change; the file afterwards held `greeting = "hello bench (stale)"` and the external edit was gone. The tool answered `Successfully edited cell 4 in /work/bench.ipynb`. It was the only stack that lost data in our runs.
+- **cursor-notebook-mcp** applied the stale edit **over** the external change; the file afterwards held `greeting = "hello bench (stale)"` and the external edit was gone. The tool answered `Successfully edited cell 4 in /work/bench.ipynb`. It was the only MCP server that lost data in our runs.
 - **datalayer** returned **success** while the file on disk kept `greeting = "hello bench (external edit)"`. The success message was `Cell 4 edited successfully!` plus a diff showing `-greeting = "hello bench (edited)"` / `+greeting = "hello bench (stale)"`. The server applied the edit to its own RTC/in-memory model. So the AI's belief and the disk diverge: silent divergence instead of data loss.
 
   The divergence runs both ways. At the start of the 10 s scenario, after the harness had restored the file on disk, datalayer's read still returned its model's value `greeting = "hello bench (stale)"`.
@@ -403,7 +458,7 @@ The injected section of this document is built only from these files. If a numbe
 
 ### Pinned versions
 
-Resolved from PyPI on 2026-10-15; no `@latest` anywhere, except the analyzer image, whose pin is its recorded digest:
+Resolved from PyPI on 2026-10-15; no `@latest` anywhere, except the analyzer image, whose pin is its recorded digest, and nb-cli, pinned by version and sha256 from its GitHub release:
 
 - shared JupyterLab base: `python:3.12-slim`, `jupyterlab==4.6.4`, `jupyter-collaboration==5.0.4`, `ipykernel==7.4.0`
 - datalayer: `jupyter-mcp-server==2.2.4`, `jupyter-mcp-tools==0.1.8`
@@ -413,12 +468,13 @@ Resolved from PyPI on 2026-10-15; no `@latest` anywhere, except the analyzer ima
 - analyzer: the official image `ghcr.io/anselmoo/mcp-server-analyzer:latest`. The tag floats, so the pulled digest recorded in `meta.json` is the pin (0.4.1 is the current release on [PyPI](https://pypi.org/project/mcp-server-analyzer/json) as of 2026-10-15)
 - runpython: `mcp-run-python==0.0.22` (final release, 2025-12-11); Deno installed at build time, version recorded in the image at `/deno-version.txt`
 - yzfly: `mcp-python-interpreter==1.2.3`, plus the manual `mcp==1.30.0` pin it needs to start (see Startup findings)
+- nb-cli: `nb` release binary v0.0.10 (2026-07-31), pinned by version and sha256 in [bench/nbcli/Dockerfile](bench/nbcli/Dockerfile); `ipykernel==7.4.0` for `nb execute`
 - tpmcp: the static musl binary from the release assets (or built in CI from the tagged source)
 
 ### Fairness disclosures
 
 - **Loopback binding.** The datalayer and block READMEs start JupyterLab with `--ip 0.0.0.0`. We bind to `127.0.0.1` inside the container for safety. This is the only deviation from their documented launch, and it cannot affect memory. marimo needs `--host 0.0.0.0` *inside* the container for the Docker port mapping to reach it; the host side of that mapping is bound to `127.0.0.1`, so it stays loopback-only.
-- **Same machine, same run.** All eight stacks are measured on one machine within a single benchmark run; `meta.json` records the Docker version, host kernel, host load, and UTC timestamp per run, and the environment block under the table comes from those files.
+- **Same machine, same run.** All nine stacks are measured on one machine within a single benchmark run; `meta.json` records the Docker version, host kernel, host load, and UTC timestamp per run, and the environment block under the table comes from those files.
 - **Warm caches.** Every wheel is installed at image build time; nothing is downloaded or resolved during a measured run. Two disclosed exceptions, both visible in the captured server stderr: runpython's Deno dependency-install step re-runs at every container start (from the build-time cache), and analyzer's FastMCP queries pypi.org for a version check at startup.
 - **Fresh kernels, no user imports.** The fixture imports only `json` and `math`; the inserted cell is a dependency-free bubble sort. An idle-kernel number that included pandas would measure the user's data stack, not the server.
 - **Each format gets its own fixture.** datalayer, block, and cursor receive `bench.ipynb`; marimo receives `bench.py` in its native format. marimo's read-only MCP surface means its profile cannot include an edit: we benchmark the read path and say so instead of silently routing writes through marimo-pair (which is not an MCP server). analyzer receives the marimo fixture's source as a code string, the same content tpmcp lints by path; runpython and yzfly receive the same bubble-sort source as a snippet.
@@ -442,7 +498,7 @@ The table collects the structural facts: category, who maintains each project, u
 
 Prerequisites and process shapes are from the projects' READMEs and docs as quoted in the paragraphs below, and from the process lists our runs captured. Adoption figures are GitHub stars and PyPI downloads as of 2026-10-15 (re-checked 2026-10-16 for the three new stacks, where noted).
 
-**tpmcp** exposes 13 notebook tools (plus 3 plain-Python file tools with `--file-tools`) answering in markdown or JSON. Every read returns a revision code; every write must send it back, and a stale write is refused with the new revision. Edits return the diff of what changed, and ruff lint/format is compiled in. The full `cell_edit` response from our run1 audit (musl release build, 2026-10-15):
+**tpmcp** exposes 15 tools (plus 6 file tools with `--file-tools`) answering in markdown or JSON. Every read returns a revision code; every write must send it back, and a stale write is refused with the new revision. Edits return the diff of what changed, and ruff lint/format is compiled in. The full `cell_edit` response from our run1 audit (musl release build, 2026-10-15):
 
 ````text
 edited cell 4
@@ -560,7 +616,7 @@ The snippet prints nothing, and the response carries no return-value section in 
 
 ## Startup findings (all disclosed, all reproducible)
 
-Bringing the seven comparison stacks up inside pinned Docker images surfaced warts in five of them; marimo 0.25.1 installed and started exactly as its docs describe. We report the findings factually, with dates and quotes; they are maintenance signals of unpinned dependency ranges and unpublished runtime assumptions, not verdicts on the projects. Everything below is reproducible by building (or pulling) the images in `bench/`.
+Bringing the seven MCP comparison stacks up inside pinned Docker images surfaced warts in five of them; marimo 0.25.1 installed and started exactly as its docs describe. We report the findings factually, with dates and quotes; they are maintenance signals of unpinned dependency ranges and unpublished runtime assumptions, not verdicts on the projects. Everything below is reproducible by building (or pulling) the images in `bench/`.
 
 **cursor-notebook-mcp 0.3.1 does not start as published on PyPI.** Its sdist imports `pydantic-settings` at startup without declaring it, and dies with `"Error importing package components"`. On top of that, its `fastmcp<2.11` pin breaks on current pydantic with `"cannot specify both default and default_factory"`. Two manual pins were needed before the server would start: `pydantic==2.11.10` and `pydantic-settings==2.16.0` (both quoted from [bench/cursor/Dockerfile](bench/cursor/Dockerfile), resolved 2026-10-15). Also: PyPI says 0.3.1, its README says 0.3.2.
 
@@ -597,7 +653,7 @@ The post-operation process list shows both kernels. We report what the lists sho
 
 ## Feature comparison
 
-Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (the three new stacks re-checked 2026-10-16 where noted); context7 checked 2026-10-21. Push dates from the GitHub API. One linked stack name per row; the guard column states what the projects advertise *and* what our conflict runs observed. The "Docs / symbol lookup" column is the new capability this benchmark measures: only tpmcp resolves symbols locally, and context7 (the last row) is a remote doc-snippet search, a different category, listed so the contrast is explicit.
+Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (the three new stacks re-checked 2026-10-16 where noted); context7 checked 2026-10-21; nb-cli checked 2026-10-28 against its repo, its SKILL.md and our own conflict runs. Push dates from the GitHub API. One linked stack name per row; the guard column states what the projects advertise *and* what our conflict runs observed. The "Docs / symbol lookup" column is the new capability this benchmark measures: only tpmcp resolves symbols locally, and context7 (the last row) is a remote doc-snippet search, a different category, listed so the contrast is explicit.
 
 | Server | Category | Revision/conflict guard | Executes code | Lint/format | Docs / symbol lookup | `.ipynb` | marimo `.py` | plain `.py` | Offline file editing | Transport | License | Last push |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -609,7 +665,34 @@ Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (th
 | [Anselmoo/mcp-server-analyzer](https://github.com/Anselmoo/mcp-server-analyzer) | code analysis (strings) | never writes files: nothing to guard | never | yes: ruff/ty/vulture bundled as pip deps; Biome tools need external Node.js 22+ | no | no: no notebook awareness | no | no: takes code strings, not files | no: never touches user files | stdio | MIT | 2026-08-30 (checked 2026-10-16) |
 | [pydantic/mcp-run-python](https://github.com/pydantic/mcp-run-python) | code execution (WASM) | n/a: execution-only, writes no files | yes: Pyodide (CPython→WASM) inside Deno | no | no | no | no | no | no | stdio (streamable-HTTP modes exist) | MIT | archived: final release 0.0.22, 2025-12-11 |
 | [yzfly/mcp-python-interpreter](https://github.com/yzfly/mcp-python-interpreter) | code execution (subprocess) | none advertised: file tools exist, no notebook awareness | yes: host subprocess in the selected environment, no sandbox | no | no | no (generic `read_file`/`write_file`, no notebook structure) | no | runs `.py` files; reads/writes them as generic files | generic file writes only | stdio | **NOASSERTION** (GitHub license field) | 2026-07-02 (checked 2026-10-16) |
+| [nb-cli (jupyter-ai-contrib)](https://github.com/jupyter-ai-contrib/nb-cli) | notebook CLI (no resident process) | none: the stale write applied over the external edit in every race (observed) | yes: local kernels over ZeroMQ, plus server and kernel-gateway execution | no | no | yes: edits `.ipynb` on disk | no | no | yes: direct file operations, works with no server | shell: one `nb` invocation per operation | BSD-3-Clause | active: crate 0.0.10, 2026-07-31 |
 | [context7](https://context7.com) | remote docs retrieval (HTTP) | n/a: read-only doc search | no | no | yes: `resolve-library-id` + `query-docs`, doc-snippet search over its cloud index, cross-language; NOT local symbol resolution | no | no | no | no: remote API; an API key is recommended for higher rate limits (checked 2026-10-26) | streamable HTTP (`https://mcp.context7.com/mcp`; stdio via npx `@upstash/context7-mcp`) | MIT | active: 63,439★, pushed 2026-10-21 |
+
+## The command-line category: nb-cli
+
+[nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) is the Jupyter ecosystem's own answer to agents working with notebooks as artifacts. Its [skill](https://github.com/jupyter-ai-contrib/nb-cli/tree/main/skills/notebook-cli) prefers `nb` over raw notebook JSON; what the skill teaches and what measurement confirms is reviewed below.
+
+The measured contrast (the races and the counts are ours). The last row ties: batching the cell inserts lowers the call count on either side, and the per-step counts are in the workflow probe below:
+
+| | tpmcp (MCP) | nb-cli (shell) |
+|---|:---:|:---:|
+| Resident process between calls | 1 (see the headline table) | **none** |
+| Stale write refused (conflict race) | **yes** | no (see the conflict table); the overwrite is per addressed cell, so concurrent edits to other cells survive |
+| Executes code | no (by design) | **yes** (kernel, server or gateway) |
+| marimo `.py` | **yes** | no |
+| Lint, format, type check, symbol docs | **yes** (ruff + ty in the binary) | no |
+| Cell references that survive reordering | **yes** (id, name, index) | yes (id, index) |
+| Failed cells lookup / output search | **yes** (`notebook_search`) | **yes** (`nb search --with-errors`, `--scope output`) |
+| Batch cell operations | **yes** | **yes** |
+| Live collaboration in JupyterLab | no | **yes** (Y.js when connected) |
+| Per-call peak RSS | see the headline table | see the peak table |
+| Calls for "add two cells, run, read back" | on par (execute is a recorded skip: tpmcp never executes code) | on par (one `nb` command per step) |
+
+Two rows moved while this comparison was being written: finding failed cells and searching outputs were nb-cli-only advantages until `notebook_search` closed them. The rows stay honest about the rest: its shell-only design and its execution ability are real advantages, and its conflict behavior is the one gap that blocks unattended use.
+
+### Its skill, against measurement
+
+The skill ([skills/notebook-cli](https://github.com/jupyter-ai-contrib/nb-cli/tree/main/skills/notebook-cli), checked 2026-10-28) teaches inspect-then-edit, a "Safe Edit Pattern" of minimal edits re-verified by re-reading, stable cell IDs, batched authoring in groups of 3-5 cells ("Do not add the entire notebook in one call"), and output hygiene. What measurement confirms: the batching advice (the workflow probe), inspect-then-edit, and stable ids (tpmcp's cell family addresses by id and marimo name for the same reason). What is product positioning: "Use `nb` for every `.ipynb` operation". The one genuine gap is on our side: its trust-boundary and secret guidance ("`nb` is an external executable ... verify the command you will run"; "Do not write secret tokens into commands, prompts, logs, or examples") is agent-shaped material tpmcp's instructions contract does not carry, and should.
 
 ## Projects we looked at and left out
 
@@ -666,7 +749,7 @@ bash bench/measure.sh --fast      # smoke run: short quiesce windows, not publis
 bash bench/measure.sh --runs 3    # full run: normal-mode windows, 3 repetitions, medians
 ```
 
-Useful flags: `--stack tpmcp` measures a single stack (repeatable), and `--no-build` reuses the images from a previous run instead of rebuilding them. Without `--stack`, all eight stacks run in the same order, back to back.
+Useful flags: `--stack tpmcp` measures a single stack (repeatable), and `--no-build` reuses the images from a previous run instead of rebuilding them. Without `--stack`, all nine stacks run in the same order, back to back.
 
 The remote context7 measurement is optional and is skipped automatically when the secret is absent: set `CONTEXT7_TCP_MCP_BENCH_KEY` (a context7 API key) in the environment and `measure.sh` will additionally call `resolve-library-id` + `query-docs` over `https://mcp.context7.com/mcp` and write the latencies to `bench/results/context7/`. In CI that key comes from the `CONTEXT7_TCP_MCP_BENCH_KEY` repository secret (see [.github/workflows/bench.yml](.github/workflows/bench.yml)). The key is never hardcoded or committed.
 
