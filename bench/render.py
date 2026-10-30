@@ -492,6 +492,46 @@ def op_calls(runs, label):
     return median(vals)
 
 
+def workflow_probe(runs):
+    """One end-to-end task per stack -> {scenario, variants}.
+
+    The driver records it in ops.json["workflow"]: the scenario text plus
+    one entry per variant (a name, the calls it took, the wall time and the
+    per-step calls). Calls and wall are medians across the runs; the step
+    shape comes from the last run that recorded it. A batch whose runs
+    predate the probe returns None rather than an empty table.
+    """
+    scenario = None
+    by_name, order = {}, []
+    for _, r in runs:
+        wf = (r.get("_ops") or {}).get("workflow")
+        if not wf:
+            continue
+        scenario = scenario or wf.get("scenario")
+        for variant in wf.get("variants", []):
+            name = variant.get("name")
+            if name not in by_name:
+                by_name[name] = {"calls": [], "ms": [],
+                                 "steps": variant.get("steps") or []}
+                order.append(name)
+            if variant.get("calls") is not None:
+                by_name[name]["calls"].append(variant["calls"])
+            if variant.get("total_ms") is not None:
+                by_name[name]["ms"].append(variant["total_ms"])
+    if not order:
+        return None
+    variants = []
+    for name in order:
+        entry = by_name[name]
+        variants.append({
+            "name": name,
+            "calls": median(entry["calls"]),
+            "ms": median(entry["ms"]),
+            "steps": [(s.get("label"), s.get("calls")) for s in entry["steps"]],
+        })
+    return {"scenario": scenario, "variants": variants}
+
+
 def pair_latency(cold, warm):
     """`<cold> cold, <warm> warm`, or "not measured" when neither value exists.
 
@@ -819,6 +859,40 @@ def measured_section(results, ctx7=""):
                     f"| {calls if calls is not None else '—'} |")
         lines.append("")
 
+
+    # ---- the workflow probe: one task, in calls ----
+    probes = {stack: workflow_probe(results[stack]) for stack in present}
+    probed = [stack for stack in present if probes[stack]]
+    if probed:
+        scenario = next((probes[s]["scenario"] for s in probed
+                         if probes[s]["scenario"]), "one end-to-end task")
+        lines.append("### The workflow probe: one task, in calls")
+        lines.append("")
+        lines.append(f"Scenario: {scenario}. The driver runs it end to end "
+                     "and records what each step cost, an MCP tool call or one "
+                     "shell invocation, so this is what the task costs an "
+                     "agent rather than what a single operation costs. Values "
+                     "are medians across the runs; the steps come from the "
+                     "variant that ran.")
+        lines.append("")
+        lines.append("| Stack | Variant | Calls | Wall | Steps (calls) |")
+        lines.append("|---|---|---|---|---|")
+        for stack in probed:
+            for variant in probes[stack]["variants"]:
+                calls = variant["calls"] if variant["calls"] is not None else "—"
+                steps = ", ".join(f"{label} ({count})"
+                                  for label, count in variant["steps"] if label)
+                lines.append(f"| {link(stack)} | {variant['name']} | {calls} "
+                             f"| {ms_cell(variant['ms'])} | {steps} |")
+        missing = [stack for stack in present if not probes[stack]]
+        if missing:
+            lines.append("")
+            lines.append("Stacks with no probe record (the probe covers the "
+                         "notebook stacks that add a cell and read it back; a "
+                         "batch can also predate it): "
+                         + ", ".join(LINKS[stack][0] for stack in missing)
+                         + ". *not measured*.")
+        lines.append("")
 
     # ---- conflict verdicts ----
     lines.append("### The file changes while the AI works")

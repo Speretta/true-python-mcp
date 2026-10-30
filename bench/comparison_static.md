@@ -397,7 +397,7 @@ Facts from the projects' READMEs/docs and issue trackers, checked 2026-10-15 (th
 
 [nb-cli](https://github.com/jupyter-ai-contrib/nb-cli) is the Jupyter ecosystem's own answer to agents working with notebooks as artifacts. Its [skill](https://github.com/jupyter-ai-contrib/nb-cli/tree/main/skills/notebook-cli) prefers `nb` over raw notebook JSON; what the skill teaches and what measurement confirms is reviewed below.
 
-The measured contrast (the races and the counts are ours). The last row ties: batching the cell inserts lowers the call count on either side, and the per-step counts sit in the `workflow` entry of every run's `ops.json`:
+The measured contrast (the races and the counts are ours). The last row ties: batching the cell inserts lowers the call count on either side, and the per-step counts are in the workflow probe below:
 
 | | tpmcp (MCP) | nb-cli (shell) |
 |---|:---:|:---:|
