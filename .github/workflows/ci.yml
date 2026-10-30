@@ -36,7 +36,7 @@ jobs:
       # Ground-truth tracks the LATEST nbformat and marimo on every run:
       # the byte-exact serializer oracle and the graph findings are
       # continuously re-verified against the current releases, and a
-      # release that changes behavior turns CI red the same day — the
+      # release that changes behavior turns CI red the same day: the
       # intended early warning, not noise. The ground-truth python stays
       # pinned at 3.12 so the runner image migration cannot float it.
       # The ty oracle is pinned to the crate-matching binary, not latest: the

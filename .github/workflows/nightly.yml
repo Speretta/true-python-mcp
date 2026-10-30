@@ -62,7 +62,7 @@ jobs:
         run: cargo nextest run --release --test property
       - name: Commit any new regression seeds
         # Run even when the stress failed: a new seed is written only when a
-        # property FAILS, so this step must not be skipped on failure — that is
+        # property FAILS, so this step must not be skipped on failure: that is
         # exactly when there is something to persist.
         if: always()
         run: |

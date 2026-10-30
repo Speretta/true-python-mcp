@@ -2,8 +2,8 @@ name: Release
 
 # Pushing a version tag (scripts/release.sh creates it) waits for ci.yml to
 # pass on the tagged commit, then builds the binaries and publishes them.
-# The release does not run the tests itself — ci.yml is the single place
-# tests run (Linux + Windows + msrv) — it only gates on them being green, so
+# The release does not run the tests itself (ci.yml is the single place
+# tests run: Linux + Windows + msrv); it only gates on them being green, so
 # an untested or failing commit is never published. Only first-party actions
 # (checkout, cache); toolchains and uploads use shell, rustup, apt and the
 # preinstalled GitHub CLI.
