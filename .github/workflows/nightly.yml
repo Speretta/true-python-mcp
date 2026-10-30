@@ -1,8 +1,19 @@
 name: Nightly
 
 # Stress the property suite far beyond CI's fast gate (256 cases): 65536
-# cases per property, in debug AND release — the v0.1.4 gate failure
-# surfaced only in a release-profile roll, so one profile is thin evidence.
+# cases per property, in the dev and the release profile. The two profiles
+# are not nested: the dev profile keeps Rust's default overflow checks and
+# debug assertions on, the release profile turns them off, and src/fs.rs and
+# tests/robustness.rs gate code on #[cfg(debug_assertions)], so each profile
+# runs code the other never runs. The release profile is also the
+# configuration that ships (optimized, fat LTO).
+# The first v0.1.4 tag was killed by the release gate's own dev-profile
+# `cargo nextest run`, not by a release-profile roll, and no release-only
+# counterexample is on record: both profiles are kept because they differ,
+# not because a release-only failure was ever seen. The release step builds
+# only the property target, because the other test targets are never executed
+# here. PROPTEST_CASES is the nightly's own case budget and it overrides the
+# per-property budgets in tests/property.rs, which are the author's intent.
 # When a run persists new seeds into tests/property.proptest-regressions,
 # they are committed back so every future run replays them (the bench bot's
 # push pattern). Scheduled workflows run on the default branch only.
@@ -22,7 +33,7 @@ permissions:
 jobs:
   property-stress:
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       PROPTEST_CASES: "65536"
     steps:
@@ -30,11 +41,25 @@ jobs:
       - uses: ./.github/actions/cargo-cache
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
+      # Diagnostics, not a gate: the runner's speed for this suite moved by
+      # 1.73x to 2.55x between image generations (ubuntu-24.04 to
+      # ubuntu-26.04) on identical code, so record what this job ran on.
+      - name: Diagnostics (not a gate)
+        run: |
+          echo "== runner diagnostics (informational, not a gate) =="
+          echo "nproc: $(nproc)"
+          rustc -vV || true
+          lscpu 2>/dev/null | head -20 || true
+          free -g 2>/dev/null || true
       # The properties are pure Rust (no ground-truth python needed).
       - name: Stress the properties (debug)
         run: cargo nextest run -E 'binary(property)'
+      # Only the property target is built: `cargo nextest run --release -E
+      # 'binary(property)'` builds EVERY test target and filters at runtime
+      # ("Starting 8 tests across 1 binary (28 binaries skipped)"), so the
+      # nightly paid 29 fat-LTO links to execute one binary's worth of tests.
       - name: Stress the properties (release)
-        run: cargo nextest run --release -E 'binary(property)'
+        run: cargo nextest run --release --test property
       - name: Commit any new regression seeds
         # Run even when the stress failed: a new seed is written only when a
         # property FAILS, so this step must not be skipped on failure — that is
