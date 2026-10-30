@@ -25,6 +25,26 @@ pub enum CellRef {
     Name(String),
 }
 
+/// Resolves a batch of references to sorted, de-duplicated cell indexes:
+/// every reference resolves against `cells` as they are now, then the list
+/// is sorted and a repeated index is refused. `cell_delete` and
+/// `cell_update` share this contract; it lives here with the rest of cell
+/// addressing.
+pub(crate) fn resolve_indices(cells: &[Cell], references: &[CellRef]) -> Result<Vec<usize>, Error> {
+    let mut indices = Vec::with_capacity(references.len());
+    for reference in references {
+        indices.push(resolve_index(cells, reference)?);
+    }
+    indices.sort_unstable();
+    if let Some(pair) = indices.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(Error::invalid_input(format!(
+            "cell {} is listed twice",
+            pair[0]
+        )));
+    }
+    Ok(indices)
+}
+
 /// Resolves `reference` to a cell index in `cells`. Errors name what was
 /// looked for and what the file can support: an unknown id/name, an ambiguous
 /// one (two cells sharing it), a file whose cells carry no ids or names at
@@ -123,6 +143,32 @@ mod tests {
         assert_eq!(
             resolve_index(&cells, &CellRef::Name("train_model".into())).unwrap(),
             1
+        );
+    }
+
+    #[test]
+    fn batches_resolve_sorted_and_refuse_repeats() {
+        let cells = vec![
+            cell(Some("abc123"), None),
+            cell(None, Some("train_model")),
+            cell(None, None),
+        ];
+        // Resolution order does not matter: the answer is sorted.
+        let indices =
+            resolve_indices(&cells, &[CellRef::Index(2), CellRef::Name("abc123".into())]).unwrap();
+        assert_eq!(indices, vec![0, 2]);
+        // An empty batch is the caller's decision (cell_delete refuses it
+        // with its own message); the resolver itself has nothing to say.
+        assert_eq!(resolve_indices(&cells, &[]).unwrap(), Vec::<usize>::new());
+        // Two references naming the same cell are refused, with the index.
+        let error = resolve_indices(
+            &cells,
+            &[CellRef::Index(1), CellRef::Name("train_model".into())],
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("cell 1 is listed twice"),
+            "{error}"
         );
     }
 

@@ -26,7 +26,7 @@ pub use args::{
     CellDeleteArgs, CellEditArgs, CellInsertArgs, CellMoveArgs, CellSetSourceArgs, CellUpdateArgs,
 };
 pub use resolve::CellRef;
-use resolve::resolve_index;
+use resolve::{resolve_index, resolve_indices};
 
 #[tool_router(router = cell_router, vis = "pub")]
 impl Tpmcp {
@@ -290,17 +290,7 @@ impl Tpmcp {
                 if args.cells.is_empty() {
                     return Err(Error::invalid_input("cells must not be empty"));
                 }
-                let mut indices = Vec::new();
-                for reference in &args.cells {
-                    indices.push(resolve_index(notebook.cells(), reference)?);
-                }
-                indices.sort_unstable();
-                if let Some(pair) = indices.windows(2).find(|pair| pair[0] == pair[1]) {
-                    return Err(Error::invalid_input(format!(
-                        "cell {} is listed twice",
-                        pair[0]
-                    )));
-                }
+                let indices = resolve_indices(notebook.cells(), &args.cells)?;
                 let mut deleted = Vec::new();
                 for index in indices.into_iter().rev() {
                     let cell = notebook.delete(index)?;
@@ -416,20 +406,7 @@ impl Tpmcp {
             let ((updated, warning), new_revision) =
                 with_notebook(&args.path, &args.revision, |notebook| {
                     let targets: Vec<usize> = match &args.cells {
-                        Some(refs) => {
-                            let mut indices = Vec::new();
-                            for reference in refs {
-                                indices.push(resolve_index(notebook.cells(), reference)?);
-                            }
-                            indices.sort_unstable();
-                            if let Some(pair) = indices.windows(2).find(|pair| pair[0] == pair[1]) {
-                                return Err(Error::invalid_input(format!(
-                                    "cell {} is listed twice",
-                                    pair[0]
-                                )));
-                            }
-                            indices
-                        }
+                        Some(refs) => resolve_indices(notebook.cells(), refs)?,
                         None => (0..notebook.cells().len())
                             .filter(|index| notebook.cells()[*index].cell_type == "code")
                             .collect(),
