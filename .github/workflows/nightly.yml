@@ -70,9 +70,12 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add tests/property.proptest-regressions
-            # No [skip ci]: the persisted seeds must be re-verified by CI on
-            # this very commit, so a real bug surfaces immediately instead of
-            # on the next unrelated push.
+            # No [skip ci]: a GITHUB_TOKEN push starts no workflow run, so this
+            # commit gets no CI run of its own either way. The persisted seed is
+            # replayed by the next run on a later commit (the nightly runs on
+            # main's head and a human push runs ci.yml); it is NOT verified on
+            # this very commit. A PAT or deploy key would close that gap at the
+            # cost of a secret; until then the nightly above is the re-run.
             git commit -m "test: persist new property regression seeds"
             git pull --rebase
             git push
