@@ -3,6 +3,62 @@
 Notable changes, newest first. `scripts/release.sh` adds a section for each
 release.
 
+## [0.3.2] - 2026-10-31
+
+**Tool surface.** `cell_set_type`, `cell_set_metadata` and `cell_clear_outputs`
+are merged into `cell_update` (type, metadata and cleared outputs in one call);
+`notebook_search` is new (content search in sources and stored outputs, plus the
+failed-cell lookup); `notebook_read` no longer takes `query` (it moved to
+`notebook_search`). Cells are addressed by 0-based index (negative counts from
+the end), Jupyter id or marimo cell name, and `cell_insert` / `cell_delete` take
+several cells at once. Pre-1.0 surface change.
+
+### Added
+
+- render the workflow probe table
+- redesign the tool surface around homogeneous chunks
+- render the nb-cli rows and per-call peak RSS
+- drive nb-cli through a CLI shell adapter
+- make the docs comparison a checkmark matrix
+- fall back to raw text when a file is not a notebook
+- turn a from_path create into a move with source_revision
+- add file_delete
+
+### Fixed
+
+- keep cells when a degraded file re-segments
+- measure the post-redesign tool shapes
+- show recorded op outcomes in the renderer
+
+### Changed
+
+- stop claiming the nightly bot commit is re-verified by CI
+- refresh comparison measurements [skip ci]
+- persist new property regression seeds
+- drop the em-dashes from the CI comments
+- build only the property target in the nightly release stress
+- refresh the lock to rmcp 3.8.0
+- deduplicate batch resolution
+- split the stdlib layout out of the database assembly
+- split the logical-line model into its own module
+- move the display vocabulary behind the model
+- split the conversion, ty and docs suites by theme
+- split the wire suite by tool family
+- fold edit fixups into the mutations, one hook left
+- delegate refusals and format notes to the formats
+- move conversion behind the notebook facade
+- own the lint policy, leave ruff glue
+- own the concatenated-source engine view
+- decode nbformat outputs in the format module
+- share finding constructors and bounds wording
+- scope marimo edit stability to same-view re-parses
+- de-duplicate the nb-cli coverage and fix its aged claims
+- put nb-cli on the record
+- persist new property regression seeds
+- refresh comparison measurements [skip ci]
+- pin ubuntu-26.04 and move actions/cache to v5
+- fix the release race and the Windows cache tax
+
 ## [0.3.1] - 2026-10-26
 
 ### Added
